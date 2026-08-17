@@ -1,0 +1,15 @@
+# Recovered symbol stub for: std/exitprocs
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc add()  # 000000014002a38e
+proc addExitProc()  # 000000014001a564
+proc callClosures()  # 000000014001a11c
+proc dollar()  # 0000000140019fd6
+proc eqcopy()  # 0000000140019e89
+proc eqdestroy()  # 000000014001a051
+proc eqwasMoved()  # 000000014001a0ad
+proc reset()  # 0000000140029fbc
+proc setLen()  # 000000014002a16b
+proc shrink()  # 000000014002a031
+var gFuns    # 0000000140c3f0e0
+var gFunsLock    # 0000000140c3f100

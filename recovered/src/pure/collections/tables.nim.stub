@@ -1,0 +1,32 @@
+# Recovered symbol stub for: pure/collections/tables
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc isEmpty()  # 00000001400d8196
+proc isFilled()  # 00000001400a6f0c
+proc isFilled()  # 00000001401c63fa
+proc isFilled()  # 000000014023d287
+proc isFilled()  # 0000000140247afd
+proc isFilled()  # 000000014025785e
+proc isFilled()  # 0000000140287f8f
+proc isFilled()  # 00000001402c3f1d
+proc isFilled()  # 00000001402ec41a
+proc isFilled()  # 000000014033fb81
+proc isFilled()  # 00000001403bd515
+proc isFilled()  # 000000014043c0f2
+proc isFilled()  # 00000001404ad896
+proc isFilled()  # 00000001404bb6be
+proc isFilled()  # 00000001404c68d8
+proc isFilled()  # 00000001404cdf92
+proc isFilled()  # 0000000140516abb
+proc isFilled()  # 000000014056c43a
+proc isFilled()  # 0000000140570008
+proc isFilled()  # 00000001405851c2
+proc isFilled()  # 00000001405a09c6
+proc isFilled()  # 00000001405e124a
+proc isFilled()  # 0000000140646e29
+proc isFilled()  # 00000001406b6253
+proc isFilled()  # 00000001406e494a
+proc isFilled()  # 0000000140943082
+proc isFilled()  # 000000014094d2be
+proc nextTry()  # 00000001400a6f75
+proc slotsNeeded()  # 00000001400a75b6

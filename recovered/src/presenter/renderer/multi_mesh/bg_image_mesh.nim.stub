@@ -1,0 +1,19 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/bg_image_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 00000001405699f0
+proc clear_all_instance()  # 000000014056937c
+proc compute_offset()  # 00000001404e44f9
+proc create()  # 0000000140569d2f
+proc eqwasMoved()  # 000000014056ac88
+proc expand()  # 000000014056af48
+proc get()  # 000000014056ae0c
+proc get()  # 000000014056c9fe
+proc get_instance_count()  # 000000014056ad22
+proc increment_instance_count()  # 000000014056bda4
+proc isNone()  # 000000014056ad89
+proc isNone()  # 000000014056c827
+proc set_transform2d()  # 000000014056bfb8
+proc some()  # 0000000140569c77
+var instance_attributes    # 00000001467ab480
+var wrap_mode    # 0000000140a5e728

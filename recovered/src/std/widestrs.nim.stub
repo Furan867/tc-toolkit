@@ -1,0 +1,24 @@
+# Recovered symbol stub for: std/widestrs
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc createWide()  # 000000014001876a
+proc dollar()  # 0000000140017e13
+proc dollar()  # 0000000140018641
+proc dollar()  # 0000000140018a27
+proc dollar()  # 0000000140019960
+proc eqdestroy()  # 00000001400189a5
+proc eqsink()  # 0000000140018920
+proc newWideCString()  # 0000000140018819
+proc newWideCString()  # 0000000140018af8
+proc newWideCString()  # 0000000140019730
+proc newWideCString()  # 000000014001986b
+proc ord()  # 0000000140017d07
+proc toWideCString()  # 000000014001aa5a
+proc toWideCString()  # 000000014015a549
+proc toWideCString()  # 000000014015c30d
+proc toWideCString()  # 000000014015f259
+proc toWideCString()  # 0000000140160129
+proc toWideCString()  # 0000000140162c61
+proc toWideCString()  # 000000014016369c
+proc toWideCString()  # 0000000140165a03
+proc toWideCString()  # 00000001408bda69

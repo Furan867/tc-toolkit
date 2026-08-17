@@ -1,0 +1,17 @@
+# Recovered symbol stub for: pure/times
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc add()  # 00000002fdd02d20
+proc eqcopy()  # 00000002fdd06920
+proc eqdestroy()  # 00000002fdd0d7b0
+proc eqdup()  # 00000002fdd035f0
+proc eqwasMoved()  # 00000002fdd12370
+proc floorDiv()  # 00000002fdd13150
+proc floorMod()  # 00000002fdd13120
+proc fromWinTime()  # 00000002fdd15ba0
+proc getTime()  # 00000002fdd15c20
+proc initTime()  # 00000002fdd15b90
+proc setLen()  # 00000002fdd03520
+proc shrink()  # 00000002fdd03510
+proc toUnixFloat()  # 00000002fdd15b30
+var unitWeights    # 00000002fddf71a0

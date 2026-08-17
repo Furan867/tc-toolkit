@@ -1,0 +1,5 @@
+# Recovered symbol stub for: presenter/board_ui/dark_overlay
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 000000014090478e
+proc to_imvec2()  # 000000014090448b

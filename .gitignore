@@ -1,0 +1,13 @@
+# 大体积二进制资源（可随时从游戏目录重新复制，见 README）
+recovered/res/
+
+# 反编译工具（可下载）
+tools/gdre/
+tools/gdsdecomp/
+
+# 中间产物（可由 tools/*.py 重新生成）
+work/
+
+# Python
+__pycache__/
+*.pyc

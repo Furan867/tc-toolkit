@@ -1,0 +1,25 @@
+# Recovered symbol stub for: std/strbasics
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc dotdot()  # 000000014013cc8a
+proc dotdot()  # 0000000140150728
+proc dotdot()  # 000000014016864c
+proc dotdot()  # 00000001401d0608
+proc dotdot()  # 00000001401fa7fe
+proc dotdot()  # 000000014029a403
+proc dotdot()  # 00000001402c01e6
+proc dotdot()  # 00000001403b40c4
+proc dotdot()  # 00000001404d79df
+proc dotdot()  # 0000000140588488
+proc dotdot()  # 00000001405d3b02
+proc dotdot()  # 000000014062ab37
+proc dotdot()  # 000000014067c68f
+proc dotdot()  # 00000001406e4d1b
+proc dotdot()  # 00000001406f1628
+proc dotdot()  # 00000001407e0ad0
+proc dotdot()  # 000000014080056a
+proc dotdot()  # 000000014087fb6e
+proc dotdot()  # 00000001408829aa
+proc dotdot()  # 00000001408d3e16
+proc dotdot()  # 00000001408fbce9
+proc dotdot()  # 0000000140935636

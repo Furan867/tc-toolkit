@@ -1,0 +1,28 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/multi_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc allocate_tbo()  # 00000001404f8c0d
+proc allocate_vbo()  # 00000001404f8eea
+proc clear_buffer()  # 00000001404f9514
+proc colonanonymous()  # 00000001404f845e
+proc colonanonymous()  # 00000001404f84c5
+proc create()  # 00000001404f8810
+proc define_vbo()  # 00000001404f940b
+proc define_vbo_instanced()  # 00000001404f8f6a
+proc define_vbo_scalar()  # 00000001404f9009
+proc destroy()  # 00000001404f920a
+proc draw_layer()  # 00000001404f91af
+proc eqdestroy()  # 00000001404f87b3
+proc eqdestroy()  # 00000001404f87be
+proc eqdup()  # 00000001404f8ba8
+proc fill_buffer()  # 00000001404f92c1
+proc id()  # 00000001404f93b1
+proc is_snapshot_mode()  # 00000001404f9152
+proc map()  # 00000001404f7f6c
+proc max_instance_count()  # 00000001404f9266
+proc none()  # 00000001404f7eed
+proc orphan_buffer()  # 00000001404f94ac
+proc set_buffer()  # 00000001404f933d
+proc set_count()  # 00000001404f90aa
+proc set_primitive_mode()  # 00000001404f8b37
+proc some()  # 00000001404f7e4e

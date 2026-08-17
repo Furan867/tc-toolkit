@@ -1,0 +1,28 @@
+# Recovered symbol stub for: presenter/board_ui/popup/ide/tab_list
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014006bd23
+proc add_new_tab()  # 0000000140877f15
+proc build_asm_tab()  # 00000001408786af
+proc build_isa_asm_tab_list()  # 0000000140878c4c
+proc build_isa_tab()  # 0000000140878284
+proc build_secondary_tab_list()  # 0000000140879fb6
+proc default_path()  # 00000001402a06aa
+proc delete_tab()  # 000000014087c2f5
+proc delete_tabs_with_parent()  # 000000014087c6a5
+proc eqdestroy()  # 000000014006c527
+proc find()  # 0000000140877b55
+proc insert()  # 000000014006b7a9
+proc isSome()  # 00000001408784f2
+proc isSome()  # 000000014088a766
+proc newSeq()  # 000000014006bcee
+proc on_open()  # 0000000140877aa7
+proc relink_asm_file()  # 0000000140877e07
+proc rename_tab()  # 000000014087c51c
+proc rename_tabs_with_parent()  # 000000014087cd21
+proc setLen()  # 000000014006bb2c
+proc shrink()  # 000000014006bb12
+proc try_replace_parent_or_above()  # 00000001402a591f
+var COLOR_TAB_HOVERED    # 0000000140bdadd0
+var COLOR_TAB_NORMAL    # 0000000140bdadb0
+var COLOR_TAB_SELECTED    # 0000000140bdadc0

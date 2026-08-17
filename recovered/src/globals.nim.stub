@@ -1,0 +1,6 @@
+# Recovered symbol stub for: globals
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc get_exe_dir()  # 0000000140166b10
+proc get_game_save_path()  # 0000000140166640
+proc log()  # 00000001401663ac

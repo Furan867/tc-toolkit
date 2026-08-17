@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/renderer/shader
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc init_ubos()  # 00000001404f46bc
+proc pop_ubo_context()  # 00000001404f47ed
+proc push_new_ubo_context()  # 00000001404f4769

@@ -1,0 +1,25 @@
+# Recovered symbol stub for: pure/streams
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc atEnd()  # 0000000140243b7a
+proc clamp()  # 00000001400650f7
+proc close()  # 0000000140243e3b
+proc eqdestroy()  # 0000000140242c7e
+proc fsAtEnd()  # 0000000140242ed4
+proc fsClose()  # 0000000140242d8f
+proc fsFlush()  # 000000014024383b
+proc fsGetPosition()  # 0000000140243026
+proc fsPeekData()  # 000000014024343b
+proc fsReadData()  # 0000000140243299
+proc fsReadDataStr()  # 00000001402430e6
+proc fsReadLine()  # 0000000140243384
+proc fsSetPosition()  # 0000000140242f7b
+proc fsWriteData()  # 00000001402436a7
+proc lt()  # 0000000140038b59
+proc newEIO()  # 00000001402435a0
+proc newFileStream()  # 00000001402438d8
+proc newFileStream()  # 0000000140243a62
+proc read()  # 0000000140243c92
+proc readData()  # 0000000140243bf8
+proc readUint8()  # 0000000140243db6
+proc writeData()  # 0000000140243ef2

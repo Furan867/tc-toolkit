@@ -1,0 +1,4 @@
+# Recovered symbol stub for: image_base__
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+var .rdata$.refptr.    # 0000000140bf1cb0

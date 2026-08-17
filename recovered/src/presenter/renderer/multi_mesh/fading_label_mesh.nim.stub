@@ -1,0 +1,21 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/fading_label_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 00000001405622f8
+proc []()  # 000000014056257e
+proc clear_all_instance()  # 0000000140563c0e
+proc compute_offset()  # 00000001404e35e7
+proc compute_offset()  # 00000001404e3aed
+proc create()  # 0000000140562760
+proc expand()  # 00000001405641b0
+proc get()  # 0000000140564074
+proc get()  # 00000001406c4741
+proc isNone()  # 0000000140563ff1
+proc isNone()  # 00000001406c46c9
+proc set_text()  # 00000001405654c5
+proc set_time_start_fade()  # 0000000140563cc6
+proc some()  # 00000001405626a6
+var scalar_attributes    # 00000001467ab3c0
+var scalar_data    # 0000000140a5d940
+var stream_attributes    # 00000001467ab3e0
+var texture_getter    # 00000001467ab420

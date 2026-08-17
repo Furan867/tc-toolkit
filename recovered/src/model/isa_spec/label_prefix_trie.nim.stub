@@ -1,0 +1,20 @@
+# Recovered symbol stub for: model/isa_spec/label_prefix_trie
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014033d30f
+proc add()  # 00000001400536ee
+proc add_prefix()  # 000000014033d4c6
+proc eqcopy()  # 000000014033c80f
+proc eqdestroy()  # 000000014033c1ff
+proc eqdestroy()  # 000000014033c39b
+proc eqdestroy()  # 000000014033c702
+proc eqdestroy()  # 000000014033d3f7
+proc eqsink()  # 000000014033d206
+proc eqtrace()  # 000000014033c64f
+proc eqtrace()  # 000000014033c6c5
+proc eqwasMoved()  # 000000014033d498
+proc is_resolved()  # 000000014033ca5f
+proc reset()  # 0000000140053874
+proc rttiDestroy()  # 000000014033c3f2
+proc setLen()  # 0000000140053a3e
+proc shrink()  # 0000000140053904

@@ -1,0 +1,4 @@
+# Recovered symbol stub for: pformat_puts
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 0000000140969ca4

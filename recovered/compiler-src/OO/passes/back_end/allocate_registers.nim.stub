@@ -1,0 +1,36 @@
+# Recovered symbol stub for: OO/passes/back_end/allocate_registers
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc []()  # 00000002fdd2b700
+proc alloc_instruction()  # 00000002fddac540
+proc allocate_fixed()  # 00000002fddac280
+proc allocate_instruction_regs()  # 00000002fddaeb60
+proc allocate_operand()  # 00000002fddad350
+proc allocate_registers()  # 00000002fddb10a0
+proc clear_all_fixed_regs()  # 00000002fddae960
+proc debug_test_reg_list_empty()  # 00000002fddb0620
+proc eqeq()  # 00000002fdd11020
+proc eqeq()  # 00000002fdd11070
+proc eqeq()  # 00000002fdd110d0
+proc eqeq()  # 00000002fdd11130
+proc eqeq()  # 00000002fdd11220
+proc eqeq()  # 00000002fdd36540
+proc evacuate_register_slot()  # 00000002fddad8b0
+proc find_and_spill_best()  # 00000002fddace10
+proc find_free_index()  # 00000002fddacf70
+proc free_if_dead()  # 00000002fddabd50
+proc getOrDefault()  # 00000002fdd30d20
+proc get_spill_offset()  # 00000002fddac110
+proc high_val()  # 00000002fddabcb0
+proc insert_move()  # 00000002fddac920
+proc is_spilled()  # 00000002fddabcd0
+proc lteq()  # 00000002fdd363d0
+proc reg_alloc_use()  # 00000002fddae640
+proc stack_allocate()  # 00000002fddabc60
+proc top_frame_transition_to()  # 00000002fddaeb20
+var .rdata$.refptr.alloc_instruction_list    # 00000002fde1c5e0
+var .rdata$.refptr.never_spill_already_used_in_statement    # 00000002fde1c930
+var .rdata$.refptr.skip_these_fixed_regs    # 00000002fde1c9f0
+var alloc_instruction_list    # 00000002fde3feb0
+var never_spill_already_used_in_statement    # 00000002fde3fed0
+var skip_these_fixed_regs    # 00000002fde3fec0

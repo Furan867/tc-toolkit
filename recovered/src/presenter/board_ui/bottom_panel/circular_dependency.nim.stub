@@ -1,0 +1,7 @@
+# Recovered symbol stub for: presenter/board_ui/bottom_panel/circular_dependency
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_circular_dependency_panel()  # 000000014075f02b
+proc igColor()  # 00000001404ec774
+proc igColor()  # 00000001404ec80e
+proc igColor()  # 00000001404ec8a8

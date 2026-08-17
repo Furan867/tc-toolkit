@@ -1,0 +1,26 @@
+# Recovered symbol stub for: OO/passes/jit/jit
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc []eq()  # 00000002fdd1d2e0
+proc enlarge()  # 00000002fdd1cf70
+proc eqcopy()  # 00000002fdd0c9f0
+proc eqdestroy()  # 00000002fdd04e60
+proc eqdestroy()  # 00000002fdd1cb90
+proc eqdestroy()  # 00000002fdd1ccd0
+proc eqdestroy()  # 00000002fdd33a50
+proc eqdup()  # 00000002fdd05c10
+proc eqsink()  # 00000002fdd1cc20
+proc eqwasMoved()  # 00000002fdd07030
+proc eqwasMoved()  # 00000002fdd1ccf0
+proc get_lib_pointers()  # 00000002fdd579e0
+proc initOrderedTable()  # 00000002fdd1cd10
+proc newSeq()  # 00000002fdd06fb0
+proc rawGet()  # 00000002fdd1cd80
+proc rawGetKnownHC()  # 00000002fdd1d210
+proc rawInsert()  # 00000002fdd1cec0
+proc reset()  # 00000002fdd06de0
+proc setLen()  # 00000002fdd05b40
+proc setLen()  # 00000002fdd06e70
+proc shrink()  # 00000002fdd05b30
+proc shrink()  # 00000002fdd06e00
+proc toOrderedTable()  # 00000002fdd1d560

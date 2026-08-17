@@ -1,0 +1,4 @@
+# Recovered symbol stub for: pure/options
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc rttiDestroy()  # 0000000140156186

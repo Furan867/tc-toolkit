@@ -1,0 +1,9 @@
+# Recovered symbol stub for: presenter/main_menu_ui/hub/filter
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 00000001408f8d84
+proc igColor()  # 00000001404e9ad6
+proc igColor()  # 00000001404e9b70
+proc igColor()  # 00000001404e9c0a
+proc igColor()  # 00000001404e9ca4
+proc igColor()  # 00000001404e9d3e

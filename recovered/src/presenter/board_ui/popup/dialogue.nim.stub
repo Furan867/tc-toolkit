@@ -1,0 +1,26 @@
+# Recovered symbol stub for: presenter/board_ui/popup/dialogue
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 0000000140108ee2
+proc []()  # 0000000140832102
+proc build()  # 000000014080ed8f
+proc build()  # 0000000140818be1
+proc build()  # 00000001408329d7
+proc contains()  # 000000014010aa46
+proc hasKey()  # 000000014010a967
+proc isSome()  # 0000000140832412
+proc on_close()  # 0000000140831f27
+proc on_open()  # 0000000140832011
+proc pop()  # 000000014083254d
+proc raiseKeyError()  # 0000000140108d09
+proc toggle()  # 00000001405cb80e
+proc unsafeGet()  # 0000000140832478
+var COLOR_BUTTON_HOVERED`gensym35    # 0000000140bd6450
+var COLOR_BUTTON_HOVERED`gensym49    # 0000000140bd6490
+var COLOR_BUTTON_NORMAL`gensym35    # 0000000140bd6440
+var COLOR_BUTTON_NORMAL`gensym49    # 0000000140bd6480
+var COLOR_BUTTON_PRESSED`gensym35    # 0000000140bd6460
+var COLOR_BUTTON_PRESSED`gensym49    # 0000000140bd64a0
+var has_changed_page    # 00000001467ab7b0
+var last_window_pos    # 00000001467ab7a8
+var last_window_size    # 00000001467ab7a0

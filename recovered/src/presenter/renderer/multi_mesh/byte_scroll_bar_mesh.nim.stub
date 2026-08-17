@@ -1,0 +1,18 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/byte_scroll_bar_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc clear_all_instance()  # 0000000140523491
+proc create()  # 0000000140522558
+proc eqcopy()  # 0000000140521a60
+proc eqdestroy()  # 0000000140156c8d
+proc eqdestroy()  # 0000000140521d10
+proc eqdestroy()  # 0000000140521d60
+proc eqdestroy()  # 00000001405236fd
+proc eqwasMoved()  # 00000001405224c0
+proc expand()  # 000000014052374d
+proc get()  # 00000001405235c1
+proc get()  # 00000001406c32d1
+proc increment_instance_count()  # 00000001405245dc
+proc isNone()  # 000000014052353e
+proc isNone()  # 00000001406c3259
+proc some()  # 00000001405223af

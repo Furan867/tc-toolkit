@@ -1,0 +1,4 @@
+# Recovered symbol stub for: presenter/board_ui/bottom_panel/introduction
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_introduction_level_panel()  # 000000014079880b

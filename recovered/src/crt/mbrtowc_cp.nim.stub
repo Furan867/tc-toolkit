@@ -1,0 +1,4 @@
+# Recovered symbol stub for: mbrtowc_cp
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 000000014096f770

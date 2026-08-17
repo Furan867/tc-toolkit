@@ -1,0 +1,26 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/word_watchee_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 0000000140541b58
+proc []()  # 0000000140541ddf
+proc clear_all_instance()  # 0000000140543469
+proc compute_offset()  # 00000001404e17c3
+proc compute_offset()  # 00000001404e1cc9
+proc create()  # 0000000140541fc7
+proc expand()  # 000000014054374f
+proc get()  # 0000000140543613
+proc get()  # 00000001406c43d9
+proc get_instance_count()  # 0000000140543534
+proc increment_instance_count()  # 0000000140544a75
+proc isNone()  # 0000000140543590
+proc isNone()  # 00000001406c4361
+proc set_transform2d()  # 0000000140544c89
+proc set_value()  # 0000000140544e7d
+proc set_value()  # 0000000140545281
+proc set_value_no_override()  # 000000014054544e
+proc set_value_size()  # 00000001405450a8
+proc some()  # 0000000140541f07
+var filter_mode    # 0000000140a5a3c0
+var instance_attributes    # 00000001467ab2a0
+var stream_attributes    # 00000001467ab2d0
+var wrap_mode    # 0000000140a5a3c8

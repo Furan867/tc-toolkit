@@ -1,0 +1,28 @@
+# Recovered symbol stub for: std/private/ospaths2
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc absolutePath()  # 000000014015bf8e
+proc joinPathImpl()  # 000000014015bb46
+proc normalizePathEnd()  # 000000014015b700
+proc normalizePathEnd()  # 000000014015eb23
+proc parentDirPos()  # 000000014015c83a
+proc slash()  # 0000000140160e3f
+proc slash()  # 00000001401664de
+proc slash()  # 000000014016c1fd
+proc slash()  # 0000000140285df2
+proc slash()  # 00000001402954f0
+proc slash()  # 00000001402b04ef
+proc slash()  # 00000001402eb0e5
+proc slash()  # 00000001403bd40d
+proc slash()  # 00000001404c1169
+proc slash()  # 00000001404cd269
+proc slash()  # 00000001404f5387
+proc slash()  # 000000014056df74
+proc slash()  # 0000000140599d11
+proc slash()  # 00000001405a2e20
+proc slash()  # 00000001405e1a07
+proc slash()  # 000000014062aa2f
+proc slash()  # 000000014062de37
+proc slash()  # 00000001406339d6
+proc slash()  # 000000014063956b
+proc slash()  # 0000000140646b2a

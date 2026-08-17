@@ -1,0 +1,19 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/static_value_bg_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014053033f
+proc clear_all_instance()  # 0000000140531232
+proc compute_offset()  # 00000001404dea8d
+proc create()  # 0000000140530664
+proc expand()  # 0000000140531505
+proc get()  # 00000001405313c9
+proc get()  # 00000001406c3b55
+proc get_instance_count()  # 00000001405312ea
+proc increment_instance_count()  # 00000001405321b7
+proc isNone()  # 0000000140531346
+proc isNone()  # 00000001406c3add
+proc set_color()  # 0000000140532790
+proc set_transform2d()  # 00000001405323cb
+proc set_value()  # 00000001405325af
+proc some()  # 00000001405305c6
+var instance_attributes    # 00000001467ab160

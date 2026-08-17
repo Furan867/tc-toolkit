@@ -1,0 +1,19 @@
+# Recovered symbol stub for: presenter/level_tree_ui
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_background_on_level_tree()  # 00000001408e279a
+proc build_level_tree_ui()  # 00000001408e0a7b
+proc eqdestroy()  # 00000001408e23e8
+proc eqdestroy()  # 00000001408e270d
+proc eqdestroy()  # 00000001408e3914
+proc eqdestroy()  # 00000001408e3a4f
+proc eqdup()  # 00000001408e2350
+proc eqdup()  # 00000001408e25f1
+proc eqsink()  # 00000001408e2293
+proc eqsink()  # 00000001408e2476
+proc initTransform2D()  # 00000001404e5c4b
+var .rdata$.refptr.bg_images    # 0000000140bf1e00
+var .rdata$.refptr.bg_texts    # 0000000140bf1e10
+var bg_images    # 00000001467ab8c0
+var bg_texts    # 00000001467aba40
+var bottom_panel_height    # 00000001467abf98

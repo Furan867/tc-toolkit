@@ -1,0 +1,4 @@
+# Recovered symbol stub for: presenter/update_state_snapshot
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc update_state_snapshot()  # 000000014095db67

@@ -1,0 +1,9 @@
+# Recovered symbol stub for: presenter/user_input/board_io/action/edit_static_value
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc eqcopy()  # 00000001405ce8be
+proc eqdestroy()  # 00000001405ce94e
+proc handle_edit_static_value()  # 00000001406bcfb0
+proc open()  # 00000001405d12be
+proc some()  # 00000001406bce19
+proc some()  # 00000001406d606b

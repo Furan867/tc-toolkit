@@ -1,0 +1,4 @@
+# Recovered symbol stub for: std/private/osappdirs
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc eqdestroy()  # 0000000140163ab4

@@ -1,0 +1,4 @@
+# Recovered symbol stub for: presenter/utilities/converters
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc to_vec2()  # 00000001405ff629

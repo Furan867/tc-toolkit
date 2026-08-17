@@ -1,0 +1,5 @@
+# Recovered symbol stub for: pure/dynlib
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc loadLib()  # 0000000140154752
+proc symAddr()  # 000000014015480c

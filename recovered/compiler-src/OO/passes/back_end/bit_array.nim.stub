@@ -1,0 +1,9 @@
+# Recovered symbol stub for: OO/passes/back_end/bit_array
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc []()  # 00000002fdd57d00
+proc []eq()  # 00000002fdd57c60
+proc clear()  # 00000002fdd57c20
+proc eqdestroy()  # 00000002fdd57dc0
+proc eqwasMoved()  # 00000002fdd57d50
+proc intersection()  # 00000002fdd57d60

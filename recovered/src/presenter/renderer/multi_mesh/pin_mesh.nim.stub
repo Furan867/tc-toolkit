@@ -1,0 +1,34 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/pin_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc addQuoted()  # 00000001400578b5
+proc addQuoted()  # 0000000140057917
+proc addQuoted()  # 00000001400579f2
+proc clear_all_instance()  # 0000000140508be7
+proc create()  # 000000014050722e
+proc dollar()  # 000000014000bb0e
+proc eqcopy()  # 00000001405064e0
+proc eqdestroy()  # 0000000140156ae2
+proc eqdestroy()  # 00000001405067f0
+proc eqdestroy()  # 000000014050687d
+proc eqdestroy()  # 0000000140508e53
+proc eqwasMoved()  # 0000000140507152
+proc expand()  # 0000000140508ee0
+proc get()  # 0000000140506a73
+proc get()  # 0000000140508d17
+proc get()  # 0000000140515823
+proc get()  # 0000000140518f75
+proc get()  # 000000014051d8e5
+proc get()  # 0000000140521f56
+proc get()  # 0000000140524dc0
+proc get()  # 0000000140528ce0
+proc get()  # 0000000140545e0a
+proc get()  # 000000014054a9f4
+proc get()  # 0000000140550134
+proc get()  # 0000000140554029
+proc get()  # 00000001406c2160
+proc increment_instance_count()  # 000000014050a4c8
+proc isNone()  # 0000000140508c94
+proc isNone()  # 00000001405157ab
+proc set_pin_data()  # 000000014050a6d1
+proc some()  # 0000000140506ffb

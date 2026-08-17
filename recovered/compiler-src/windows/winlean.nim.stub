@@ -1,0 +1,9 @@
+# Recovered symbol stub for: windows/winlean
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc rdFileTime()  # 00000002fdd15a40
+var WSAID_ACCEPTEX    # 00000002fddf4290
+var WSAID_CONNECTEX    # 00000002fddf42a0
+var WSAID_GETACCEPTEXSOCKADDRS    # 00000002fddf4280
+var inet_ntop_real    # 00000002fde2b090
+var ws2    # 00000002fde2b088

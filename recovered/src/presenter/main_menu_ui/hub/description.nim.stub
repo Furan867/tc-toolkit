@@ -1,0 +1,20 @@
+# Recovered symbol stub for: presenter/main_menu_ui/hub/description
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 000000014090239e
+proc build_close_button()  # 0000000140901e7a
+proc build_item()  # 00000001408fc140
+proc build_list()  # 0000000140900c15
+proc build_loading_text()  # 00000001408fb20d
+proc build_search_bar()  # 0000000140901609
+proc del()  # 0000000140062dc1
+proc get()  # 00000001409014ca
+proc igColor()  # 00000001404e9dd8
+proc igColor()  # 00000001404ea5ee
+proc igColor()  # 00000001404ea693
+proc igColor()  # 00000001404ea72d
+proc igColor()  # 00000001404ea861
+proc igColor()  # 00000001404eab6a
+proc isNone()  # 000000014090144b
+proc minuseq()  # 00000001408fbf95
+proc minuseq()  # 000000014093ee13

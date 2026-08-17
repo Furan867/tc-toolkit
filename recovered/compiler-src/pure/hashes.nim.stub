@@ -1,0 +1,4 @@
+# Recovered symbol stub for: pure/hashes
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc hash()  # 00000002fdd15cb0

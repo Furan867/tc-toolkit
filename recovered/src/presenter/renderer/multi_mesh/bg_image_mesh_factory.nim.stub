@@ -1,0 +1,22 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/bg_image_mesh_factory
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 0000000140127f81
+proc []eq()  # 0000000140127a6a
+proc clear_all_instance()  # 000000014056c4a3
+proc enlarge()  # 00000001401270b8
+proc eqdestroy()  # 0000000140126b48
+proc eqdestroy()  # 0000000140126faf
+proc eqwasMoved()  # 0000000140126b98
+proc get_mesh()  # 000000014056cb3a
+proc hasKey()  # 0000000140126a43
+proc initBgImageMeshFactory()  # 000000014056c389
+proc len()  # 0000000140126614
+proc mustRehash()  # 0000000140126c56
+proc newSeq()  # 000000014007a2b1
+proc rawGet()  # 000000014012667d
+proc rawGetKnownHC()  # 000000014012774e
+proc rawInsert()  # 0000000140126dcf
+proc reset()  # 0000000140079f30
+proc setLen()  # 000000014007a0d5
+proc shrink()  # 0000000140079f9a

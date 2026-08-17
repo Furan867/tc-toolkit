@@ -1,0 +1,5 @@
+# Recovered symbol stub for: presenter/utilities/strings
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc buffer_to_string()  # 00000001404d7a68
+proc copy_to_buffer()  # 00000001404d7cb1

@@ -1,0 +1,7 @@
+# Recovered symbol stub for: presenter/update_state_dynamic
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc redraw_components()  # 000000014094d327
+proc update_state_focus_components()  # 000000014094dcd0
+proc update_state_move_selection()  # 000000014094dabb
+proc update_state_selection_content()  # 000000014094d1bc

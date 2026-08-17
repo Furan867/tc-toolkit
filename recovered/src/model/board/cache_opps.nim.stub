@@ -1,0 +1,6 @@
+# Recovered symbol stub for: model/board/cache_opps
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc get_position()  # 0000000140242949
+var .rdata$.refptr.NEIGBORS    # 0000000140bf1450
+var NEIGBORS    # 0000000140a1b780

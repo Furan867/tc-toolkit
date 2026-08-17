@@ -1,0 +1,6 @@
+# Recovered symbol stub for: system/repr_v2
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc addFloat()  # 0000000140015497
+proc addFloatRoundtrip()  # 0000000140006c51
+proc dollar()  # 000000014001551e

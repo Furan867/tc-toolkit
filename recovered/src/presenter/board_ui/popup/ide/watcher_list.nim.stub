@@ -1,0 +1,9 @@
+# Recovered symbol stub for: presenter/board_ui/popup/ide/watcher_list
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_common_watchers()  # 000000014087fd8e
+proc build_read_only_watcher()  # 000000014087db86
+proc build_watcher_edit()  # 000000014087e4e4
+proc on_close()  # 000000014087d4ec
+proc on_open()  # 000000014087d5f1
+proc some()  # 000000014087e2ea

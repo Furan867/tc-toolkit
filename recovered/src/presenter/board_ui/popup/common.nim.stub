@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/board_ui/popup/common
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc igColor()  # 00000001404edcde
+var .rdata$.refptr.TITLE_BAR_COLOR_DEFAULT    # 0000000140bf1a80
+var TITLE_BAR_COLOR_DEFAULT    # 0000000140bd2620

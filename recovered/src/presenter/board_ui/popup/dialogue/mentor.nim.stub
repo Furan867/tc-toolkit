@@ -1,0 +1,14 @@
+# Recovered symbol stub for: presenter/board_ui/popup/dialogue/mentor
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 000000014080ad70
+proc igColor()  # 00000001404ed278
+proc mentor_get_desired_width()  # 000000014080a11a
+var .rdata$.refptr.last_text    # 0000000140bf20a0
+var BUTTON_SIZE    # 0000000140bd5240
+var COLOR_BUTTON_HOVERED`gensym3    # 0000000140bd5260
+var COLOR_BUTTON_NORMAL`gensym3    # 0000000140bd5250
+var COLOR_BUTTON_PRESSED`gensym3    # 0000000140bd5270
+var IMAGE_FILTER_MODE    # 0000000140bd5220
+var last_text    # 00000001467ab750
+var text_height    # 00000001467ab760

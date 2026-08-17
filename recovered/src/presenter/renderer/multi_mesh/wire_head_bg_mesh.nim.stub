@@ -1,0 +1,18 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/wire_head_bg_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc clear_all_instance()  # 00000001405516eb
+proc create()  # 0000000140550751
+proc eqcopy()  # 000000014054fc30
+proc eqdestroy()  # 000000014015692f
+proc eqdestroy()  # 000000014054feee
+proc eqdestroy()  # 000000014054ff3e
+proc eqdestroy()  # 0000000140551957
+proc eqwasMoved()  # 00000001405506ae
+proc expand()  # 00000001405519a7
+proc get()  # 000000014055181b
+proc get()  # 00000001406c2bfe
+proc increment_instance_count()  # 00000001405528b2
+proc isNone()  # 0000000140551798
+proc isNone()  # 00000001406c2b86
+proc some()  # 000000014055058d

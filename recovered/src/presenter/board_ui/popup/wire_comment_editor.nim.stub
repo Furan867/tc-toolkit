@@ -1,0 +1,9 @@
+# Recovered symbol stub for: presenter/board_ui/popup/wire_comment_editor
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 00000001408d77b1
+proc on_close()  # 00000001408d7067
+proc on_open()  # 00000001408d7142
+var .rdata$.refptr.buffer    # 0000000140bf1e70
+var buffer    # 00000001467ab840
+var has_just_opened    # 00000001467ab850

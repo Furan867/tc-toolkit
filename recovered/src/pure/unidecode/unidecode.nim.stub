@@ -1,0 +1,5 @@
+# Recovered symbol stub for: pure/unidecode/unidecode
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc unidecode()  # 00000001405d7815
+var translationTable    # 0000000140bac160

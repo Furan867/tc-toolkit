@@ -1,0 +1,8 @@
+# Recovered symbol stub for: pure/parseutils
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc integerOutOfRangeError()  # 00000002fdd12500
+proc parseInt()  # 00000002fdd12770
+proc parseUInt()  # 00000002fdd12e60
+proc rawParseInt()  # 00000002fdd12570
+proc rawParseUInt()  # 00000002fdd12c80

@@ -1,0 +1,24 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/component_button_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 0000000140536128
+proc []()  # 00000001405363af
+proc clear_all_instance()  # 0000000140537a38
+proc clear_non_static_instance()  # 0000000140539673
+proc compute_offset()  # 00000001404df499
+proc compute_offset()  # 00000001404df99f
+proc create()  # 0000000140536596
+proc expand()  # 0000000140537d1e
+proc get()  # 0000000140537be2
+proc get()  # 00000001406c3ebd
+proc get_instance_count()  # 0000000140537b03
+proc increment_instance_count()  # 0000000140539044
+proc isNone()  # 0000000140537b5f
+proc isNone()  # 00000001406c3e45
+proc mark_static_instance_count()  # 000000014053960a
+proc set_color()  # 0000000140539440
+proc set_transform2d()  # 0000000140539258
+proc some()  # 00000001405364d6
+var filter_mode    # 0000000140a58e80
+var instance_attributes    # 00000001467ab1e0
+var stream_attributes    # 00000001467ab208

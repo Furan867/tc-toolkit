@@ -1,0 +1,8 @@
+# Recovered symbol stub for: presenter/user_input/board_io/action
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc cycle()  # 00000001405cf36d
+proc cycle()  # 00000001405cf461
+proc handle_ongoing_action()  # 00000001406e0d4a
+proc isNone()  # 00000001406e0b92
+proc unsafeGet()  # 00000001406e0c79

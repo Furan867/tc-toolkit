@@ -1,0 +1,37 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/component_mesh_factory
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 00000001401296d3
+proc []eq()  # 000000014012920a
+proc clear_all_instance()  # 0000000140516f73
+proc clear_non_static_instance()  # 00000001405186fe
+proc enlarge()  # 0000000140128939
+proc eqdestroy()  # 00000001401288de
+proc get()  # 0000000140516c05
+proc get()  # 0000000140516e27
+proc get_comment_layer()  # 0000000140515c7b
+proc get_component_layer()  # 00000001405175b9
+proc get_highlight_layer()  # 000000014051595f
+proc get_mesh()  # 0000000140518066
+proc get_mesh_com_on_off()  # 0000000140517a43
+proc get_mesh_comment()  # 00000001405185c4
+proc get_mesh_custom()  # 00000001405176a7
+proc get_mesh_pin()  # 000000014051869d
+proc get_mesh_screen()  # 0000000140518563
+proc get_pin_layer()  # 0000000140515649
+proc hasKey()  # 00000001401284d4
+proc initComponentMeshFactory()  # 0000000140515f91
+proc isSome()  # 0000000140515742
+proc isSome()  # 0000000140515a58
+proc isSome()  # 0000000140515d74
+proc isSome()  # 0000000140516b24
+proc isSome()  # 0000000140516d51
+proc len()  # 0000000140128124
+proc mark_static_instance_count()  # 0000000140518625
+proc mustRehash()  # 00000001401285b3
+proc newSeq()  # 000000014007b0c0
+proc rawGet()  # 0000000140128182
+proc rawGetKnownHC()  # 0000000140128f42
+proc rawInsert()  # 000000014012872c
+proc setLen()  # 000000014007aee4
+proc shrink()  # 000000014007aeca

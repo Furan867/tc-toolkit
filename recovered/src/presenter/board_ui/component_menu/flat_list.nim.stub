@@ -1,0 +1,9 @@
+# Recovered symbol stub for: presenter/board_ui/component_menu/flat_list
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 00000001407f2526
+proc build_component()  # 00000001407de0b9
+proc focus_dark_overlay()  # 00000001407f1e82
+proc get()  # 00000001407f1d36
+proc tooltip_size()  # 00000001407f18bb
+var PADDING    # 0000000140bd0ee0

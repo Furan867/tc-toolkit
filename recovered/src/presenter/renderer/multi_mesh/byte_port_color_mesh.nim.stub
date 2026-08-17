@@ -1,0 +1,23 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/byte_port_color_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014052caff
+proc []()  # 000000014052cd86
+proc clear_all_instance()  # 000000014052e060
+proc compute_offset()  # 00000001404de081
+proc compute_offset()  # 00000001404de587
+proc create()  # 000000014052cf55
+proc expand()  # 000000014052e333
+proc get()  # 000000014052e1f7
+proc get()  # 00000001406c37ed
+proc get_instance_count()  # 000000014052e118
+proc increment_instance_count()  # 000000014052f47a
+proc isNone()  # 000000014052e174
+proc isNone()  # 00000001406c3775
+proc set_breakpoint()  # 000000014052fbe6
+proc set_color()  # 000000014052f85e
+proc set_enabled()  # 000000014052fa2a
+proc set_translation()  # 000000014052f68e
+proc some()  # 000000014052cead
+var instance_attributes    # 00000001467ab120
+var stream_attributes    # 00000001467ab148

@@ -1,0 +1,23 @@
+# Recovered symbol stub for: presenter/console
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014005f6c9
+proc []()  # 0000000140800125
+proc []eq()  # 00000001408005f3
+proc add()  # 0000000140060789
+proc build_console()  # 000000014080143e
+proc colonanonymous()  # 0000000140800bd1
+proc complete_current_level()  # 0000000140670d45
+proc eqcopy()  # 00000001405c6b2e
+proc eqdestroy()  # 000000014005f194
+proc eqdestroy()  # 00000001405c6ab4
+proc eqsink()  # 000000014005f29a
+proc eqwasMoved()  # 00000001405c6b04
+proc igColor()  # 00000001404e94f7
+proc igColor()  # 00000001404e959c
+proc igColor()  # 00000001404e9636
+proc igColor()  # 00000001404e96d0
+proc newSeq()  # 000000014005f694
+proc reset()  # 000000014005f30a
+proc setLen()  # 000000014005f4b9
+proc shrink()  # 000000014005f37f

@@ -1,0 +1,4 @@
+# Recovered symbol stub for: dyn_tls_dtor
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 0000000140966dbf

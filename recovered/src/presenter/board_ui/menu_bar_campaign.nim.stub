@@ -1,0 +1,11 @@
+# Recovered symbol stub for: presenter/board_ui/menu_bar_campaign
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_buttons()  # 00000001407f7233
+proc build_menu_bar()  # 00000001407fa1c7
+proc build_search_corner()  # 00000001407f8aad
+proc igColor()  # 00000001404ee402
+proc igColor()  # 00000001404ee49c
+var .rdata$.refptr.buffer    # 0000000140bf1e20
+var ICON_SIZE    # 0000000140bd22b0
+var buffer    # 00000001467ab720

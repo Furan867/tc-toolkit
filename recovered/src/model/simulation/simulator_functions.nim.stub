@@ -1,0 +1,17 @@
+# Recovered symbol stub for: model/simulation/simulator_functions
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc createThread()  # 0000000140017902
+proc eqcopy()  # 000000014043a8f4
+proc eqdestroy()  # 000000014043a852
+proc eqdestroy()  # 000000014043a885
+proc handle_request_compile_and_run()  # 000000014043adf7
+proc handle_request_do()  # 000000014043b480
+proc jit_function()  # 000000014043a9f1
+proc joinThreads()  # 000000014001774a
+proc log()  # 000000014043aafd
+proc threadProcWrapDispatch()  # 000000014004709e
+proc threadProcWrapStackFrame()  # 0000000140047240
+proc threadProcWrapper()  # 00000001400178a4
+proc wait_until_synced()  # 000000014043ac37
+var first_thread    # 000000014097df80

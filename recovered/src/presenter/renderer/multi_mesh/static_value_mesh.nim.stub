@@ -1,0 +1,20 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/static_value_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 0000000140533088
+proc clear_all_instance()  # 00000001405342f9
+proc compute_offset()  # 00000001404def93
+proc create()  # 00000001405333c7
+proc expand()  # 00000001405345cc
+proc get()  # 0000000140534490
+proc get()  # 00000001406c3d09
+proc get_instance_count()  # 00000001405343b1
+proc increment_instance_count()  # 0000000140535428
+proc isNone()  # 000000014053440d
+proc isNone()  # 00000001406c3c91
+proc set_transform2d()  # 000000014053563c
+proc set_value()  # 0000000140535820
+proc some()  # 000000014053330f
+var filter_mode    # 0000000140a587a0
+var instance_attributes    # 00000001467ab1a0
+var wrap_mode    # 0000000140a587a8

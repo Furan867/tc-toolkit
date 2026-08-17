@@ -1,0 +1,33 @@
+# Recovered symbol stub for: model/save_monger/serialize
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc add()  # 0000000140035f56
+proc add_bool()  # 00000001401815a5
+proc add_i16()  # 0000000140181a41
+proc add_i64()  # 0000000140181453
+proc add_i8()  # 0000000140181dd7
+proc add_long_seq_u8()  # 0000000140181c84
+proc add_seq_u8()  # 00000001401818e0
+proc add_string()  # 0000000140181719
+proc add_u16()  # 0000000140181614
+proc add_u32()  # 00000001401814cd
+proc add_u64()  # 00000001401812db
+proc add_u8()  # 00000001401816aa
+proc eqcopy()  # 000000014018000e
+proc eqdestroy()  # 000000014017ff80
+proc eqdup()  # 0000000140181238
+proc eqsink()  # 00000001401811c8
+proc eqwasMoved()  # 0000000140181ae2
+proc get_bool()  # 0000000140180998
+proc get_i16()  # 0000000140180de3
+proc get_i64()  # 0000000140180657
+proc get_i8()  # 0000000140180cfa
+proc get_long_seq_u8()  # 0000000140181b04
+proc get_seq_u8()  # 0000000140181047
+proc get_string()  # 0000000140180f16
+proc get_u16()  # 0000000140180b6f
+proc get_u32()  # 00000001401806ff
+proc get_u64()  # 000000014018016f
+proc get_u8()  # 0000000140180a86
+proc setLen()  # 000000014002bb2a
+proc shrink()  # 000000014002bb10

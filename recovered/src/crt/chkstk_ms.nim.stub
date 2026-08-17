@@ -1,0 +1,4 @@
+# Recovered symbol stub for: chkstk_ms
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 00000001409681c0

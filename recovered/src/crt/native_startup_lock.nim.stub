@@ -1,0 +1,5 @@
+# Recovered symbol stub for: native_startup_lock
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+var .rdata$.refptr.    # 0000000140bf1d10
+var <module-init>    # 00000001467ad868

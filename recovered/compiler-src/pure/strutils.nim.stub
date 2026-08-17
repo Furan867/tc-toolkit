@@ -1,0 +1,7 @@
+# Recovered symbol stub for: pure/strutils
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc nimIdentNormalize()  # 00000002fdd151e0
+proc parseHex()  # 00000002fdd12ec0
+proc parseHex()  # 00000002fdd12fc0
+proc toHexImpl()  # 00000002fdd14a90

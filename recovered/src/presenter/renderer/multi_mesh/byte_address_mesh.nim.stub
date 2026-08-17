@@ -1,0 +1,20 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/byte_address_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc clear_all_instance()  # 000000014051fcf3
+proc create()  # 000000014051dff3
+proc eqcopy()  # 000000014051d0f0
+proc eqdestroy()  # 0000000140156c00
+proc eqdestroy()  # 000000014051d45c
+proc eqdestroy()  # 000000014051d4e9
+proc eqdestroy()  # 000000014051ff5f
+proc eqwasMoved()  # 000000014051ded1
+proc expand()  # 000000014051ffec
+proc get()  # 000000014051fe23
+proc get()  # 00000001406c311d
+proc increment_instance_count()  # 0000000140521851
+proc isNone()  # 000000014051fda0
+proc isNone()  # 00000001406c30a5
+proc some()  # 000000014051dd3e
+var filter_mode    # 0000000140a56600
+var wrap_mode    # 0000000140a56608

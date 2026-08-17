@@ -1,0 +1,37 @@
+# Recovered symbol stub for: pure/hashes
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc emarkamp()  # 000000014007eaa7
+proc emarkamp()  # 00000001401dbc60
+proc emarkamp()  # 00000001402251e1
+proc emarkdollar()  # 000000014007eded
+proc emarkdollar()  # 00000001401dbf85
+proc emarkdollar()  # 0000000140225505
+proc eqdestroy()  # 0000000140082a7a
+proc eqwasMoved()  # 0000000140082a85
+proc hash()  # 000000014007ed64
+proc hash()  # 0000000140081d4a
+proc hash()  # 00000001400878a1
+proc hash()  # 00000001400c1bbf
+proc hashFarm()  # 0000000140080c58
+proc hashWangYi1()  # 000000014007ec75
+proc hashWangYi1()  # 00000001400877b2
+proc hashWangYi1()  # 00000001400aa2ec
+proc hashWangYi1()  # 00000001401dbe09
+proc hashWangYi1()  # 000000014022538a
+proc hiXorLo()  # 000000014007eb70
+proc hiXorLo()  # 00000001400876c7
+proc hiXorLo()  # 00000001400aa201
+proc hiXorLo()  # 00000001401dbd29
+proc hiXorLo()  # 00000001402252aa
+proc len016()  # 000000014007f6bf
+proc len16()  # 000000014007f4e8
+proc len1732()  # 000000014007fde5
+proc len3364()  # 0000000140080142
+proc lenU()  # 000000014007f291
+proc load4()  # 000000014007f5b0
+proc load8()  # 000000014007f358
+proc rotR()  # 000000014007f40f
+proc shiftMix()  # 000000014007f664
+proc weakLen32withSeeds()  # 00000001400809e6
+proc weakLen32withSeeds2()  # 0000000140080869

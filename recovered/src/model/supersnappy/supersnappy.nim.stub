@@ -1,0 +1,19 @@
+# Recovered symbol stub for: model/supersnappy/supersnappy
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc compress()  # 0000000140629bc7
+proc compress()  # 000000014062ff30
+proc compress()  # 0000000140630060
+proc compressFragment()  # 000000014062911f
+proc emitCopy()  # 0000000140628fd2
+proc emitCopy64Max()  # 0000000140628ce6
+proc emitLiteral()  # 0000000140628414
+proc eqdestroy()  # 0000000140626a2e
+proc eqtrace()  # 0000000140626d8c
+proc findMatchLength()  # 0000000140628a32
+proc rttiDestroy()  # 0000000140626b2d
+proc uncompress()  # 0000000140626ea9
+proc uncompress()  # 000000014062a3e8
+proc uncompress()  # 000000014062a523
+var lenWordMask    # 0000000140bb2330
+var uncompressLookup    # 0000000140bb2360

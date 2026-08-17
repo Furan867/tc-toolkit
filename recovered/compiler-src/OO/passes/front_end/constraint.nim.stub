@@ -1,0 +1,23 @@
+# Recovered symbol stub for: OO/passes/front_end/constraint
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc add()  # 00000002fdd0a610
+proc constraints_pop()  # 00000002fdd92e90
+proc constraints_push()  # 00000002fdd92de0
+proc constraints_reset()  # 00000002fdd92d90
+proc eqdestroy()  # 00000002fdd09960
+proc eqdestroy()  # 00000002fdd2d0e0
+proc eqdestroy()  # 00000002fdd8d660
+proc eqdestroy()  # 00000002fdd92e30
+proc eqdestroy()  # 00000002fdd92f10
+proc eqdestroy()  # 00000002fdd92fd0
+proc eqdup()  # 00000002fdd10710
+proc eqsink()  # 00000002fdd0ab30
+proc eqwasMoved()  # 00000002fdd92e80
+proc reset()  # 00000002fdd0e520
+proc setLen()  # 00000002fdd0e5b0
+proc setLen()  # 00000002fdd10650
+proc shrink()  # 00000002fdd0c4b0
+proc shrink()  # 00000002fdd0e540
+var .rdata$.refptr.constraint_scope    # 00000002fde1c7c0
+var constraint_scope    # 00000002fde3fba0

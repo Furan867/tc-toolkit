@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/board_ui/bottom_panel/racer_question
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_racer_question_panel()  # 000000014079e606
+proc toHex()  # 000000014014f3aa
+var SIZE_BUTTON_BIT    # 0000000140bcc8d0

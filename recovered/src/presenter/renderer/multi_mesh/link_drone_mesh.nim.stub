@@ -1,0 +1,12 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/link_drone_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014055d59f
+proc compute_offset()  # 00000001404e26d5
+proc create()  # 000000014055d767
+proc disable_instance()  # 000000014055e124
+proc enable_instance()  # 000000014055e1c9
+proc set_positions()  # 000000014055e263
+proc set_valid()  # 000000014055e5c9
+proc some()  # 000000014055d6d2
+var scalar_attributes    # 00000001467ab320

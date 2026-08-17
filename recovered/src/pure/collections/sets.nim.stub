@@ -1,0 +1,12 @@
+# Recovered symbol stub for: pure/collections/sets
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc isEmpty()  # 000000014008b60e
+proc isFilled()  # 00000001400834af
+proc isFilled()  # 0000000140247b66
+proc isFilled()  # 0000000140275799
+proc isFilled()  # 00000001402cea32
+proc isFilled()  # 00000001405ba0e0
+proc isFilled()  # 000000014062dffb
+proc nextTry()  # 0000000140083518
+proc slotsNeeded()  # 0000000140083c5b

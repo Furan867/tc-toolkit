@@ -1,0 +1,17 @@
+# Recovered symbol stub for: OO/targets/aarch64/aarch64_assembler
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc add()  # 00000002fdd03970
+proc addQuoted()  # 00000002fdd03ec0
+proc add_sub_imm()  # 00000002fdd559d0
+proc assemble()  # 00000002fdd566e0
+proc collectionToString()  # 00000002fdcfac20
+proc dollar()  # 00000002fdcfadd0
+proc encode_logic()  # 00000002fdd55e20
+proc eqdestroy()  # 00000002fdd54300
+proc eqdestroy()  # 00000002fdd54350
+proc eqeq()  # 00000002fdd03e30
+proc fits_sign_extended()  # 00000002fdd54320
+proc load_store()  # 00000002fdd55f10
+proc mov_imm()  # 00000002fdd543e0
+proc rttiDestroy()  # 00000002fdd542e0

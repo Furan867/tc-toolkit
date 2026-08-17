@@ -1,0 +1,8 @@
+# Recovered symbol stub for: presenter/main_menu_ui/options/page
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_close_button()  # 00000001408f7900
+proc build_options_page()  # 00000001408f8898
+proc build_tabs()  # 00000001408f7db4
+proc initialize_variables()  # 00000001408f76fc
+var is_open    # 000000014097e980

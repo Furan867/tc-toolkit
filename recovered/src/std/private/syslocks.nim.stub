@@ -1,0 +1,5 @@
+# Recovered symbol stub for: std/private/syslocks
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc initSysCond()  # 0000000140032bfe
+proc waitSysCond()  # 0000000140003150

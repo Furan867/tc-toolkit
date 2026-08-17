@@ -1,0 +1,4 @@
+# Recovered symbol stub for: pure/algorithm
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc star()  # 00000001400947ee

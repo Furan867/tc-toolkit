@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/utilities/physics
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc clamp()  # 000000014005f093
+proc ease_linear()  # 00000001404d7303
+proc ease_out_quart()  # 00000001404d7209

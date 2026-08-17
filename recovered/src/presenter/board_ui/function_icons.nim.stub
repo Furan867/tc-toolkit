@@ -1,0 +1,17 @@
+# Recovered symbol stub for: presenter/board_ui/function_icons
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_function_icons()  # 000000014091f49a
+proc build_tooltip()  # 000000014091da2e
+proc eqcopy()  # 00000001405c8b7c
+proc eqcopy()  # 00000001405c8f7a
+proc eqcopy()  # 00000001405c9059
+proc eqdestroy()  # 000000014091f44a
+proc igColor()  # 00000001404ebd92
+proc open()  # 00000001405c8bc5
+proc open()  # 00000001405c8fc3
+proc open()  # 00000001405c90a2
+var PADDING    # 0000000140beae00
+var is_picking_wire_color    # 00000001467acc20
+var uv0    # 0000000140beae38
+var uv1    # 0000000140beae40

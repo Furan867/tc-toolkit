@@ -1,0 +1,7 @@
+# Recovered symbol stub for: presenter/main_menu_ui/home_page
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_logo()  # 00000001408e8739
+proc build_main_buttons()  # 00000001408e9623
+proc build_main_page()  # 00000001408ecaae
+var hover_state    # 00000001467abfa0

@@ -1,0 +1,11 @@
+# Recovered symbol stub for: presenter/user_input/board_io/action/drag_deselect
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc eqdestroy()  # 0000000140158936
+proc eqsink()  # 00000001401588cb
+proc handle_drag_deselect()  # 00000001406ba89f
+proc is_between()  # 00000001405f9ba8
+proc none()  # 00000001406ba609
+proc none()  # 00000001406bafe9
+proc none()  # 00000001406e4458
+proc select_range()  # 00000001405f9d02

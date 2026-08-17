@@ -1,0 +1,4 @@
+# Recovered symbol stub for: OO/types_u16619
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc eqcopy()  # 00000002fddf3990

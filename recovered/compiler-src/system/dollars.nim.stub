@@ -1,0 +1,8 @@
+# Recovered symbol stub for: system/dollars
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc dollar()  # 00000002fdcfaba0
+proc dollar()  # 00000002fdcfabe0
+proc dollar()  # 00000002fdcfbb40
+proc dollar()  # 00000002fdcfbb80
+proc dollar()  # 00000002fdcfbbc0

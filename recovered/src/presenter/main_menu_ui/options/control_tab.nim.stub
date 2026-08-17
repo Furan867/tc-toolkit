@@ -1,0 +1,12 @@
+# Recovered symbol stub for: presenter/main_menu_ui/options/control_tab
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_control_checkbox()  # 00000001408f3b48
+proc build_control_options()  # 00000001408f4498
+proc eqdestroy()  # 00000001408f510f
+proc initialize_variables()  # 00000001408f34e3
+proc save()  # 00000001406b7efb
+var .rdata$.refptr.shortcuts    # 0000000140bf2260
+var has_changed    # 00000001467acc10
+var selected_shortcut    # 000000014097e970
+var shortcuts    # 00000001467abfe0

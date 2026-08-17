@@ -1,0 +1,33 @@
+# Recovered symbol stub for: OO/targets/x86_64/x86_64_assembler
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc []eq()  # 00000002fdd18050
+proc assemble()  # 00000002fdd3e660
+proc colonanonymous()  # 00000002fdd3e480
+proc colonanonymous()  # 00000002fdd3e4a0
+proc colonanonymous()  # 00000002fdd3e4c0
+proc colonanonymous()  # 00000002fdd3e4e0
+proc enlarge()  # 00000002fdd17d80
+proc eqcopy()  # 00000002fdd3cf90
+proc eqdestroy()  # 00000002fdd33d80
+proc eqdestroy()  # 00000002fdd3d0d0
+proc eqdup()  # 00000002fdd186a0
+proc eqdup()  # 00000002fdd3ad70
+proc eqsink()  # 00000002fdd3aa70
+proc eqwasMoved()  # 00000002fdd3ab90
+proc imm16()  # 00000002fdd3e620
+proc imm32()  # 00000002fdd3e590
+proc imm64()  # 00000002fdd3e500
+proc imm8()  # 00000002fdd3e610
+proc initOrderedTable()  # 00000002fdd17a70
+proc modrm()  # 00000002fdd3e600
+proc newSeq()  # 00000002fdd01c80
+proc rawGet()  # 00000002fdd17ae0
+proc rawGetKnownHC()  # 00000002fdd17fc0
+proc rawInsert()  # 00000002fdd17bc0
+proc rex_prefix()  # 00000002fdd3e5e0
+proc sib()  # 00000002fdd3e650
+proc toOrderedTable()  # 00000002fdd18380
+var .rdata$.refptr.assemble    # 00000002fde1c650
+var .rdata$.refptr.x8664_INSTRUCTIONS    # 00000002fde1ca90
+var x8664_INSTRUCTIONS    # 00000002fde2b240

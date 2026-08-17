@@ -1,0 +1,4 @@
+# Recovered symbol stub for: pformat_emit_radix_point
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 000000014096a7e9

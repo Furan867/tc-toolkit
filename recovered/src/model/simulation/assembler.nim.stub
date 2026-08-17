@@ -1,0 +1,19 @@
+# Recovered symbol stub for: model/simulation/assembler
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 00000001400f3a11
+proc []eq()  # 00000001400fbcf2
+proc asm_assemble()  # 000000014056dbfb
+proc asm_isa_compile()  # 000000014056e07c
+proc contains()  # 00000001400f393a
+proc enlarge()  # 00000001400fb47a
+proc eqdestroy()  # 0000000140227c61
+proc eqdestroy()  # 0000000140227d2a
+proc get_base_program_path()  # 000000014056dd61
+proc get_program_path()  # 000000014056d3f1
+proc hasKey()  # 00000001400f3835
+proc mustRehash()  # 00000001400fb18f
+proc newSeq()  # 000000014005cd96
+proc rawGet()  # 00000001400fae55
+proc rawGetKnownHC()  # 00000001400fba43
+proc rawInsert()  # 00000001400fb2fd

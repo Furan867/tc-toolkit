@@ -1,0 +1,34 @@
+# Recovered symbol stub for: presenter/renderer/renderer
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 000000014005695b
+proc add()  # 00000001400565a8
+proc add()  # 000000014007429c
+proc change_window_mode()  # 00000001406d002a
+proc clear_key_coordinates_recorded()  # 00000001406d037e
+proc create_tbo()  # 00000001406c229c
+proc eqdestroy()  # 00000001400566ee
+proc eqdestroy()  # 00000001406d0485
+proc eqdestroy()  # 00000001406d0883
+proc eqdestroy()  # 00000001406d1313
+proc eqdestroy()  # 00000001406d1578
+proc eqwasMoved()  # 00000001406cc5ae
+proc eqwasMoved()  # 00000001406cc876
+proc eqwasMoved()  # 00000001406cef83
+proc get()  # 00000001406c4aa9
+proc get_key_coordinates_recorded()  # 00000001406d00a5
+proc get_window_position()  # 00000001406d02fd
+proc initMeshCollection()  # 00000001406c4d99
+proc initSnapshotMeshCollection()  # 00000001406c8d72
+proc initTboCollection()  # 00000001406c24a0
+proc isNone()  # 00000001406c4a31
+proc newSeq()  # 0000000140056926
+proc platform_destroy()  # 00000001406d042f
+proc platform_initialize()  # 00000001406c1b8c
+proc post_render()  # 00000001406d0294
+proc pre_render()  # 00000001406cffc9
+proc renderer_destroy()  # 00000001406d03d9
+proc renderer_initialize()  # 00000001406cae2b
+proc setLen()  # 0000000140056763
+proc shrink()  # 0000000140056749
+var FALLBACK_FONTS    # 0000000140bbf7e0

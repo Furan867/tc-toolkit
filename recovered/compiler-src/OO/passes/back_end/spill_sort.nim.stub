@@ -1,0 +1,5 @@
+# Recovered symbol stub for: OO/passes/back_end/spill_sort
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc get_best_spill()  # 00000002fdda7d40
+proc order()  # 00000002fdda7c80

@@ -1,0 +1,12 @@
+# Recovered symbol stub for: pure/parseutils
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc find()  # 00000001404d746c
+proc integerOutOfRangeError()  # 000000014012d077
+proc parseBiggestUInt()  # 000000014012e1c9
+proc parseInt()  # 000000014012d991
+proc parseSaturatedNatural()  # 000000014013009a
+proc parseSaturatedNatural()  # 000000014013059b
+proc parseUInt()  # 000000014012f749
+proc rawParseInt()  # 000000014012d17d
+proc rawParseUInt()  # 000000014012daaf

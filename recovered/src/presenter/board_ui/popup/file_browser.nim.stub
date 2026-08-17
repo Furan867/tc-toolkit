@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/board_ui/popup/file_browser
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 00000001408a7aa7
+proc on_close()  # 00000001408a7a17
+proc on_open()  # 00000001408a7a5f

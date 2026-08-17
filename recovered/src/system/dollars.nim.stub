@@ -1,0 +1,12 @@
+# Recovered symbol stub for: system/dollars
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc dollar()  # 0000000140012ff6
+proc dollar()  # 0000000140013096
+proc dollar()  # 000000014001312b
+proc dollar()  # 00000001400131c3
+proc dollar()  # 0000000140013258
+proc dollar()  # 00000001400132ef
+proc dollar()  # 000000014001467e
+proc dollar()  # 0000000140014944
+proc dollar()  # 00000001400155d9

@@ -1,0 +1,17 @@
+# Recovered symbol stub for: OO/passes/back_end/back_end
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc addQuoted()  # 00000002fdd11d70
+proc addQuoted()  # 00000002fdd11e10
+proc addQuoted()  # 00000002fdd11eb0
+proc back_end()  # 00000002fddb4960
+proc back_end_process_instruction()  # 00000002fddb4910
+proc backend_reset()  # 00000002fddb4900
+proc clear()  # 00000002fdd30b70
+proc collectionToString()  # 00000002fdcfc9e0
+proc dollar()  # 00000002fdcfa8f0
+proc dollar()  # 00000002fdcfcb90
+proc dollar()  # 00000002fdd32960
+proc len()  # 00000002fdd32950
+var .rdata$.refptr.instruction_list    # 00000002fde1c8b0
+var instruction_list    # 00000002fde3fff0

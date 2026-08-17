@@ -1,0 +1,13 @@
+# Recovered symbol stub for: OO/bitvec
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc clz()  # 00000002fddb3400
+proc eqdestroy()  # 00000002fddb33e0
+proc eqsink()  # 00000002fddb3300
+proc find_first_contigous_range()  # 00000002fddb34e0
+proc highest_bit()  # 00000002fddb3420
+proc newSeq()  # 00000002fdd0df40
+proc newSeq()  # 00000002fdd0e000
+proc new_bitvec()  # 00000002fddb3360
+proc ones()  # 00000002fddb34c0
+proc set_range()  # 00000002fddb3610

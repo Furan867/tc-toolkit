@@ -1,0 +1,5 @@
+# Recovered symbol stub for: OO/targets/cpu_aarch64
+# (from compile.dll COFF symbol table, Nim mangling)
+
+var .rdata$.refptr.CPU_aarch64    # 00000002fde1c2c0
+var CPU_aarch64    # 00000002fddfef20

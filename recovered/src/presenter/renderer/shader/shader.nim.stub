@@ -1,0 +1,30 @@
+# Recovered symbol stub for: presenter/renderer/shader/shader
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 00000001400ea857
+proc []eq()  # 00000001400eb7ee
+proc bind_uniform_block()  # 00000001404e6be7
+proc create()  # 00000001404e6e01
+proc enlarge()  # 00000001400eaf18
+proc eqdestroy()  # 00000001400ea9b2
+proc eqdestroy()  # 00000001400ead90
+proc eqdestroy()  # 000000014012c7cc
+proc eqdup()  # 00000001404e6b71
+proc eqeq()  # 0000000140056cc6
+proc eqwasMoved()  # 00000001400eaa3f
+proc eqwasMoved()  # 00000001404e6dec
+proc hasKey()  # 00000001400ea59a
+proc hash()  # 0000000140082477
+proc id()  # 00000001404e77f7
+proc mustRehash()  # 00000001400eaa90
+proc newSeq()  # 0000000140057170
+proc raiseKeyError()  # 00000001400ea676
+proc rawGet()  # 00000001400ea248
+proc rawGetKnownHC()  # 00000001400eb527
+proc rawInsert()  # 00000001400eac09
+proc reset()  # 0000000140056df1
+proc setLen()  # 0000000140056f95
+proc shrink()  # 0000000140056e5b
+proc some()  # 00000001404e6af9
+var .rdata$.refptr.cache    # 0000000140bf1ec0
+var cache    # 00000001467aadc0

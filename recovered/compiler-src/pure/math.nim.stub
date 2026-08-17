@@ -1,0 +1,4 @@
+# Recovered symbol stub for: pure/math
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc nextPowerOfTwo()  # 00000002fdd130d0

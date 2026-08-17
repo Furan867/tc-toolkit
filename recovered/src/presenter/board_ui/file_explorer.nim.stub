@@ -1,0 +1,11 @@
+# Recovered symbol stub for: presenter/board_ui/file_explorer
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc dollar()  # 0000000140852fd7
+proc igColor()  # 00000001404e9a3c
+var COLOR_HEADER_ACTIVE    # 0000000140bd97d0
+var COLOR_HEADER_HIGHLIGHT    # 0000000140bd98a0
+var COLOR_HEADER_HOVERED    # 0000000140bd97c0
+var COLOR_HEADER_NORMAL    # 0000000140bd97b0
+var LOAD_FOLDER    # 0000000140bd98f0
+var LOAD_LEAF    # 0000000140bd98e8

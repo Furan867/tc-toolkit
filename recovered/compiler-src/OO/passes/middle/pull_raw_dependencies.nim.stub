@@ -1,0 +1,15 @@
+# Recovered symbol stub for: OO/passes/middle/pull_raw_dependencies
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc delete()  # 00000002fdd0f160
+proc find_from_top()  # 00000002fdd9fab0
+proc len()  # 00000002fdd2f120
+proc mergeAlt()  # 00000002fdd13ad0
+proc newSeq()  # 00000002fdd0f050
+proc newSeq()  # 00000002fdd0f100
+proc pull_raw_dependencies()  # 00000002fdd9ffb0
+proc raw_use_compare()  # 00000002fdd9faa0
+proc scan_block()  # 00000002fdd9fb00
+proc sort()  # 00000002fdd13e40
+var .rdata$.refptr.seen    # 00000002fde1c9d0
+var seen    # 00000002fde3fe20

@@ -1,0 +1,5 @@
+# Recovered symbol stub for: emutls_get_address
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 00000001409682f0
+proc <module-init>()  # 000000014097bf06

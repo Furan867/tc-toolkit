@@ -1,0 +1,5 @@
+# Recovered symbol stub for: OO/targets/x86_64_linux
+# (from compile.dll COFF symbol table, Nim mangling)
+
+var .rdata$.refptr.x8664_linux_target    # 00000002fde1caa0
+var x8664_linux_target    # 00000002fde2b560

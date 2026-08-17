@@ -1,0 +1,5 @@
+# Recovered symbol stub for: presenter/renderer/color
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc initColor()  # 00000001404e67c7
+proc toPackedColor()  # 00000001404e68b7

@@ -1,0 +1,9 @@
+# Recovered symbol stub for: core/locks
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc acquire()  # 0000000140019a65
+proc acquire()  # 000000014017ac68
+proc initLock()  # 0000000140019a20
+proc initLock()  # 000000014017a620
+proc release()  # 000000014001a0fc
+proc release()  # 000000014017b2db

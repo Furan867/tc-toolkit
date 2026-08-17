@@ -1,0 +1,9 @@
+# Recovered symbol stub for: presenter/io
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc get_asset_path()  # 00000001404d9373
+proc get_captured_path()  # 00000001404d9a80
+proc get_captured_path()  # 00000001404d9f4c
+proc get_captured_path()  # 00000001404da1b0
+proc get_music_path()  # 00000001404d9616
+proc get_sound_path()  # 00000001404d97ae

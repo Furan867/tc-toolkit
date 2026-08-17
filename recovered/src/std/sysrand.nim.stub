@@ -1,0 +1,8 @@
+# Recovered symbol stub for: std/sysrand
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc newSeq()  # 0000000140035355
+proc newSeq()  # 000000014003538a
+proc randomBytes()  # 000000014017a327
+proc urandom()  # 000000014017a4ed
+proc urandomInternalImpl()  # 000000014017a3e8

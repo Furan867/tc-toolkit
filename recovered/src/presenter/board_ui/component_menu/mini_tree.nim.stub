@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/board_ui/component_menu/mini_tree
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 00000001407f344c
+proc build_category()  # 00000001407e3576
+proc build_component()  # 00000001407e0d0c

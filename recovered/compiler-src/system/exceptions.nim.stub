@@ -1,0 +1,8 @@
+# Recovered symbol stub for: system/exceptions
+# (from compile.dll COFF symbol table, Nim mangling)
+
+proc rttiDestroy()  # 00000002fdcf1660
+proc rttiDestroy()  # 00000002fdcf1750
+proc rttiDestroy()  # 00000002fdcf1840
+proc rttiDestroy()  # 00000002fdcf1930
+proc rttiDestroy()  # 00000002fdcf1a20

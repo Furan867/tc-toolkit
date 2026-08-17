@@ -1,0 +1,14 @@
+# Recovered symbol stub for: presenter/board_ui/popup/instruction_overture
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build()  # 00000001408a3b95
+proc build_lower()  # 00000001408a0546
+proc build_mode()  # 000000014089b92a
+proc build_upper()  # 000000014089da22
+proc igColor()  # 00000001404edeb7
+proc on_close()  # 000000014089b377
+proc on_open()  # 000000014089b3bf
+var COLOR_BUTTON_HOVERED`gensym117    # 0000000140bde4c0
+var COLOR_BUTTON_NORMAL`gensym117    # 0000000140bde4b0
+var COLOR_BUTTON_PRESSED`gensym117    # 0000000140bde4d0
+var SIZE_BIT    # 0000000140bde2a0

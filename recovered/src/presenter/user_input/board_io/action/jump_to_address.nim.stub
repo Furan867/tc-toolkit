@@ -1,0 +1,5 @@
+# Recovered symbol stub for: presenter/user_input/board_io/action/jump_to_address
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc handle_jump_to_address()  # 00000001406bde20
+proc open()  # 00000001405d14f7

@@ -1,0 +1,6 @@
+# Recovered symbol stub for: presenter/main_menu_ui/credits_page
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc build_close_button()  # 00000001408e725f
+proc build_credits_page()  # 00000001408e77e7
+proc build_logo()  # 00000001408e6d19

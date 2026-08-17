@@ -1,0 +1,7 @@
+# Recovered symbol stub for: presenter/renderer/file_explorer
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc file_explorer_enable_long_path()  # 00000001406bb94c
+proc file_explorer_is_long_path_enabled()  # 00000001406bbace
+proc file_explorer_pick_folder()  # 00000001406bbd42
+proc toHex()  # 000000014014ebb0

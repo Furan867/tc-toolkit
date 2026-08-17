@@ -1,0 +1,29 @@
+# Recovered symbol stub for: presenter/utilities/hub
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc get()  # 0000000140633c17
+proc get()  # 0000000140748cf3
+proc get()  # 000000014079e21b
+proc get()  # 00000001407a6241
+proc get()  # 000000014080ac10
+proc get()  # 000000014080ec2f
+proc get()  # 000000014082cf28
+proc get()  # 00000001408362cb
+proc get()  # 000000014083ae37
+proc get()  # 00000001408976c8
+proc get()  # 000000014089b676
+proc get()  # 00000001408aabeb
+proc get()  # 00000001408ae2f6
+proc get()  # 00000001408b0306
+proc get()  # 00000001408bfce2
+proc get()  # 00000001408d1530
+proc get()  # 00000001408fb676
+proc get()  # 000000014090462e
+proc get()  # 0000000140914e11
+proc get()  # 000000014091f2ea
+proc get()  # 000000014095f035
+proc hub_delete()  # 000000014063370a
+proc hub_get_list()  # 00000001406332a9
+proc hub_load()  # 0000000140633592
+proc hub_upload()  # 0000000140633d77
+proc hub_vote()  # 00000001406333f4

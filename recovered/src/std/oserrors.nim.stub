@@ -1,0 +1,10 @@
+# Recovered symbol stub for: std/oserrors
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc eqdestroy()  # 00000001400025a6
+proc eqdestroy()  # 0000000140155c46
+proc eqtrace()  # 00000001400026b2
+proc newOSError()  # 0000000140155807
+proc osErrorMsg()  # 00000001401552e6
+proc osLastError()  # 0000000140155d74
+proc raiseOSError()  # 0000000140155c80

@@ -1,0 +1,20 @@
+# Recovered symbol stub for: presenter/renderer/multi_mesh/bg_tile_mesh
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 0000000140566d68
+proc colonanonymous()  # 00000001405664c0
+proc compute_offset()  # 00000001404e3ff3
+proc create()  # 000000014056701e
+proc eqcopy()  # 0000000140566680
+proc eqdestroy()  # 0000000140156e84
+proc eqdestroy()  # 000000014056682a
+proc eqwasMoved()  # 0000000140566fa7
+proc get()  # 00000001406c4c5d
+proc isNone()  # 00000001406c4be5
+proc set_instance_count()  # 0000000140568af7
+proc set_mode()  # 0000000140568baf
+proc set_transform2d()  # 0000000140569039
+proc some()  # 0000000140566e9b
+var image_getter    # 00000001467ab468
+var instance_attributes    # 00000001467ab440
+var wrap_mode    # 0000000140a5e118

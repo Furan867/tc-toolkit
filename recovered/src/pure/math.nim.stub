@@ -1,0 +1,6 @@
+# Recovered symbol stub for: pure/math
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc abs()  # 00000001402ba584
+proc abs()  # 00000001405c8306
+proc nextPowerOfTwo()  # 0000000140082c00

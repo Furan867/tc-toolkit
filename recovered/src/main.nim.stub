@@ -1,0 +1,24 @@
+# Recovered symbol stub for: main
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc <module-init>()  # 0000000140966ca7
+proc add()  # 000000014007da88
+proc build_game_scene()  # 000000014095f36e
+proc eqdestroy()  # 00000001405d53d3
+proc eqdestroy()  # 000000014095ebfa
+proc eqdestroy()  # 000000014096126c
+proc log()  # 0000000140166d87
+proc log()  # 0000000140166f03
+proc main()  # 0000000140962e98
+proc render_component_snapshots()  # 0000000140961375
+proc save()  # 00000001406b8e7b
+proc save()  # 00000001406b8f50
+proc set_time()  # 00000001404f39c6
+proc try_update_schematic_snapshot()  # 00000001409608b4
+proc update_dirty_snapshots()  # 00000001409626ba
+proc update_dynamic()  # 0000000140960ad5
+proc update_short_circuit_locations()  # 000000014095f20a
+proc update_state_clipboard()  # 00000001409603ff
+proc update_static()  # 0000000140960562
+proc update_stream()  # 000000014096101d
+var VIEWPORT_COLOR    # 00000001467acc40

@@ -1,0 +1,34 @@
+# Recovered symbol stub for: pure/unicode
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc binarySearch()  # 0000000140130777
+proc eqeq()  # 0000000140138e46
+proc lteqpercent()  # 0000000140137ee5
+proc runeAt()  # 00000001406f57bc
+proc runeAt()  # 000000014093db89
+proc runeLen()  # 00000001401c9f45
+proc runeLen()  # 00000001407e054f
+proc runeLenAt()  # 0000000140137c19
+proc runeLenAt()  # 00000001406f6a46
+proc runeLenAt()  # 00000001408fb86f
+proc runeOffset()  # 000000014013839e
+proc runeOffset()  # 00000001407e0656
+proc split()  # 000000014093d33f
+proc stringHasSep()  # 0000000140138eb8
+proc toLower()  # 00000001402998b4
+proc toLower()  # 000000014043eac2
+proc toLower()  # 00000001405a40b3
+proc toLower()  # 00000001405eba87
+proc toLower()  # 000000014064ed0c
+proc toLower()  # 00000001406e4820
+proc toLower()  # 0000000140801170
+proc toLower()  # 00000001408a7d47
+proc toUpper()  # 000000014028f992
+proc toUpper()  # 00000001407e0b59
+proc toUpper()  # 0000000140908571
+proc validateUtf8()  # 0000000140138593
+proc validateUtf8()  # 00000001401c9e3e
+var toLowerRanges    # 000000014098a380
+var toLowerSinglets    # 000000014098a5a0
+var toUpperRanges    # 000000014098b8c0
+var toUpperSinglets    # 000000014098bb00

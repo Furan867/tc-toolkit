@@ -1,0 +1,25 @@
+# Recovered symbol stub for: model/scores
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc []()  # 00000001400b9bd9
+proc add()  # 000000014003a49e
+proc add()  # 000000014005e1e0
+proc addQuoted()  # 000000014005cc0e
+proc add_cost()  # 000000014028275f
+proc get_all_costs()  # 0000000140283458
+proc get_cost()  # 000000014027f453
+proc get_delay_cost()  # 000000014027e93b
+proc get_delay_cost()  # 000000014027ef0d
+proc get_gate_cost()  # 000000014027d89b
+proc get_gate_cost()  # 000000014027e313
+proc get_gate_cost()  # 000000014028089a
+proc get_level_score()  # 0000000140282a86
+proc import_costs()  # 0000000140282bee
+proc insert_cost()  # 0000000140280cfe
+proc insert_cost()  # 0000000140281a5e
+proc is_free_component_type()  # 000000014027d6fc
+proc rawGet()  # 00000001400b98a5
+var DEFAULT_COMPONENT_SCORES    # 0000000140a20c30
+var component_cost_buffer    # 000000014677fde0
+var component_cost_buffer_len    # 000000014677fdd0
+var component_costs    # 000000014677f600

@@ -1,0 +1,19 @@
+# Recovered symbol stub for: pure/random
+# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
+
+proc getRandomState()  # 000000014017ada7
+proc high()  # 0000000140068317
+proc initRand()  # 000000014017b2fb
+proc isValid()  # 000000014017ac88
+proc next()  # 000000014017a791
+proc rand()  # 000000014017a8c8
+proc rand()  # 000000014017aa95
+proc rand()  # 000000014017ab3a
+proc randomize()  # 000000014017b501
+proc rotl()  # 000000014017a71c
+proc skipRandomNumbers()  # 000000014017b04c
+var DefaultRandSeed    # 0000000140999310
+var baseSeedLock    # 0000000140c3f780
+var baseState    # 0000000140c3f7b0
+var helper    # 0000000140999320
+var state    # 0000000140c3f760

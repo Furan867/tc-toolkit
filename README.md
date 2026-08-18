@@ -67,17 +67,26 @@ turing-complete/
 │       ├── asset/                图片、音频、字体、shader（.frag/.vert 为明文 GLSL）
 │       ├── campaign/             全部关卡数据（.tc 关卡、.data 电路、.si 测试）
 │       └── translations/         25 种语言翻译（明文）
-├── work/                      ← 中间产物（原始符号表、字符串提取…）
+├── work/                      ← 中间产物（原始符号表、字符串分类…）
 │   ├── symbols_raw.txt        nm 完整符号输出（54522 行）
 │   ├── functions_by_unit.tsv  符号归属
 │   ├── compile_units.txt      编译单元清单（364 个，.nim 模块原始名）
-│   ├── ui_class_names.txt     101 个 UI 类名
-│   └── unmatched_symbols.txt  未 demangle 的符号
+│   ├── unmatched_symbols.txt  未 demangle 的符号
+│   └── strings/               exe 字符串分类（去重排序，见下）
+│       ├── all_dedup.txt      全量去重（5.3 万条，搜索用）
+│       ├── nim_symbols.txt    Nim mangled 符号（13855）
+│       ├── messages.txt       人类可读文本/错误消息（1293）
+│       ├── paths.txt          路径类字符串（685）
+│       ├── components.txt     组件名 com_*（125）
+│       ├── ui_classes.txt     UI 类名 ## 前缀（129）
+│       ├── translation_keys.txt 翻译键（986，从关卡文件提取）
+│       └── other.txt          其他代码片段/标识符（36692）
 └── tools/                     ← 反编译工具与脚本
     ├── pe_overlay.py          PE/COFF 解析
     ├── coff_symbols.py        符号表解析
     ├── nim_demangle.py        Nim mangling demangler + 骨架树生成
     ├── demangle_dll.py        compile.dll 分析
+    ├── organize_strings.py    exe 字符串分类整理
     └── gdre/                  GDRETools v2.6.4（Godot RE Tools，本次未用到数据包）
 ```
 

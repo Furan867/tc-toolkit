@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""分析 JIT 生成的机器码质量：量化编译器浪费了多少指令。
+
+输入是 scan_game_mem.py 的 --dump-exec 产物（裸二进制），
+用 objdump 反汇编后按模式统计冗余指令。
+
+用法
+----
+    python tools/analyze_jit_code.py <dump.bin>
+    python tools/analyze_jit_code.py <dump.bin> --start 0x17690 --stop 0x1e5d0
+    python tools/analyze_jit_code.py <dump.bin> --base 0x022FEADE0000
+
+统计的冗余模式
+--------------
+1. mov A,B 紧跟 mov B,A            —— 来回搬运，两条都是纯浪费
+2. mov ecx,imm 紧跟 shl/shr x,cl   —— 移位量本可用立即数，且多一条依赖
+3. shl N 紧跟 shr N（同寄存器同移位数）—— 等价于一次 and 掩码
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from collections import Counter
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OBJDUMP = r"D:\bin\w64devkit\bin\objdump.exe"
+
+LINE_RE = re.compile(r"^\s+([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*(\S+)\s*(.*)$")
+
+
+def disasm(path, start, stop):
+    cmd = [OBJDUMP, "-D", "-b", "binary", "-m", "i386:x86-64", "-M", "intel"]
+    if start is not None:
+        cmd.append(f"--start-address={start}")
+    if stop is not None:
+        cmd.append(f"--stop-address={stop}")
+    cmd.append(path)
+    out = subprocess.run(cmd, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
+    insns = []
+    for line in out.stdout.splitlines():
+        m = LINE_RE.match(line)
+        if m:
+            insns.append((int(m.group(1), 16), m.group(3),
+                          m.group(4).split("#")[0].strip()))
+    return insns
+
+
+def stats(insns):
+    n = len(insns)
+    if not n:
+        return None
+    ping = cl = mask = 0
+    for i in range(n - 1):
+        a, o1 = insns[i][1], insns[i][2]
+        b, o2 = insns[i + 1][1], insns[i + 1][2]
+        if a == "mov" and b == "mov":
+            p1, p2 = o1.split(","), o2.split(",")
+            if (len(p1) == 2 and len(p2) == 2
+                    and p1[0] == p2[1] and p1[1] == p2[0]):
+                ping += 1
+        if a == "mov" and o1.startswith("ecx,") and b in ("shl", "shr", "sar") \
+                and ",cl" in o2:
+            cl += 1
+        if a in ("shl", "shr") and b in ("shl", "shr"):
+            p1, p2 = o1.split(","), o2.split(",")
+            if len(p1) == 2 and len(p2) == 2 and p1 == p2:
+                mask += 1
+    kinds = Counter(i[1] for i in insns)
+    return dict(n=n, ping=ping, cl=cl, mask=mask, kinds=kinds,
+                save=ping * 2 + cl + mask)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="分析 JIT 机器码质量")
+    ap.add_argument("file", help="dump 出来的裸二进制")
+    ap.add_argument("--start", type=lambda x: int(x, 0), help="起始偏移")
+    ap.add_argument("--stop", type=lambda x: int(x, 0), help="结束偏移")
+    ap.add_argument("--base", type=lambda x: int(x, 0), help="区基址（仅用于显示）")
+    ap.add_argument("--top", type=int, default=12, help="指令类型显示条数")
+    args = ap.parse_args()
+
+    if not os.path.isfile(args.file):
+        print(f"找不到 {args.file}", file=sys.stderr)
+        return 1
+
+    insns = disasm(args.file, args.start, args.stop)
+    rng = ""
+    if args.start is not None:
+        rng = f"  范围 0x{args.start:X}"
+        if args.base:
+            rng += f" (VA 0x{args.base + args.start:X})"
+        if args.stop is not None:
+            rng += f" - 0x{args.stop:X}"
+    print(f"{os.path.basename(args.file)}{rng}")
+    s = stats(insns)
+    if not s:
+        print("未解析到指令")
+        return 1
+    n = s["n"]
+    print(f"指令总数: {n}")
+    print()
+    print("冗余模式")
+    print("-" * 58)
+    print(f"  mov A,B + mov B,A 来回搬运  : {s['ping']:>5} 对   "
+          f"可省 {s['ping']*2:>5} 条 ({100*s['ping']*2/n:.1f}%)")
+    print(f"  mov ecx,imm + 移位用 cl     : {s['cl']:>5} 处   "
+          f"可省 {s['cl']:>5} 条 ({100*s['cl']/n:.1f}%)")
+    print(f"  shl N + shr N (等于 and)    : {s['mask']:>5} 对   "
+          f"可省 {s['mask']:>5} 条 ({100*s['mask']/n:.1f}%)")
+    print(f"  {'合计可省':<26} : {s['save']:>5} 条 ({100*s['save']/n:.1f}%)")
+    print()
+    print(f"指令类型 Top {args.top}")
+    print("-" * 58)
+    for k, v in s["kinds"].most_common(args.top):
+        print(f"  {k:<12} {v:>6}  {100*v/n:>5.1f}%")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -130,7 +130,38 @@ def read_rip(h_thread):
     return struct.unpack_from("<Q", buf, RIP_OFFSET)[0]
 
 
-def sample(pid, iterations, interval):
+def is_exec_non_image(h, addr):
+    """地址是否落在「非 IMAGE 且可执行」的区（= JIT 代码）。"""
+    mbi = MEMORY_BASIC_INFORMATION()
+    if not k32.VirtualQueryEx(h, ctypes.c_void_p(addr), ctypes.byref(mbi),
+                              ctypes.sizeof(mbi)):
+        return False
+    return mbi.Type != 0x1000000 and bool(mbi.Protect & (0x10 | 0x20 | 0x40 | 0x80))
+
+
+def find_sim_threads(h, hts, rounds=40, interval=0.0005):
+    """粗采几轮，找出 RIP 一直在 JIT 区的线程 —— 那就是仿真线程。
+
+    其余线程都泡在 ntdll 等待。锁定它之后采样效率提升约 70 倍：
+    不必再为每个等待中的线程付一次挂起/恢复开销。
+
+    判据用「过半命中」而非「命中若干次」，避免偶尔跑进 JIT 的线程被误认。
+    """
+    cand = Counter()
+    order = list(hts.items())
+    for _ in range(rounds):
+        for tid, ht in order:
+            if k32.SuspendThread(ht) == 0xFFFFFFFF:
+                continue
+            rip = read_rip(ht)
+            k32.ResumeThread(ht)
+            if rip and is_exec_non_image(h, rip):
+                cand[tid] += 1
+        time.sleep(interval)
+    return {t for t, n in cand.items() if n >= max(1, rounds // 2)}
+
+
+def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None):
     h = k32.OpenProcess(0x0400 | 0x0010, False, pid)     # QUERY_INFO | VM_READ
     tids = list_threads(pid)
     hts = {}
@@ -140,11 +171,32 @@ def sample(pid, iterations, interval):
         if ht:
             hts[tid] = ht
 
+    target = hts
+    if only_tids:
+        target = {t: ht for t, ht in hts.items() if t in only_tids}
+    elif auto:
+        sim = find_sim_threads(h, hts)
+        if sim:
+            target = {t: ht for t, ht in hts.items() if t in sim}
+            print(f"  自动锁定仿真线程 {sorted(sim)}（共 {len(hts)} 个线程）")
+        else:
+            print("  未探测到在 JIT 区运行的线程，改为采样全部线程")
+
     hits = Counter()
     per_thread = {}
     misses = 0
-    for _ in range(iterations):
-        for tid, ht in hts.items():
+    # 按轮数或按时长采样。实测每次 Suspend/Resume 约 0.45ms，比 interval 大得多，
+    # 所以「按时长」才是可控的口径 —— 按轮数换算不出稳定的耗时。
+    deadline = time.time() + duration if duration else None
+    n = 0
+    while True:
+        if deadline is not None:
+            if time.time() >= deadline:
+                break
+        elif n >= iterations:
+            break
+        n += 1
+        for tid, ht in target.items():
             if k32.SuspendThread(ht) == 0xFFFFFFFF:
                 continue
             rip = read_rip(ht)
@@ -175,14 +227,23 @@ def sample(pid, iterations, interval):
     k32.CloseHandle(h)
     for ht in hts.values():
         k32.CloseHandle(ht)
-    return hits, agg, len(hts), misses, per_thread, region_of
+    return hits, agg, len(target), misses, per_thread, region_of
 
 
 def main():
     ap = argparse.ArgumentParser(description="采样游戏线程 RIP")
     ap.add_argument("--pid", type=int)
-    ap.add_argument("--iterations", type=int, default=300, help="采样轮数")
-    ap.add_argument("--interval", type=float, default=0.005, help="轮间隔秒")
+    ap.add_argument("--duration", type=float, default=10.0,
+                    help="采样时长秒（默认 10；设 0 则改用 --iterations 计轮数）")
+    ap.add_argument("--iterations", type=int, default=100000,
+                    help="采样轮数（仅当 --duration 为 0 时生效）")
+    ap.add_argument("--interval", type=float, default=0.0001,
+                    help="轮间隔秒（Suspend/Resume 本身约 0.45ms，调它影响有限）")
+    ap.add_argument("--hist", help="把完整 RIP 直方图写到该文件（TSV: rip / count）")
+    ap.add_argument("--all-threads", action="store_true",
+                    help="采样全部线程（默认自动锁定在 JIT 区运行的仿真线程）")
+    ap.add_argument("--tid", type=int, action="append",
+                    help="只采样指定线程 ID（可重复；给了就不自动探测）")
     args = ap.parse_args()
 
     pid = args.pid or find_pid()
@@ -193,9 +254,17 @@ def main():
     print(f"PID {pid}，约 {args.iterations} 轮采样"
           f"（每轮 {args.interval*1000:.0f}ms）...")
     hits, agg, nthreads, misses, per_thread, region_of = sample(
-        pid, args.iterations, args.interval)
+        pid, args.iterations, args.interval,
+        auto=not args.all_threads, only_tids=set(args.tid) if args.tid else None,
+        duration=args.duration or None)
     print(f"可采样线程 {nthreads} 个，读到 RIP {sum(hits.values())} 次，"
           f"失败 {misses} 次")
+    if args.hist:
+        with open(args.hist, "w", encoding="utf-8", newline="\n") as f:
+            f.write("rip\tcount\n")
+            for rip, n in sorted(hits.items()):
+                f.write(f"{rip}\t{n}\n")
+        print(f"完整直方图（{len(hits)} 个不同地址）→ {args.hist}")
     print()
     print("=== 各线程的活动分布（只列有非 ntdll/win32u 活动的线程）===")
     for tid, cnt in sorted(per_thread.items(),

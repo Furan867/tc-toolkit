@@ -7,10 +7,10 @@
     python tools/try_compile_dll.py --load       # ① 只加载 + 调 NimMain 初始化
     python tools/try_compile_dll.py --compile    # ② 再试调用 compile()
 
-已知的 compile() 调用契约（从反汇编读出）：
-    Result* compile(Result* out, NimStringDesc* src, int flags)
+已知的 compile() 调用契约（从反汇编读出，2026-09-15 复核）：
+    Result* compile(Result* out, NimStr* src, int flags)
       rcx = out    输出结构指针（40 字节，sret 约定）
-      rdx = src    NimStringDesc {len @0; data @8}
+      rdx = src    {len @0; ptr @8} —— 字符数据在 ptr + 8，不是内联
       r8d = flags  含义未知，先用 0
 
 ⚠ 调用第三方 dll 可能导致进程崩溃，所以本脚本只应在独立进程中运行，
@@ -59,25 +59,41 @@ def load_dll(call_nimmain=True):
     return dll
 
 
-def make_nim_string(text: bytes):
-    """构造 NimStringDesc：offset 0 = len(int64)，offset 8 = data（结尾补 \\0）。"""
-    n = len(text)
-    buf = ctypes.create_string_buffer(8 + n + 1)
-    struct.pack_into("<q", buf, 0, n)
-    buf[8:8 + n] = text
-    buf[8 + n] = b"\x00"
-    return buf
+class NimStr(ctypes.Structure):
+    """compile() 的第二个参数：{len, ptr}，字符数据在 ptr + 8。"""
+    _fields_ = [("len", ctypes.c_ssize_t), ("ptr", ctypes.c_void_p)]
+
+
+def make_nim_string(source: bytes):
+    """构造 compile() 要的 {len, ptr}。返回 (结构, 缓冲区)；缓冲区必须存活到调用结束。
+
+    反汇编证据（compile 入口，2026-09-15 复核）：
+        mov  (%rdx),%rbp        ; rbp = len
+        mov  0x8(%rdx),%r14     ; r14 = ptr
+        lea  0x8(%r14),%rdx     ; memcpy 源地址 = ptr + 8
+        call memcpy
+    → ptr 指向的缓冲区，前 8 字节是头部，字符数据从 +8 开始。
+
+    ⚠️ 别写成 "create_string_buffer(source) 然后 ptr 指向它" —— 那样数据在
+       ptr+0，编译器会静默跳过前 8 个字符，比崩溃更难查。
+    """
+    n = len(source)
+    inner = ctypes.create_string_buffer(8 + n + 1)
+    struct.pack_into("<q", inner, 0, n)          # NimStringDesc.len
+    inner[8:8 + n] = source
+    inner[8 + n] = b"\x00"
+    return NimStr(n, ctypes.cast(inner, ctypes.c_void_p)), inner
 
 
 def try_compile(dll, source: bytes):
     """调用 compile()，返回 40 字节原始结果。"""
-    src = make_nim_string(source)
+    src, _keepalive = make_nim_string(source)  # 缓冲区必须存活到调用结束
     out = ctypes.create_string_buffer(64)      # 结构只占 40，留点余量
     ctypes.memset(out, 0xCC, 64)               # 先填哨兵，方便看哪些字节被写过
     dll.compile.restype = ctypes.c_void_p
     dll.compile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
     print(f"调用 compile(src={len(source)} 字节) ...")
-    ret = dll.compile(out, src, 0)
+    ret = dll.compile(out, ctypes.byref(src), 0)
     print(f"  返回 0x{ret:X}（out 缓冲在 0x{ctypes.addressof(out):X}）")
     return out.raw
 
@@ -122,6 +138,17 @@ def main():
         elif 0x10000 < v < 0x800000000000:
             note = "  ← 像指针或长度"
         print(f"  [{i}] 0x{v:016X}{note}")
+
+    # 结果疑似 {out_len, out_ptr, err_len, ?, ?} —— 把内容取出来看是什么
+    out_len, out_ptr = struct.unpack_from("<qQ", raw, 0)
+    if out_ptr and 0 < out_len < 64 * 1024 * 1024:
+        content = ctypes.string_at(out_ptr, out_len)
+        dest = os.path.join(ROOT, "work", "compile_out.bin")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(content)
+        print(f"\n结果内容 {len(content)} 字节 → {dest}")
+        print("  前 160 字节:", repr(content[:160]))
     return 0
 
 

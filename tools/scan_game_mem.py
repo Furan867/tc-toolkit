@@ -72,6 +72,11 @@ MARKERS = [
     b"def mode_run(target_cycle: Int) None",
 ]
 
+# 组件注释（`// <编号> com_xxx`）—— 每份源码都有，用来兜住那些**不含上面
+# 两个固定串的大段**。实测内存里躺着一条 398 KB 的连续源码，恰好一个固定串
+# 都不含，于是从未被命中、整份丢掉。
+MARKER_RE = re.compile(rb"//\s*\d+\s+com_[a-z0-9_]+")
+
 
 def find_pid(name="Turing Complete.exe"):
     """用 toolhelp 快照找进程 PID。"""
@@ -165,6 +170,18 @@ def scan_markers(h, mbi, chunk=4 << 20):
                 start = i + 1
                 if len(hits) > 200:
                     return hits
+        # 组件注释（正则）：每区最多取 8 处，够定位到该区域的源码即可
+        start, cnt = 0, 0
+        while cnt < 8:
+            m = MARKER_RE.search(blob, start)
+            if not m:
+                break
+            hits.append((base + m.start(), b"<com>",
+                         blob[max(0, m.start() - 60):m.start() + 120]))
+            start = m.end()
+            cnt += 1
+            if len(hits) > 200:
+                return hits
         carry = blob[-512:]
         off += n
     return hits
@@ -230,6 +247,8 @@ def main():
                     help="把 JIT 可执行区 dump 到 work/jit_dump_<base>.bin")
     ap.add_argument("--max-dump-mb", type=int, default=64,
                     help="单个可执行区最大 dump 体积(MB)")
+    ap.add_argument("--max-dump-regions", type=int, default=24,
+                    help="最多 dump 多少个区（MAPPED 优先 —— JIT 代码都在那里）")
     ap.add_argument("--threads", type=int, default=8,
                     help="并行扫描线程数。实测 4~20 差异很小（约 1.25s vs "
                          "1.30s），8 最优；再往上会被系统调用竞争吃掉收益")
@@ -280,10 +299,19 @@ def main():
 
         if args.dump_exec:
             os.makedirs(WORK, exist_ok=True)
-            for m in sorted(priv_exec, key=lambda x: -x.RegionSize)[:10]:
-                if m.RegionSize > args.max_dump_mb * 1048576:
-                    print(f"  跳过 0x{m.BaseAddress:X}（超出 --max-dump-mb）")
-                    continue
+            # 先按大小过滤、再截断 —— 顺序反了的话，前面的超大区（内存组件那批
+            # 128MB 的空数据区）会占满名额并被逐个跳过，真正小而重要的 JIT 代码
+            # 区连循环都进不去。
+            cap = args.max_dump_mb * 1048576
+            dumpable = [m for m in priv_exec if m.RegionSize <= cap]
+            # JIT 代码实测都在 MEM_MAPPED。正在执行的电路可能住在 20KB 的小
+            # MAPPED 区里，纯按大小排会被大区挤掉 —— 漏掉它就直接导致识别不出
+            # 当前电路（实测踩过）。
+            dumpable.sort(key=lambda m: (m.Type != MEM_MAPPED, -m.RegionSize))
+            skipped = len(priv_exec) - len(dumpable)
+            if skipped:
+                print(f"  （{skipped} 个区超出 --max-dump-mb 上限，未纳入 dump 候选）")
+            for m in dumpable[:args.max_dump_regions]:
                 data = read_mem(h, m.BaseAddress, m.RegionSize)
                 if data is None:
                     print(f"  读取失败 0x{m.BaseAddress:X}")
@@ -309,8 +337,16 @@ def main():
             # 清掉上一轮产物：这次若少提取到几份，旧文件残留会误导后续分析
             for old in glob.glob(os.path.join(WORK, "generated_code_*.txt")):
                 os.remove(old)
+            # 命中点可能很密集（组件注释每几十字节就有一处），必须按地址间隔挑
+            # —— 否则前若干个全落在同一片区域，提取结果既重复又互相污染。
+            hits.sort(key=lambda x: x[0])
+            picked, last = [], -(1 << 40)
+            for a, m in hits:
+                if a - last >= 8192:
+                    picked.append((a, m))
+                    last = a
             seen = {}
-            for a, m in hits[:12]:
+            for a, m in picked[:24]:
                 txt, base = extract_text(h, a, m)
                 if not txt:
                     continue

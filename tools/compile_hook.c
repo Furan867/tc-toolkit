@@ -21,7 +21,8 @@
  *
  * 编号：**一次 compile() 调用取一个号，src 与 out 共用同一个号** ——
  *       hook_src_005.si 与 hook_out_005.bin 就是一对。
- *       （计数器是进程内变量，游戏重启会归零，所以文件名的新旧要看 mtime。）
+ *       计数器是本 DLL 的全局变量，**每次加载（游戏启动）都从 1 重新编号**，
+ *       因此加载时会**清空目录里的 .si/.bin**（不含子目录），避免新旧同号混在一起。
  *
  * 契约（已由反汇编独立验证，2026-09-15 / 09-17 两次复核）
  * ------------------------------------------------------
@@ -88,6 +89,46 @@ static void dump(const char* tag, const char* ext, const void* p, long long n, L
     DWORD written = 0;
     WriteFile(h, p, (DWORD)n, &written, NULL);
     CloseHandle(h);
+}
+
+/* 加载时清空 OUT_DIR 下的 .si / .bin。
+ *
+ * 为什么：编号计数器 g_seq 是**本 DLL 的全局变量**，每次加载都从 1 重新编号。
+ * 不清空的话，新捕获会覆盖同号的旧文件，而且新旧混在同一目录里分不出哪些是
+ * 本次会话的 —— 实测就发生过「09-19 00:23 的 001-006 被 00:35 的 001-004 覆盖」。
+ *
+ * **只删这一层的文件，不进入子目录** —— 想长期保留的捕获，自己挪到子目录里。
+ * DllMain 里只做 FindFirstFile / DeleteFile 这类不触发 loader 的操作，是安全的。
+ */
+static int ends_with_ci(const char* name, const char* ext) {
+    int ln = lstrlenA(name), le = lstrlenA(ext);
+    return ln >= le && lstrcmpiA(name + ln - le, ext) == 0;
+}
+
+static void purge_captures(void) {
+    char pat[MAX_PATH], path[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    lstrcpyA(pat, OUT_DIR);
+    lstrcatA(pat, "\\*");
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在，没什么可清的 */
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   /* 不碰子目录 */
+        if (!ends_with_ci(fd.cFileName, ".si") &&
+            !ends_with_ci(fd.cFileName, ".bin")) continue;
+        lstrcpyA(path, OUT_DIR);
+        lstrcatA(path, "\\");
+        lstrcatA(path, fd.cFileName);
+        DeleteFileA(path);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
+    (void)hinst;
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) purge_captures();
+    return TRUE;
 }
 
 __declspec(dllexport) void* compile(void* out, void* src, int flags) {

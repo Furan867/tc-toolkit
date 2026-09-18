@@ -44,7 +44,7 @@ HOOK = os.path.join(ROOT, "work", "compile_hook.dll")
 def find_pid():
     sys.path.insert(0, HERE)
     try:
-        from catch_compile_source import find_pid as fp
+        from winmem import find_pid as fp
         return fp()
     except Exception:
         return None

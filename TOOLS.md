@@ -95,13 +95,13 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 | `nim_demangle.py` | 符号 demangle + 模块树 | ⚠️ 正则含 `\x00` 导致整表匹配成 1 条，**字符串表取模块的功能已失效** |
 | `demangle_dll.py` | compile.dll 符号 demangle | ⚠️ 路径写死旧目录 |
 | `coff_symbols.py` | COFF 符号表 → 编译单元/函数 | ❌ **截断 bug**（长名少前 4 字符：`contains`→`ains`），产物已弃用。**改用 `nm` 输出** |
-| `organize_strings.py` | exe 字符串分类 | ❌ 输入文件 `work/exe_strings.txt` 不存在，已失效 |
+| `organize_strings.py` | exe 字符串分类 | ❌ 输入文件不存在，已失效（旧产物已删除） |
 | `pe_overlay.py` | PE 结构解析 | ⚠️ **会写文件到硬编码路径**，别在游戏目录跑 |
 
 **符号表的正确来源**：直接跑 `nm`
 
 ```
-D:/bin/w64devkit/bin/nm.exe "<游戏目录>/Turing Complete.exe" > work/exe_nm.txt
+D:/bin/w64devkit/bin/nm.exe "<游戏目录>/Turing Complete.exe" > work/symbols/exe_nm.txt
 ```
 
 42881 行，未 strip，符号名完整。**别用 `coff_symbols.py` 的产物**。
@@ -112,4 +112,4 @@ D:/bin/w64devkit/bin/nm.exe "<游戏目录>/Turing Complete.exe" > work/exe_nm.t
 
 1. `sample_threads.py` 的线程探测判据换成 `QueryThreadCycleTime`（不需要挂起线程）
 2. `hw_breakpoint_trace.py` 补上 DR 清理，或直接删除
-3. `profile_by_image.py` 的调用方式封装（现在要手填两个文件路径，且要自己配对编号）
+3. ~~`profile_by_image.py` 的调用方式封装~~ ✅ 已完成（默认取最新一对，另有 `--watch`）

@@ -15,7 +15,7 @@
 sample_threads.py 采到的 RIP 落到具体组件上。
 
 输入：生成的 Simplex 源码（scan_game_mem.py 的产物）
-输出：work/component_map.tsv
+输出：work/maps/component_map.tsv
       index / comp_id / type / src_line / jit_start / jit_end / size
 
 注意 jit_* 是相对「JIT 代码起点」的偏移（产物开头那 8 字节 NimStringDesc
@@ -93,7 +93,7 @@ def compile_to_bytes(dll, source: bytes) -> bytes:
 def main():
     ap = argparse.ArgumentParser(description="建立「组件 → 机器码地址范围」映射表")
     ap.add_argument("--src", required=True, help="生成的 Simplex 源码（scan_game_mem 产物）")
-    ap.add_argument("--out", default=os.path.join(WORK, "component_map.tsv"))
+    ap.add_argument("--out", default=os.path.join(WORK, "maps", "component_map.tsv"))
     ap.add_argument("--keep", action="store_true", help="保留带标记的源码与产物（调试用）")
     args = ap.parse_args()
 
@@ -152,12 +152,12 @@ def main():
               f"JIT偏移 {r[4]:>6}..{r[5]:<6} ({r[5] - r[4]}B)")
 
     if args.keep:
-        for path, data in ((os.path.join(WORK, "marked.simplex"), marked_text.encode("utf-8")),
-                           (os.path.join(WORK, "marked.bin"), marked),
-                           (os.path.join(WORK, "plain.bin"), plain)):
+        for path, data in ((os.path.join(WORK, "maps", "marked.si"), marked_text.encode("utf-8")),
+                           (os.path.join(WORK, "maps", "marked.bin"), marked),
+                           (os.path.join(WORK, "maps", "plain.bin"), plain)):
             with open(path, "wb") as f:
                 f.write(data)
-        print(f"中间产物已存到 {WORK}/marked.simplex, marked.bin, plain.bin")
+        print(f"中间产物已存到 {WORK}/maps/marked.si, maps/marked.bin, maps/plain.bin")
     return 0
 
 

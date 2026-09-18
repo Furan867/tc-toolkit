@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """分析从游戏内存提取的生成代码（scan_game_mem.py 的产物），统计各组件的代码代价。
 
-输入: work/generated_code_*.txt
+输入: work/generated_code_*.si
 输出: work/component_cost.tsv  +  控制台摘要
 
-不是所有 generated_code_*.txt 都是电路代码 —— 还可能是 test.si 测试脚本。
+不是所有 generated_code_*.si 都是电路代码 —— 还可能是测试脚本。
 本工具只统计含 #SIMULATION_STATE 的文件，其余跳过并说明。
 
 生成代码的结构（每个组件一段）:
@@ -94,7 +94,7 @@ def code_lines(body):
 
 def main():
     ap = argparse.ArgumentParser(description="统计生成代码中各组件的代价")
-    ap.add_argument("--file", help="指定文件（默认 work/generated_code_*.txt）")
+    ap.add_argument("--file", help="指定文件（默认 work/generated_code_*.si）")
     ap.add_argument("--detail", help="只显示指定组件类型（不输出整体摘要）")
     ap.add_argument("--list", action="store_true", help="只列出文件与判定")
     ap.add_argument("--top", type=int, default=25, help="摘要显示条数")
@@ -103,9 +103,9 @@ def main():
     args = ap.parse_args()
 
     files = ([args.file] if args.file
-             else sorted(glob.glob(os.path.join(WORK, "generated_code_*.txt"))))
+             else sorted(glob.glob(os.path.join(WORK, "generated_code_*.si"))))
     if not files:
-        print(f"找不到生成代码文件（{WORK}/generated_code_*.txt）", file=sys.stderr)
+        print(f"找不到生成代码文件（{WORK}/generated_code_*.si）", file=sys.stderr)
         print("请先运行 tools/scan_game_mem.py 从游戏进程提取", file=sys.stderr)
         return 1
 
@@ -186,7 +186,7 @@ def main():
                 f"{avg:.1f}", ctype]
         print(" ".join(pad(v, w, r) for v, (_, w, r) in zip(vals, cols)))
 
-    out = os.path.join(WORK, "component_cost.tsv")
+    out = os.path.join(WORK, "maps", "component_cost.tsv")
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write("# type\ttotal_lines\tinstances\tmax\tavg\n")
         for tot, n, mx, avg, ctype in rows:

@@ -335,7 +335,7 @@ def main():
         if hits:
             os.makedirs(WORK, exist_ok=True)
             # 清掉上一轮产物：这次若少提取到几份，旧文件残留会误导后续分析
-            for old in glob.glob(os.path.join(WORK, "generated_code_*.txt")):
+            for old in glob.glob(os.path.join(WORK, "generated_code_*.si")):
                 os.remove(old)
             # 命中点可能很密集（组件注释每几十字节就有一处），必须按地址间隔挑
             # —— 否则前若干个全落在同一片区域，提取结果既重复又互相污染。
@@ -360,7 +360,7 @@ def main():
                 lines = txt.count(b"\n")
                 print(f"  [文本{idx}] 起始 0x{base:012X}  "
                       f"{len(txt):,} 字节 / {lines:,} 行")
-                out = os.path.join(WORK, f"generated_code_{idx}.txt")
+                out = os.path.join(WORK, f"generated_code_{idx}.si")
                 with open(out, "wb") as f:
                     f.write(txt)
                 print(f"            写出 {out}")

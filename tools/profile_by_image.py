@@ -16,16 +16,19 @@
 
 用法
 ----
-    python tools/profile_by_image.py --src work/hook_src_003.bin --img work/hook_out_004.bin
+    python tools/profile_by_image.py --src work/hook/hook_src_003.si --img work/hook/hook_out_004.bin
     python tools/profile_by_image.py --src ... --img ... --duration 20
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import os
+import re
 import struct
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -39,7 +42,7 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from winmem import k32, find_pid, PROCESS_QUERY_INFO, PROCESS_VM_READ
+from winmem import k32, find_pid, open_process
 from locate_jit_image import locate  # noqa: E402
 
 TAB = chr(9)
@@ -61,17 +64,106 @@ def run(args):
     return subprocess.run(args, cwd=ROOT)
 
 
+def discover_pairs():
+    """扫 work/hook/（以及 work/ 根目录，兼容改造前的旧文件）下的 src/out 对。
+
+    ⚠️ 编号**不连续** —— src 与 out 共用一个递增计数器，且 src 先取号：
+        src_001/out_002, src_003/out_004, ...   即 out_NNN 对应 src_(NNN-1)
+    手填路径时极易搞错（踩过）。返回 [(out编号, src路径, out路径)]，按编号升序。
+    """
+    import glob
+    srcs, outs = {}, {}
+    for d in (os.path.join(WORK, "hook"),):
+        for f in glob.glob(os.path.join(d, "hook_src_*")):
+            m = re.search(r"hook_src_(\d+)\.(?:si|bin)$", f)
+            if m:
+                srcs.setdefault(int(m.group(1)), f)
+        for f in glob.glob(os.path.join(d, "hook_out_*.bin")):
+            m = re.search(r"hook_out_(\d+)\.bin$", f)
+            if m:
+                outs.setdefault(int(m.group(1)), f)
+    return [(seq, srcs[seq - 1], outs[seq])
+            for seq in sorted(outs) if seq - 1 in srcs]
+
+
+
+def component_inventory(src_path):
+    """数出各类型组件的数量（按唯一 ID 计）。
+
+    ⚠️ 完整源码里每个组件 ID 会出现**两次**（组件代码 + 绑定），所以必须按唯一
+    ID 去重 —— 直接数注释条数会翻倍（127 个 nand 数成 254，这个坑早先误杀过
+    全部正常候选）。同时返回源码自报的 get_component_count() 供对照。
+    """
+    s = open(src_path, encoding="utf-8", errors="replace").read()
+    seen = {}
+    for cid, name in re.findall(r"//\s*(\d+)\s+(com_[a-z0-9_]+)", s):
+        if name == "com_none":
+            continue          # 空注释，不是真组件
+        seen.setdefault(cid, name)
+    m = re.search(r"get_component_count\(\)\s*Int\s*\{\s*return\s+(\d+)", s)
+    return collections.Counter(seen.values()), (int(m.group(1)) if m else None)
+
+
+def report_one(seq, src, out):
+    inv, declared = component_inventory(src)
+    total = sum(inv.values())
+    print("── src_%03d / out_%03d   %s ──" % (seq - 1, seq, time.strftime("%H:%M:%S")))
+    if not inv:
+        print("   （源码里没有组件注释）")
+    else:
+        width = max(len(n) for n in inv)
+        for name, cnt in inv.most_common():
+            print("   %-*s  x %d" % (width, name, cnt))
+        print("   " + "-" * (width + 8))
+    print("   合计 %d 个（源码自报 get_component_count() = %s）" % (total, declared))
+    print()
+
+
+
+def watch(args):
+    print("监听 work/ 下新出现的 src/out 对（Ctrl-C 停止）")
+    print("每发现一对就报告组件构成；**不做性能分析**。" + NL)
+    seen = set(seq for seq, _, _ in discover_pairs())
+    print("（已有 %d 对，从现在起只报新出现的）" % len(seen) + NL)
+    try:
+        while True:
+            for seq, src, out in discover_pairs():
+                if seq in seen:
+                    continue
+                seen.add(seq)
+                report_one(seq, src, out)
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print(NL + "停止监听。")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="按产物字节范围做组件级性能剖析")
-    ap.add_argument("--src", required=True, help="Simplex 源码（hook_src_*.bin）")
-    ap.add_argument("--img", required=True, help="编译产物（hook_out_*.bin）")
+    ap.add_argument("--src", help="Simplex 源码（hook_src_*.si）")
+    ap.add_argument("--img", help="编译产物（hook_out_*.bin）")
     ap.add_argument("--duration", type=float, default=10.0, help="采样秒数")
     ap.add_argument("--pid", type=int)
     ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--watch", action="store_true",
+                    help="监听模式：自动发现新出现的 src/out 对并报告组件构成，"
+                         "不做性能分析（用于人工验证「最新 ?= 正在跑」）")
+    ap.add_argument("--interval", type=float, default=0.02, help="监听轮询间隔秒")
     args = ap.parse_args()
+
+    if args.watch:
+        return watch(args)
 
     # 子进程统一以 reversing/ 为工作目录运行，所以路径必须先转成绝对路径 ——
     # 否则 'reversing/work/x.bin' 会被拼成 'reversing/reversing/work/x.bin'（踩过）
+    if not args.src or not args.img:
+        # 默认用**最新的** src/out 对 —— 它就是当前最新电路状态
+        pairs = discover_pairs()
+        if not pairs:
+            print("❌ work/hook/ 下没有任何 src/out 对", file=sys.stderr)
+            return 1
+        seq, args.src, args.img = pairs[-1]
+        print("使用最新的 src/out 对：src_%03d / out_%03d" % (seq - 1, seq))
     args.src = os.path.abspath(args.src)
     args.img = os.path.abspath(args.img)
 
@@ -102,7 +194,7 @@ def main():
     print("      → 找到 %d 个副本：%s" % (len(bases), ", ".join("0x%X" % b for b in bases)))
 
     # ── 2. 采样全部线程 ──
-    raw = os.path.join(WORK, "_prof_raw.tsv")
+    raw = os.path.join(WORK, "tmp", "_prof_raw.tsv")
     print(f"[2/4] 采样 {args.duration:.0f} 秒 ...")
     if find_pid() != pid:                     # 采样前确认进程没变
         print("❌ 游戏进程变了，地址已失效 —— 重新跑一次", file=sys.stderr)
@@ -114,7 +206,7 @@ def main():
         return 1
 
     # ── 3. 按产物字节范围过滤，并筛出「正在跑的那个副本」──
-    kept = os.path.join(WORK, "_prof_filtered.tsv")
+    kept = os.path.join(WORK, "tmp", "_prof_filtered.tsv")
     samples = []
     for line in open(raw, encoding="utf-8").read().splitlines()[1:]:
         q = line.split(TAB)

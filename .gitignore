@@ -11,3 +11,6 @@ work/
 # Python
 __pycache__/
 *.pyc
+
+# 构建产物（由 tools/compile_hook.c 编译而来）
+build/

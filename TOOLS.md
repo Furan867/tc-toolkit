@@ -28,10 +28,20 @@
 | `build_component_map.py` | 建组件↔机器码偏移映射（被一键脚本调用） | ✅ 坐标偏差恒等，38/38 锚点全命中 |
 | `analyze_sim_hotspot.py` | 出组件级耗时报告（被一键脚本调用） | ✅ |
 
+### 目录约定
+
+```
+work/hook/     捕获的源码(.si)与产物(.bin)   ← 不可再生，别删
+work/symbols/  符号表          work/maps/   组件映射表与建映射中间产物
+work/reports/  分析报告        work/tmp/    一次性中间产物
+build/         compile_hook.dll（构建产物）
+```
+
 ### 用法
 
 ```
-python tools/profile_by_image.py --src work/hook_src_069.bin --img work/hook_out_070.bin
+python tools/profile_by_image.py                  # 默认取最新的一对
+python tools/profile_by_image.py --watch          # 监听新出现的捕获
 ```
 
 **注意**：`hook_src_NNN` 与 `hook_out_NNN` 是**配对**的（同一次 `compile()` 调用），
@@ -48,6 +58,16 @@ python tools/profile_by_image.py --src work/hook_src_069.bin --img work/hook_out
    不能拿 `locate()` 返回的第一个。
 3. **转发层必须用自身模块路径加载 `compile_real.dll`**，不能写相对路径 —— 相对路径
    按宿主进程的当前目录解析，离线调用时会失败（返回 NULL，表现为"编译失败"）。
+
+---
+
+## 一·B、源码处理
+
+| 工具 | 作用 | 状态 |
+|---|---|---|
+| `format_si.py` | 格式化 `.si`：**压连续空行 / 去行尾空白 / 去文末空行**，不动任何非空行（实测 332 行逐字节一致） | ✅ |
+
+借不到 VSCode 插件的能力：`michai.tc-si` 只提供 TextMate 正则高亮，**没有 formatter 贡献点**。
 
 ---
 

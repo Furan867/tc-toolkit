@@ -11,7 +11,7 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
 部署做的事
 ----------
     compile.dll        → 改名成 compile_real.dll   （原文件完整保留，随时可还原）
-    work/compile_hook.dll → 复制为 compile.dll
+    build/compile_hook.dll → 复制为 compile.dll
 
 恢复做的事
 ----------
@@ -38,7 +38,7 @@ ROOT = os.path.dirname(HERE)
 GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
 TARGET = os.path.join(GAME, "compile.dll")
 REAL = os.path.join(GAME, "compile_real.dll")
-HOOK = os.path.join(ROOT, "work", "compile_hook.dll")
+HOOK = os.path.join(ROOT, "build", "compile_hook.dll")
 
 
 def find_pid():
@@ -56,7 +56,7 @@ def status():
     print("compile.dll      : " + (f"存在（{os.path.getsize(TARGET)} B）"
                                   if os.path.exists(TARGET) else "不存在"))
     print("compile_real.dll : " + ("存在" if os.path.exists(REAL) else "不存在"))
-    print("转发层 (work/)   : " + ("存在" if os.path.exists(HOOK) else "不存在"))
+    print("转发层 (build/)  : " + ("存在" if os.path.exists(HOOK) else "不存在"))
     print("当前状态         : " + ("**已部署**（原 DLL 在 compile_real.dll）"
                                   if os.path.exists(REAL) else "**未部署**（原始状态）"))
     return 0
@@ -76,7 +76,7 @@ def deploy():
         return 1
     if not os.path.exists(HOOK):
         print(f"❌ 转发层不存在：{HOOK}\n   先编译：gcc -shared -O2 -static "
-              f"-o work/compile_hook.dll tools/compile_hook.c", file=sys.stderr)
+              f"-o build/compile_hook.dll tools/compile_hook.c", file=sys.stderr)
         return 1
     if os.path.exists(REAL):
         print("⚠️ compile_real.dll 已存在，看起来已经部署过了。要用 --restore 先还原。",
@@ -87,7 +87,7 @@ def deploy():
     shutil.copy2(HOOK, TARGET)
     print("✅ work/compile_hook.dll → compile.dll")
     print("\n部署完成。现在启动游戏、切换或编辑一次电路，")
-    print("源码会写到 work/hook_src_NNN.bin，产物写到 work/hook_out_NNN.bin。")
+    print("源码会写到 work/hook/hook_src_NNN.si，产物写到 work/hook/hook_out_NNN.bin。")
     return 0
 
 

@@ -93,7 +93,7 @@ def cell(s, width, right=False):
 def main():
     ap = argparse.ArgumentParser(description="组件级仿真性能剖析")
     ap.add_argument("--hist", required=True, help="RIP 直方图（sample_threads.py --hist 产物）")
-    ap.add_argument("--map", dest="mapfile", default=os.path.join(WORK, "component_map.tsv"))
+    ap.add_argument("--map", dest="mapfile", default=os.path.join(WORK, "maps", "component_map.tsv"))
     ap.add_argument("--pid", type=int)
     ap.add_argument("--top", type=int, default=20, help="列出前 N 个组件类型")
     ap.add_argument("--instances", type=int, default=10, help="列出前 N 个组件实例")

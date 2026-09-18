@@ -16,8 +16,11 @@
  *
  * 记录的内容（写到 OUT_DIR）
  * -------------------------
- *   hook_src_NNN.bin  —— compile() 收到的 Simplex 源码
+ *   hook_src_NNN.si   —— compile() 收到的 Simplex 源码（.si = Simplex）
  *   hook_out_NNN.bin  —— compile() 产出的机器码
+ *
+ * 编号：src 与 out **共用一个递增计数器**，src 先取号，所以是
+ *       src_001/out_002, src_003/out_004, ...  即 out_NNN 对应 src_(NNN-1)。
  *
  * 契约（已由反汇编独立验证，2026-09-15 / 09-17 两次复核）
  * ------------------------------------------------------
@@ -35,7 +38,7 @@
 #include <string.h>
 
 #define REAL_DLL "compile_real.dll"
-#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work"
+#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\hook"
 #define SEP      92        /* 反斜杠的 ASCII —— 写成字符字面量在多轮转义里会失真 */
 
 typedef void* (*compile_fn)(void* out, void* src, int flags);
@@ -73,11 +76,12 @@ static void ensure_real(void) {
     if (g_real) g_compile = (compile_fn)GetProcAddress(g_real, "compile");
 }
 
-static void dump(const char* tag, const void* p, long long n) {
+static void dump(const char* tag, const char* ext, const void* p, long long n) {
     if (!p || n <= 0 || n > (64LL << 20)) return;
+    CreateDirectoryA(OUT_DIR, NULL);       /* 已存在会失败，无所谓 */
     char path[MAX_PATH];
     LONG i = InterlockedIncrement(&g_seq);
-    sprintf(path, "%s%chook_%s_%03ld.bin", OUT_DIR, SEP, tag, i);
+    sprintf(path, "%s%chook_%s_%03ld%s", OUT_DIR, SEP, tag, i, ext);
     HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -91,14 +95,14 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     if (src) {
         long long len = *(long long*)src;
         void* ptr = *(void**)((char*)src + 8);
-        if (ptr) dump("src", (const char*)ptr + 8, len);   /* 数据在 ptr + 8 */
+        if (ptr) dump("src", ".si", (const char*)ptr + 8, len);   /* 数据在 ptr + 8 */
     }
     if (!g_compile) return NULL;
     void* ret = g_compile(out, src, flags);
     if (out) {
         long long olen = *(long long*)out;
         void* optr = *(void**)((char*)out + 8);
-        if (optr) dump("out", optr, olen);
+        if (optr) dump("out", ".bin", optr, olen);
     }
     return ret;
 }

@@ -5,8 +5,9 @@
 >
 > 工具清单与各自状态（活跃/有坑/已废弃）见 **[`TOOLS.md`](TOOLS.md)**。
 >
-> **输出目录**：`work/{hook,symbols,maps,reports,tmp}` 按类型分；`hook/` 里是不可再生的
-> 捕获数据。构建产物在 `build/`。
+> **输出目录**：`work/{hook,symbols,maps,reports,tmp}` 按类型分；`hook/` 里是捕获数据
+> （**同号会被后来的捕获覆盖** —— 计数器归零后会从头编号，见 TOOLS.md 的坑 4）。
+> 构建产物在 `build/`。
 
 ## 全景
 

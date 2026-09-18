@@ -65,25 +65,29 @@ def run(args):
 
 
 def discover_pairs():
-    """扫 work/hook/（以及 work/ 根目录，兼容改造前的旧文件）下的 src/out 对。
+    """扫 work/hook/ 下的 src/out 对，**按捕获时间升序**返回 [(编号, src, out)]。
 
-    ⚠️ 编号**不连续** —— src 与 out 共用一个递增计数器，且 src 先取号：
-        src_001/out_002, src_003/out_004, ...   即 out_NNN 对应 src_(NNN-1)
-    手填路径时极易搞错（踩过）。返回 [(out编号, src路径, out路径)]，按编号升序。
+    配对：**同编号即一对** —— 转发层一次 compile() 调用取一个号，src/out 共用，
+    所以 hook_src_005.si ↔ hook_out_005.bin。
+
+    ⚠️ **排序绝不能靠编号**：计数器是**进程内**变量，游戏一重启就归零，目录里于是
+    会出现「旧的 src_089 与新的 src_001 并存」。按编号取最大就选中了**旧进程的产物**，
+    它的 JIT 区早随进程消失 → 定位 0 候选（实测踩到，表现成「工具坏了」）。故按 mtime。
+    同理，`--watch` 里判断「是否见过」要用**文件路径**而不是编号。
     """
     import glob
     srcs, outs = {}, {}
-    for d in (os.path.join(WORK, "hook"),):
-        for f in glob.glob(os.path.join(d, "hook_src_*")):
-            m = re.search(r"hook_src_(\d+)\.(?:si|bin)$", f)
-            if m:
-                srcs.setdefault(int(m.group(1)), f)
-        for f in glob.glob(os.path.join(d, "hook_out_*.bin")):
-            m = re.search(r"hook_out_(\d+)\.bin$", f)
-            if m:
-                outs.setdefault(int(m.group(1)), f)
-    return [(seq, srcs[seq - 1], outs[seq])
-            for seq in sorted(outs) if seq - 1 in srcs]
+    for f in glob.glob(os.path.join(WORK, "hook", "hook_src_*")):
+        m = re.search(r"hook_src_(\d+)\.(?:si|bin)$", f)
+        if m:
+            srcs[int(m.group(1))] = f
+    for f in glob.glob(os.path.join(WORK, "hook", "hook_out_*.bin")):
+        m = re.search(r"hook_out_(\d+)\.bin$", f)
+        if m:
+            outs[int(m.group(1))] = f
+    pairs = [(seq, srcs[seq], outs[seq]) for seq in (srcs.keys() & outs.keys())]
+    pairs.sort(key=lambda p: os.path.getmtime(p[2]))
+    return pairs
 
 
 
@@ -107,7 +111,9 @@ def component_inventory(src_path):
 def report_one(seq, src, out):
     inv, declared = component_inventory(src)
     total = sum(inv.values())
-    print("── src_%03d / out_%03d   %s ──" % (seq - 1, seq, time.strftime("%H:%M:%S")))
+    print("── src_%03d / out_%03d   捕获于 %s ──"
+          % (seq, seq, time.strftime("%m-%d %H:%M:%S",
+                                     time.localtime(os.path.getmtime(out)))))
     if not inv:
         print("   （源码里没有组件注释）")
     else:
@@ -123,14 +129,14 @@ def report_one(seq, src, out):
 def watch(args):
     print("监听 work/ 下新出现的 src/out 对（Ctrl-C 停止）")
     print("每发现一对就报告组件构成；**不做性能分析**。" + NL)
-    seen = set(seq for seq, _, _ in discover_pairs())
+    seen = {out for _, _, out in discover_pairs()}
     print("（已有 %d 对，从现在起只报新出现的）" % len(seen) + NL)
     try:
         while True:
             for seq, src, out in discover_pairs():
-                if seq in seen:
+                if out in seen:          # 用**路径**判重，不用编号（编号会因重启归零）
                     continue
-                seen.add(seq)
+                seen.add(out)
                 report_one(seq, src, out)
             time.sleep(args.interval)
     except KeyboardInterrupt:
@@ -163,7 +169,9 @@ def main():
             print("❌ work/hook/ 下没有任何 src/out 对", file=sys.stderr)
             return 1
         seq, args.src, args.img = pairs[-1]
-        print("使用最新的 src/out 对：src_%03d / out_%03d" % (seq - 1, seq))
+        print("使用最新的 src/out 对：src_%03d / out_%03d（捕获于 %s）"
+              % (seq, seq, time.strftime("%m-%d %H:%M:%S",
+                                         time.localtime(os.path.getmtime(args.img)))))
     args.src = os.path.abspath(args.src)
     args.img = os.path.abspath(args.img)
 
@@ -174,7 +182,7 @@ def main():
         print("❌ 游戏没在运行", file=sys.stderr)
         return 1
     print(f"[1/4] 定位产物（{len(body)} 字节机器码）在 PID {pid} 里的加载地址 ...")
-    h = k32.OpenProcess(PROCESS_QUERY_INFO | PROCESS_VM_READ, False, pid)
+    h = open_process(pid)
     if not h:
         print("❌ OpenProcess 失败", file=sys.stderr)
         return 1
@@ -188,8 +196,12 @@ def main():
     #    「哪个副本真的收到 RIP」来筛。
     bases = [addr for addr, verified, _ in hits if verified]
     if not bases:
-        print(f"❌ 没找到这份机器码（{len(hits)} 个候选全部未通过整段校验）")
-        print("   电路跑的可能不是这份产物 —— 换一份 hook_out_*.bin 试试")
+        if not hits:
+            print("❌ 这份产物**根本不在内存里**（特征 0 次命中）—— 多半是游戏重启前"
+                  "捕获的，JIT 区已随进程消失")
+        else:
+            print(f"❌ 没找到这份机器码（{len(hits)} 个候选全部未通过整段校验）")
+        print("   电路跑的可能不是这份产物 —— 用 --img 指定别的 hook_out_*.bin")
         return 1
     print("      → 找到 %d 个副本：%s" % (len(bases), ", ".join("0x%X" % b for b in bases)))
 

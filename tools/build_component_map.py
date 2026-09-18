@@ -30,6 +30,13 @@ import re
 import struct
 import sys
 
+# Windows 下 stdout 走管道时默认 GBK，输出的中文会变成乱码
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)

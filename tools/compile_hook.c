@@ -19,8 +19,9 @@
  *   hook_src_NNN.si   —— compile() 收到的 Simplex 源码（.si = Simplex）
  *   hook_out_NNN.bin  —— compile() 产出的机器码
  *
- * 编号：src 与 out **共用一个递增计数器**，src 先取号，所以是
- *       src_001/out_002, src_003/out_004, ...  即 out_NNN 对应 src_(NNN-1)。
+ * 编号：**一次 compile() 调用取一个号，src 与 out 共用同一个号** ——
+ *       hook_src_005.si 与 hook_out_005.bin 就是一对。
+ *       （计数器是进程内变量，游戏重启会归零，所以文件名的新旧要看 mtime。）
  *
  * 契约（已由反汇编独立验证，2026-09-15 / 09-17 两次复核）
  * ------------------------------------------------------
@@ -76,12 +77,11 @@ static void ensure_real(void) {
     if (g_real) g_compile = (compile_fn)GetProcAddress(g_real, "compile");
 }
 
-static void dump(const char* tag, const char* ext, const void* p, long long n) {
+static void dump(const char* tag, const char* ext, const void* p, long long n, LONG seq) {
     if (!p || n <= 0 || n > (64LL << 20)) return;
     CreateDirectoryA(OUT_DIR, NULL);       /* 已存在会失败，无所谓 */
     char path[MAX_PATH];
-    LONG i = InterlockedIncrement(&g_seq);
-    sprintf(path, "%s%chook_%s_%03ld%s", OUT_DIR, SEP, tag, i, ext);
+    sprintf(path, "%s%chook_%s_%03ld%s", OUT_DIR, SEP, tag, seq, ext);
     HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -92,17 +92,21 @@ static void dump(const char* tag, const char* ext, const void* p, long long n) {
 
 __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     ensure_real();
+    /* **一次调用取一个号**，src 与 out 共用 —— 这样 hook_src_NNN.si 与
+       hook_out_NNN.bin 编号相同，一眼看出一对。早先的实现是在 dump() 里各自
+       取号，于是编号成了 src_001/out_002、src_003/out_004…，配对要看「-1」。 */
+    LONG seq = InterlockedIncrement(&g_seq);
     if (src) {
         long long len = *(long long*)src;
         void* ptr = *(void**)((char*)src + 8);
-        if (ptr) dump("src", ".si", (const char*)ptr + 8, len);   /* 数据在 ptr + 8 */
+        if (ptr) dump("src", ".si", (const char*)ptr + 8, len, seq);   /* 数据在 ptr + 8 */
     }
     if (!g_compile) return NULL;
     void* ret = g_compile(out, src, flags);
     if (out) {
         long long olen = *(long long*)out;
         void* optr = *(void**)((char*)out + 8);
-        if (optr) dump("out", ".bin", optr, olen);
+        if (optr) dump("out", ".bin", optr, olen, seq);
     }
     return ret;
 }

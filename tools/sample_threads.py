@@ -25,6 +25,14 @@ import time
 from collections import Counter
 from ctypes import wintypes
 
+# Windows 下 stdout 走管道时默认 GBK，输出的中文/符号会变成乱码（被
+# profile_by_image.py 当子进程调用时必然走管道）—— 统一转成 UTF-8
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE_PID_HINT = "Turing Complete.exe"
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)

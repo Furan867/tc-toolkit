@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """分析 JIT 生成的机器码质量：量化编译器浪费了多少指令。
 
 输入是 scan_game_mem.py 的 --dump-exec 产物（裸二进制），

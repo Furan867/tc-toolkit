@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """格式化 Simplex 源码（.si）—— 只做三件不破坏语义的事。
 
 1. 连续 >=2 个空行  ->  压成 1 个

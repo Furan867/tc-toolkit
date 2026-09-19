@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """采样 Turing Complete 各线程的指令指针（RIP），做出「时间花在哪」的分布。
 
 原理

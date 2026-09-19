@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """硬件断点追踪：找出「谁在写某个内存地址」。
 
 CE 里那个 "Find out what writes to this address" 的 Python 版 —— 用调试寄存器

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """扫描 Turing Complete 进程内存，定位 JIT 生成的仿真代码。
 
 原理

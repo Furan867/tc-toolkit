@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """按模块 / 函数名 / 地址查询符号表。
 
 数据源（均在 reversing/work/ 下，由 nm 与 pdata_bounds.py 生成）:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """组件级仿真性能剖析 —— 把 RIP 采样落到电路组件上。
 
 输入：

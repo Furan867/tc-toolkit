@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """在游戏进程里定位某个 JIT 产物的加载地址。
 
 为什么需要它

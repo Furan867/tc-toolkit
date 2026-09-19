@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """在游戏进程里 hook compile.dll 的 compile()，捕获它收到的电路源码。
 
 为什么这样做

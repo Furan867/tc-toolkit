@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """分析从游戏内存提取的生成代码（scan_game_mem.py 的产物），统计各组件的代码代价。
 
 输入: work/generated_code_*.si

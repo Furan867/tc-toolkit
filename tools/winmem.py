@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """跨脚本共用的 Windows 进程 / 内存访问工具。
 
 这些函数原本散在 `catch_compile_source.py` 里，但被多个脚本 import。那个脚本

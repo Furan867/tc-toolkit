@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 """部署 / 恢复 compile.dll 转发层。
 
 背景

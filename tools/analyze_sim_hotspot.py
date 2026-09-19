@@ -104,8 +104,8 @@ def main():
     ap.add_argument("--pid", type=int)
     ap.add_argument("--top", type=int, default=0,
                     help="只列前 N 个组件类型；0（默认）= 全部")
-    ap.add_argument("--instances", type=int, default=-1,
-                    help="组件实例：负数（默认 -1）= 全部，0 = 不输出，正数 = 前 N 个")
+    ap.add_argument("--instances", type=int, default=10,
+                    help="组件实例：列采样最多的前 N 个（默认 10）；0 = 不输出")
     args = ap.parse_args()
 
     rows = []
@@ -196,11 +196,13 @@ def main():
 
     if args.instances != 0:
         print()
-        # 同样以映射表为准列**全部**组件（含一次都没采到的），按采样数降序
+        # 只列最热的 N 个 —— 组件可能有几百个，全列会淹掉上面那张表。
+        # 与类型表不同：类型表要列**全部**（否则零采样的类型会消失，看起来像不存在），
+        # 实例表则是按热度排序的，截断后"看不到"只是表示它不热。
         all_comp = sorted(comp_type, key=lambda c: -per_inst.get(c, 0))
-        if args.instances > 0:
-            all_comp = all_comp[:args.instances]
-        print(f"=== 组件实例（按采样降序，共 {len(all_comp)} 个）===")
+        all_comp = all_comp[:args.instances]
+        print(f"=== 最热的 {len(all_comp)} 个组件实例"
+              f"（全部 {len(comp_type)} 个，用 --instances 调整）===")
         for c in all_comp:
             n = per_inst.get(c, 0)
             print(f"  组件#{c:<4} {comp_type[c]:<24} 源码行{comp_line[c]:<6} "

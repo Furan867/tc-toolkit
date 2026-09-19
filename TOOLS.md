@@ -103,6 +103,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 | 工具 | 作用 | 状态 |
 |---|---|---|
 | `winmem.py` | **公共基础设施**：只读的进程/内存访问（`find_pid` / `find_module` / `rpm` / `iter_exec_regions` / `MBI`） | ✅ 被多个脚本 import |
+| `term.py` | **公共基础设施**：终端着色。`NO_COLOR` / `FORCE_COLOR` / `isatty()` 三级判断；`paint` / `heat`（按占比）/ `duration`（按耗时）。重定向到文件时自动禁用 | ✅ |
 | `scan_game_mem.py` | 扫内存、dump JIT 可执行区 | ⚠️ **抓源码部分已废弃**（改用 hook `compile()`）；`--dump-exec` dump JIT 区仍有用 |
 | `try_compile_dll.py` | 独立加载 `compile.dll` 调用它（脱离游戏进程） | ✅ ⚠️ 转发层部署期间，**必须从游戏目录运行**（否则转发层找不到真 DLL） |
 | `analyze_gen_code.py` | 统计生成源码的组件构成与代码代价 | ⚠️ 需要源码文件输入 |

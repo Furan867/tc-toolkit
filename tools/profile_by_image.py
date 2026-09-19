@@ -160,7 +160,7 @@ def main():
     ap = argparse.ArgumentParser(description="按产物字节范围做组件级性能剖析")
     ap.add_argument("--src", help="Simplex 源码（hook_src_*.si）")
     ap.add_argument("--img", help="编译产物（hook_out_*.bin）")
-    ap.add_argument("--duration", type=float, default=10.0, help="采样秒数")
+    ap.add_argument("--duration", type=float, default=5.0, help="采样秒数")
     ap.add_argument("--pid", type=int)
     ap.add_argument("--top", type=int, default=0,
                     help="组件类型表只列前 N 个；0（默认）= 全部")
@@ -182,9 +182,10 @@ def main():
             print("❌ work/hook/ 下没有任何 src/out 对", file=sys.stderr)
             return 1
         seq, args.src, args.img = pairs[-1]
-        print("使用最新的 src/out 对：src_%03d / out_%03d（捕获于 %s）"
-              % (seq, seq, time.strftime("%m-%d %H:%M:%S",
-                                         time.localtime(os.path.getmtime(args.img)))))
+        print("使用最新的 src/out 对：%s / %s（捕获于 %s）"
+              % (term.field("n", "src_%03d" % seq), term.field("n", "out_%03d" % seq),
+                 term.field("dim", time.strftime("%m-%d %H:%M:%S",
+                                                 time.localtime(os.path.getmtime(args.img))))))
     args.src = os.path.abspath(args.src)
     args.img = os.path.abspath(args.img)
 
@@ -194,7 +195,8 @@ def main():
     if not pid:
         print("❌ 游戏没在运行", file=sys.stderr)
         return 1
-    print(stage(1, f"定位产物（{len(body)} 字节机器码）在 PID {pid} 里的加载地址 ..."))
+    print(stage(1, f"定位产物（{term.field('bytes', str(len(body)))} 字节机器码）"
+                   f"在 PID {term.field('n', str(pid))} 里的加载地址 ..."))
     h = open_process(pid)
     if not h:
         print("❌ OpenProcess 失败", file=sys.stderr)
@@ -216,8 +218,8 @@ def main():
             print(f"❌ 没找到这份机器码（{len(hits)} 个候选全部未通过整段校验）")
         print("   电路跑的可能不是这份产物 —— 用 --img 指定别的 hook_out_*.bin")
         return 1
-    print("      → " + term.paint("找到 %d 个副本" % len(bases), "green")
-          + "：" + ", ".join("0x%X" % b for b in bases))
+    print("      → " + term.field("n", "找到 %d 个副本" % len(bases))
+          + "：" + term.field("addr", ", ".join("0x%X" % b for b in bases)))
 
     # ── 2. 采样全部线程 ──
     raw = os.path.join(WORK, "tmp", "_prof_raw.tsv")
@@ -262,10 +264,13 @@ def main():
     base = max(per_copy, key=per_copy.get)
     inside = per_copy[base]
     others = {b: n for b, n in per_copy.items() if b != base}
-    print(stage(3, f"过滤：{total} 个采样点中 {inside} 个落在该机器码内"
-                  f"（{100.0 * inside / max(total, 1):.2f}%）"))
-    print(f"      正在跑的是副本 0x{base:X}"
-          + (f"；另有 {len(others)} 个副本也收到采样 {sum(others.values())} 次"
+    ratio = 100.0 * inside / max(total, 1)
+    print(stage(3, f"过滤：{term.field('count', str(total))} 个采样点中 "
+                   f"{term.field('count', str(inside))} 个落在该机器码内"
+                   f"（{term.field('pct', format(ratio, '.2f') + '%')}）"))
+    print(f"      正在跑的是副本 {term.field('addr', '0x%X' % base)}"
+          + (f"；另有 {term.field('n', str(len(others)))} 个副本也收到采样 "
+             f"{term.field('dim', str(sum(others.values())))} 次"
              if others else ""))
     with open(kept, "w", encoding="utf-8", newline=NL) as g:
         g.write("rip" + TAB + "count" + NL)

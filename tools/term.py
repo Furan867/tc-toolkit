@@ -51,20 +51,27 @@ def paint(text, *styles, stream=None):
     return "".join(_CODES.get(s, "") for s in styles) + text + _CODES["reset"]
 
 
-def heat(pct, text):
-    """按占比上色，用来一眼看出热点。
+_FIELD = {
+    "count": ("bold", "cyan"),     # 采样数、次数
+    "pct":   ("bold", "green"),    # 百分比
+    "n":     ("yellow",),          # 个数：组件数、副本数、线程数
+    "bytes": ("magenta",),         # 字节数
+    "name":  ("bold",),            # 标识：组件类型名
+    "addr":  ("blue",),            # 地址
+    "dim":   ("gray",),            # 次要信息：路径、耗时
+}
 
-    >=20% 红加粗（主要矛盾）｜>=5% 黄（值得看）｜>=1% 原色｜其余灰（可忽略）
 
-    `text` 应当是**已对齐**的字符串（见 paint 的说明）。
+def field(kind, text):
+    """按**数据类别**上色 —— 同一类数据在哪儿都是同一个颜色，便于扫读。
+
+    与「按数值大小渐变」不同：组件表本来就按消耗排好序了，再按大小变色不带来
+    额外信息；按类别配色则让终端不再千篇一律，一眼分得清这是采样数、字节数
+    还是个数。表头也用同一个 field()，列与表头颜色呼应。
+
+    `text` 应当**已对齐**（见 paint 的说明）。kind 未定义时原样返回。
     """
-    if pct >= 20:
-        return paint(text, "bold", "red")
-    if pct >= 5:
-        return paint(text, "yellow")
-    if pct >= 1:
-        return text
-    return paint(text, "gray")
+    return paint(text, *_FIELD.get(kind, ()))
 
 
 def duration(sec, text):

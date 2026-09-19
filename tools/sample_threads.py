@@ -19,11 +19,17 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import struct
 import sys
 import time
 from collections import Counter
 from ctypes import wintypes
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from term import field  # noqa: E402
 
 # Windows 下 stdout 走管道时默认 GBK，输出的中文/符号会变成乱码（被
 # profile_by_image.py 当子进程调用时必然走管道）—— 统一转成 UTF-8
@@ -222,8 +228,8 @@ def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None,
         hit = probe_threads(h, hts, target_ranges)
         if hit:
             target = {t: ht for t, ht in hts.items() if t in hit}
-            print(f"  锁定 {len(hit)}/{len(hts)} 个线程在跑目标代码"
-                  f"（探测 {PROBE_ROUNDS} 轮）")
+            print(f"  锁定 {field('n', str(len(hit)))}/{field('n', str(len(hts)))} 个线程"
+                  f"在跑目标代码（探测 {field('dim', str(PROBE_ROUNDS))} 轮）")
         else:
             # 探测失败**不**当成错误退出：让采样照常进行，由上层按字节范围
             # 过滤并给出更准确的诊断（"没有一个采样点落在机器码内"）。
@@ -324,20 +330,21 @@ def main():
     if not pid:
         print("未找到游戏进程", file=sys.stderr)
         return 1
-    print(f"PID {pid}，采样 {args.duration:.1f} 秒 ...")
+    print(f"PID {field('n', str(pid))}，采样 {field('n', format(args.duration, '.1f'))} 秒 ...")
     hits, agg, nthreads, misses, per_thread, region_of = sample(
         pid, args.iterations, args.interval,
         auto=not args.all_threads, only_tids=set(args.tid) if args.tid else None,
         duration=args.duration or None, target_ranges=parse_ranges(args.target),
         progress=args.progress)
-    print(f"  可采样线程 {nthreads} 个，读到 RIP {sum(hits.values())} 次，"
-          f"失败 {misses} 次")
+    print(f"  可采样线程 {field('n', str(nthreads))} 个，"
+          f"读到 RIP {field('count', str(sum(hits.values())))} 次，"
+          f"失败 {field('dim', str(misses))} 次")
     if args.hist:
         with open(args.hist, "w", encoding="utf-8", newline="\n") as f:
             f.write("rip\tcount\n")
             for rip, n in sorted(hits.items()):
                 f.write(f"{rip}\t{n}\n")
-        print(f"  直方图 {len(hits)} 个不同地址 → {args.hist}")
+        print(f"  直方图 {field('n', str(len(hits)))} 个不同地址 → {field('dim', args.hist)}")
 
     if not args.verbose:          # 以下都是诊断，平时不输出
         return 0

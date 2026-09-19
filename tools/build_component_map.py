@@ -49,7 +49,7 @@ ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
 
 from try_compile_dll import load_dll, make_nim_string  # noqa: E402
-from term import duration  # noqa: E402
+from term import duration, field  # noqa: E402
 
 MARK_SIZE = 17      # 标记的机器码长度，实测恒定
 MAGIC_BASE = 0x13370000
@@ -125,7 +125,8 @@ def main():
     for _, cid, _ in comps:
         if cid not in comp_of:
             comp_of[cid] = len(comp_of)
-    print(f"  源码 {len(lines)} 行 → {len(comp_of)} 个组件")
+    print(f"  源码 {field('n', str(len(lines)))} 行 → "
+          f"{field('n', str(len(comp_of)))} 个组件")
 
     marked_text = insert_marks(lines, comps)
     dll = load_dll(call_nimmain=False, quiet=True)
@@ -140,12 +141,14 @@ def main():
     t = time.time()
     plain = compile_to_bytes(dll, text.encode("utf-8"))
     dt = time.time() - t
-    print(f" 产物 {len(plain)} 字节（{duration(dt, format(dt, '.2f') + 's')}）")
+    print(f" 产物 {field('bytes', str(len(plain)))} 字节"
+          f"（{duration(dt, format(dt, '.2f') + 's')}）")
     print("  编译带标记版本 ...", end="", flush=True)
     t = time.time()
     marked = compile_to_bytes(dll, marked_text.encode("utf-8"))
     dt = time.time() - t
-    print(f" 产物 {len(marked)} 字节（{duration(dt, format(dt, '.2f') + 's')}）")
+    print(f" 产物 {field('bytes', str(len(marked)))} 字节"
+          f"（{duration(dt, format(dt, '.2f') + 's')}）")
 
     anchors = []
     for i in range(len(comps) + 1):          # 最后一枚是终点标记
@@ -155,7 +158,7 @@ def main():
             return 1
         anchors.append(p)
     end_anchor = anchors.pop()
-    print(f"  锚点 {len(anchors)}/{len(comps)} 全部命中")
+    print(f"  锚点 {field('n', str(len(anchors)))}/{field('n', str(len(comps)))} 全部命中")
 
     jit_len = len(plain) - NIMSTR_HDR
     rows = []
@@ -174,9 +177,10 @@ def main():
             f.write(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\t{r[5]}\t{r[6]}\t{r[6] - r[5]}\n")
 
     covered = max(r[6] for r in rows)
-    print(f"  组件覆盖 0..{covered} 字节；其后 {jit_len - covered} 字节是公共代码"
+    print(f"  组件覆盖 {field('bytes', '0..%d' % covered)} 字节；"
+          f"其后 {field('bytes', str(jit_len - covered))} 字节是公共代码"
           f"（循环尾部等，不属于任何组件）")
-    print(f"  映射表 → {os.path.relpath(args.out, ROOT)}")
+    print(f"  映射表 → {field('dim', os.path.relpath(args.out, ROOT))}")
 
     if args.keep:
         for path, data in ((os.path.join(WORK, "maps", "marked.si"), marked_text.encode("utf-8")),

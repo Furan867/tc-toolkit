@@ -40,7 +40,7 @@ sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
 
-from term import heat, paint  # noqa: E402
+from term import field, paint  # noqa: E402
 
 MEM_COMMIT = 0x1000
 MEM_IMAGE = 0x1000000
@@ -162,10 +162,13 @@ def main():
         else:
             beyond += n
 
-    print(f"采样总点数 {total}；JIT 区 {len(regions)} 个，组件映射 {len(rows)} 个 / {map_len} 字节")
-    print(f"  命中组件      : {in_jit} ({100 * in_jit / max(1, total):.1f}%)")
-    print(f"  JIT 区但未命中（固定前缀、无代码组件）: {beyond}")
-    print(f"  不在 JIT 区（系统 dll / 其他线程）   : {outside}")
+    print(f"采样总点数 {field('count', str(total))}；"
+          f"JIT 区 {field('n', str(len(regions)))} 个，"
+          f"组件映射 {field('n', str(len(rows)))} 个 / {field('bytes', str(map_len))} 字节")
+    print(f"  命中组件      : {field('count', str(in_jit))} "
+          f"({field('pct', format(100 * in_jit / max(1, total), '.1f') + '%')})")
+    print(f"  JIT 区但未命中（固定前缀、无代码组件）: {field('dim', str(beyond))}")
+    print(f"  不在 JIT 区（系统 dll / 其他线程）   : {field('dim', str(outside))}")
     if in_jit == 0:
         print("\n没有采样点落在组件代码上 —— 电路可能没在运行，或采样时它处于空闲。")
         return 0
@@ -181,11 +184,13 @@ def main():
     print()
     n_type = len(inst_count) if args.top <= 0 else min(args.top, len(inst_count))
     print(paint(f"=== 组件类型 → 采样占比（共 {n_type} 种）===", "bold"))
-    # 用 join(" ") 而不是直接拼接 —— 原先靠 print 的多参数自动补列间空格，
-    # 换成字符串拼接后会丢掉它们（表头挤成「占比组件数」）
-    print(paint(" ".join([cell("采样数", 8, True), cell("占比", 7, True),
-                          cell("组件数", 6, True), cell("平均字节", 9, True)]),
-                "bold") + " 组件类型")
+    # 表头与数据列用**同一套 field() 配色**，列与表头一眼对应；print 的多参数
+    # 会自动补列间空格（改成字符串拼接会丢掉它们，表头挤成「占比组件数」）
+    print(field("count", cell("采样数", 8, True)),
+          field("pct", cell("占比", 7, True)),
+          field("n", cell("组件数", 6, True)),
+          field("bytes", cell("平均字节", 9, True)),
+          field("name", "组件类型"))
     print("-" * 64)
     # ⚠️ 以**映射表**为准列出全部类型，而不是只列采到的 —— 否则采样为 0 的类型会
     # 整行消失（如 com_cc_input / com_cc_output），看起来像"电路里没有这些组件"。
@@ -198,9 +203,12 @@ def main():
         pct = 100 * n / in_jit
         tot = sum(sz for c, sz in comp_size.items() if comp_type[c] == t)
         avg = tot / max(1, inst_count[t])
-        # 先 cell() 对齐再 heat() 上色 —— 反过来的话 ANSI 转义会被算进宽度
-        print(cell(str(n), 8, True), heat(pct, cell(f"{pct:.1f}%", 7, True)),
-              cell(str(inst_count[t]), 6, True), cell(f"{avg:.0f}", 9, True), " " + t)
+        # 一律先 cell() 对齐再 field() 上色 —— 反过来的话 ANSI 转义会被算进宽度
+        print(field("count", cell(str(n), 8, True)),
+              field("pct", cell(f"{pct:.1f}%", 7, True)),
+              field("n", cell(str(inst_count[t]), 6, True)),
+              field("bytes", cell(f"{avg:.0f}", 9, True)),
+              field("name", t))
 
     if args.instances != 0:
         print()
@@ -214,8 +222,10 @@ def main():
         for c in all_comp:
             n = per_inst.get(c, 0)
             pct = 100 * n / in_jit
-            print(f"  组件#{c:<4} {comp_type[c]:<24} 源码行{comp_line[c]:<6} "
-                  f"{heat(pct, format(n, '>7'))} 点 ({heat(pct, format(pct, '.1f') + '%')})")
+            print(f"  {field('n', '组件#%-4d' % c)} {field('name', '%-24s' % comp_type[c])} "
+                  f"{field('dim', '源码行%-6d' % comp_line[c])} "
+                  f"{field('count', format(n, '>7'))} 点 "
+                  f"{field('pct', format(pct, '.1f') + '%')}")
     return 0
 
 

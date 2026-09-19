@@ -16,7 +16,12 @@ sample_threads.py 采到的 RIP 落到具体组件上。
 
 输入：生成的 Simplex 源码（scan_game_mem.py 的产物）
 输出：work/maps/component_map.tsv
-      index / comp_id / type / src_line / jit_start / jit_end / size
+      seg / comp_index / comp_id / type / src_line / jit_start / jit_end / size
+
+⚠️ **一行是一个「注释段」，不是一行一个组件**：同一个组件（comp_id 相同）在源码里
+有两条注释（组件代码 + 绑定）、各生成一段机器码，它们共享同一个 comp_index。
+按行数数会把组件数翻倍（实测 1234 段 = 617 个组件 × 2，见 STATUS.md ⑥-A）；
+要组件级的数字，必须按 comp_index 聚合。
 
 注意 jit_* 是相对「JIT 代码起点」的偏移（产物开头那 8 字节 NimStringDesc
 长度头不算在内），所以：绝对地址 = JIT 区基址 + jit_start
@@ -111,7 +116,15 @@ def main():
     if not comps:
         print("源码里没找到组件注释（// <编号> com_xxx）", file=sys.stderr)
         return 1
-    print(f"源码 {len(lines)} 行，组件 {len(comps)} 个")
+    # ⚠️ 同一个组件在源码里有**两条**注释（组件代码 + 绑定），**两条各生成一段机器码**。
+    # 按注释段建表会让组件数翻倍 —— 实测 1234 段 = 617 个组件 × 2（STATUS.md ⑥-A）。
+    # 所以按 comp_id 首次出现的顺序分配组件序号，多段归到同一个组件；
+    # 段仍是段（各有自己的机器码区间），聚合留给 analyze 侧按 comp_index 做。
+    comp_of = {}
+    for _, cid, _ in comps:
+        if cid not in comp_of:
+            comp_of[cid] = len(comp_of)
+    print(f"源码 {len(lines)} 行：{len(comps)} 个注释段 → {len(comp_of)} 个组件")
 
     marked_text = insert_marks(lines, comps)
     t = time.time()
@@ -147,21 +160,22 @@ def main():
         shift = MARK_SIZE * (i + 1)
         s = max(0, s_marked - shift - NIMSTR_HDR)
         e = min(e_marked - shift - NIMSTR_HDR, jit_len)
-        rows.append((i, comps[i][1], comps[i][2], comps[i][0] + 1, s, e))
+        rows.append((i, comp_of[comps[i][1]], comps[i][1], comps[i][2],
+                     comps[i][0] + 1, s, e))
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
-        f.write("index\tcomp_id\ttype\tsrc_line\tjit_start\tjit_end\tsize\n")
+        f.write("seg\tcomp_index\tcomp_id\ttype\tsrc_line\tjit_start\tjit_end\tsize\n")
         for r in rows:
-            f.write(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\t{r[5]}\t{r[5] - r[4]}\n")
+            f.write(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\t{r[5]}\t{r[6]}\t{r[6] - r[5]}\n")
 
-    covered = max(r[5] for r in rows)
+    covered = max(r[6] for r in rows)
     print(f"\n映射表 → {args.out}")
     print(f"JIT 内代码 {jit_len} 字节；组件覆盖 0 .. {covered}")
     print(f"组件区之后（循环尾部等公共代码）: {jit_len - covered} 字节")
-    print("\n前 6 行:")
+    print(f"\n{len(rows)} 段 / {len(comp_of)} 个组件，前 6 段:")
     for r in rows[:6]:
-        print(f"  #{r[0]:<4} {r[2]:<24} 源码行{r[3]:<6} "
-              f"JIT偏移 {r[4]:>6}..{r[5]:<6} ({r[5] - r[4]}B)")
+        print(f"  段#{r[0]:<4} 组件#{r[1]:<4} {r[3]:<24} 源码行{r[4]:<6} "
+              f"JIT偏移 {r[5]:>6}..{r[6]:<6} ({r[6] - r[5]}B)")
 
     if args.keep:
         for path, data in ((os.path.join(WORK, "maps", "marked.si"), marked_text.encode("utf-8")),

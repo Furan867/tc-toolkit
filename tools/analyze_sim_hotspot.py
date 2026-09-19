@@ -111,8 +111,11 @@ def main():
     rows = []
     for line in open(args.mapfile, encoding="utf-8").read().splitlines()[1:]:
         p = line.split("\t")
-        if len(p) >= 7:
-            rows.append((int(p[0]), int(p[1]), p[2], int(p[3]), int(p[4]), int(p[5])))
+        if len(p) >= 8:
+            # 列：seg / comp_index / comp_id / type / src_line / jit_start / jit_end / size
+            # 丢掉 seg：**一行是一段机器码**，同一个组件的多段共享 comp_index，
+            # 聚合靠 comp_index（否则组件数会翻倍，见 STATUS.md ⑥-A）。
+            rows.append((int(p[1]), int(p[2]), p[3], int(p[4]), int(p[5]), int(p[6])))
     if not rows:
         print("映射表为空", file=sys.stderr)
         return 1
@@ -163,11 +166,19 @@ def main():
     if in_jit == 0:
         print("\n没有采样点落在组件代码上 —— 电路可能没在运行，或采样时它处于空闲。")
         return 0
-    inst_count = Counter(r[2] for r in rows)
+    # 按 comp_index 聚合到**组件**级：一个组件可能有多段机器码（源码里两条注释，
+    # 见 build_component_map 的说明）。不聚合的话组件数会翻倍（实测 1234 段 = 617 个）。
+    comp_type, comp_line, comp_size = {}, {}, Counter()
+    for r in rows:
+        comp_type.setdefault(r[0], r[2])      # 组件 -> 类型
+        comp_line.setdefault(r[0], r[3])      # 组件 -> 首次出现的源码行
+        comp_size[r[0]] += r[5] - r[4]        # 组件 -> 各段机器码字节之和
+    inst_count = Counter(comp_type.values())
+
     print()
     n_type = len(inst_count) if args.top <= 0 else min(args.top, len(inst_count))
     print(f"=== 组件类型 → 采样占比（共 {n_type} 种）===")
-    print(cell("采样数", 8, True), cell("占比", 7, True), cell("实例数", 6, True),
+    print(cell("采样数", 8, True), cell("占比", 7, True), cell("组件数", 6, True),
           cell("平均字节", 9, True), " 组件类型")
     print("-" * 64)
     # ⚠️ 以**映射表**为准列出全部类型，而不是只列采到的 —— 否则采样为 0 的类型会
@@ -178,21 +189,22 @@ def main():
         order = order[:args.top]
     for t in order:
         n = per_type.get(t, 0)
-        avg = sum(r[5] - r[4] for r in rows if r[2] == t) / max(1, inst_count[t])
+        tot = sum(sz for c, sz in comp_size.items() if comp_type[c] == t)
+        avg = tot / max(1, inst_count[t])
         print(cell(str(n), 8, True), cell(f"{100 * n / in_jit:.1f}%", 7, True),
               cell(str(inst_count[t]), 6, True), cell(f"{avg:.0f}", 9, True), " " + t)
 
     if args.instances != 0:
         print()
-        # 同样以映射表为准列**全部**实例（含一次都没采到的），按采样数降序
-        all_inst = sorted(range(len(rows)), key=lambda i: -per_inst.get(i, 0))
+        # 同样以映射表为准列**全部**组件（含一次都没采到的），按采样数降序
+        all_comp = sorted(comp_type, key=lambda c: -per_inst.get(c, 0))
         if args.instances > 0:
-            all_inst = all_inst[:args.instances]
-        print(f"=== 组件实例（按采样降序，共 {len(all_inst)} 个）===")
-        for i in all_inst:
-            n = per_inst.get(i, 0)
-            r = rows[i]
-            print(f"  组件#{i:<4} {r[2]:<24} 源码行{r[3]:<6} {n:>7} 点 ({100 * n / in_jit:.1f}%)")
+            all_comp = all_comp[:args.instances]
+        print(f"=== 组件实例（按采样降序，共 {len(all_comp)} 个）===")
+        for c in all_comp:
+            n = per_inst.get(c, 0)
+            print(f"  组件#{c:<4} {comp_type[c]:<24} 源码行{comp_line[c]:<6} "
+                  f"{n:>7} 点 ({100 * n / in_jit:.1f}%)")
     return 0
 
 

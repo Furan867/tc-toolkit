@@ -44,6 +44,7 @@ THREAD_SUSPEND_RESUME = 0x0002
 CONTEXT_CONTROL = 0x00100001
 CONTEXT_SIZE = 1232          # x64 CONTEXT 结构大小
 RIP_OFFSET = 0xF8            # 其中 Rip 字段的偏移
+PROBE_ROUNDS = 40            # 探测「哪个线程在跑目标代码」的粗采轮数
 
 
 class THREADENTRY32(ctypes.Structure):
@@ -138,38 +139,47 @@ def read_rip(h_thread):
     return struct.unpack_from("<Q", buf, RIP_OFFSET)[0]
 
 
-def is_exec_non_image(h, addr):
-    """地址是否落在「非 IMAGE 且可执行」的区（= JIT 代码）。"""
-    mbi = MEMORY_BASIC_INFORMATION()
-    if not k32.VirtualQueryEx(h, ctypes.c_void_p(addr), ctypes.byref(mbi),
-                              ctypes.sizeof(mbi)):
-        return False
-    return mbi.Type != 0x1000000 and bool(mbi.Protect & (0x10 | 0x20 | 0x40 | 0x80))
+def probe_threads(h, hts, ranges, rounds=PROBE_ROUNDS, interval=0.0005):
+    """粗采若干轮，挑出「RIP 曾落在**目标机器码字节范围内**」的线程。
 
+    其余线程都泡在 ntdll 等待 —— 锁定仿真线程后，采样开销从 70 个线程降到 1~2 个，
+    同样时长能拿到几十倍的样本，对游戏的干扰也小得多。
 
-def find_sim_threads(h, hts, rounds=40, interval=0.0005):
-    """粗采几轮，找出 RIP 一直在 JIT 区的线程 —— 那就是仿真线程。
+    ⚠️ 判据是**目标产物的字节范围**，不是「非 IMAGE 可执行区」（旧判据已删）。
+    旧判据会把任何 JIT 代码都算进来 —— 旧电路残留、其它用途的 JIT 都命中，
+    所以只能"猜"线程、还得靠"过半命中"压制误判。字节范围没有假阳性：
+    别的线程不可能跑进这份机器码里。也因此命中**一次**即可锁定 ——
+    真仿真线程偶尔跑出范围跑进公共代码是无所谓的。
 
-    其余线程都泡在 ntdll 等待。锁定它之后采样效率提升约 70 倍：
-    不必再为每个等待中的线程付一次挂起/恢复开销。
-
-    判据用「过半命中」而非「命中若干次」，避免偶尔跑进 JIT 的线程被误认。
+    ranges = [(base, len), ...]，可给多个副本（同一机器码在内存里有多份）。
+    返回 Counter{tid: 命中次数}；空 = 没有任何线程在跑这些代码。
     """
-    cand = Counter()
-    order = list(hts.items())
+    hit = Counter()
     for _ in range(rounds):
-        for tid, ht in order:
+        for tid, ht in hts.items():
             if k32.SuspendThread(ht) == 0xFFFFFFFF:
                 continue
             rip = read_rip(ht)
             k32.ResumeThread(ht)
-            if rip and is_exec_non_image(h, rip):
-                cand[tid] += 1
+            if rip and any(b <= rip < b + n for b, n in ranges):
+                hit[tid] += 1
         time.sleep(interval)
-    return {t for t, n in cand.items() if n >= max(1, rounds // 2)}
+    return hit
 
 
-def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None):
+def parse_ranges(items):
+    """把 --target 的 'BASE:LEN'（允许 0x 前缀）解析成 [(base, len)]。"""
+    out = []
+    for s in items or []:
+        b, sep, n = s.partition(":")
+        if not sep:
+            raise SystemExit(f"--target 的格式应为 BASE:LEN，收到 {s!r}")
+        out.append((int(b, 0), int(n, 0)))
+    return out
+
+
+def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None,
+           target_ranges=None):
     h = k32.OpenProcess(0x0400 | 0x0010, False, pid)     # QUERY_INFO | VM_READ
     tids = list_threads(pid)
     hts = {}
@@ -182,13 +192,17 @@ def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None):
     target = hts
     if only_tids:
         target = {t: ht for t, ht in hts.items() if t in only_tids}
-    elif auto:
-        sim = find_sim_threads(h, hts)
-        if sim:
-            target = {t: ht for t, ht in hts.items() if t in sim}
-            print(f"  自动锁定仿真线程 {sorted(sim)}（共 {len(hts)} 个线程）")
+    elif auto and target_ranges:
+        hit = probe_threads(h, hts, target_ranges)
+        if hit:
+            target = {t: ht for t, ht in hts.items() if t in hit}
+            print(f"  锁定 {len(hit)}/{len(hts)} 个线程在跑目标代码"
+                  f"（探测 {PROBE_ROUNDS} 轮）")
         else:
-            print("  未探测到在 JIT 区运行的线程，改为采样全部线程")
+            # 探测失败**不**当成错误退出：让采样照常进行，由上层按字节范围
+            # 过滤并给出更准确的诊断（"没有一个采样点落在机器码内"）。
+            print(f"  ⚠ 探测 {PROBE_ROUNDS} 轮，没有任何线程落在目标机器码范围内 "
+                  f"—— 电路没在跑？退回采样全部线程", file=sys.stderr)
 
     hits = Counter()
     per_thread = {}
@@ -248,40 +262,54 @@ def main():
     ap.add_argument("--interval", type=float, default=0.0001,
                     help="轮间隔秒（Suspend/Resume 本身约 0.45ms，调它影响有限）")
     ap.add_argument("--hist", help="把完整 RIP 直方图写到该文件（TSV: rip / count）")
+    ap.add_argument("--target", action="append", metavar="BASE:LEN",
+                    help="目标机器码在内存里的字节范围（可重复，用于多副本）。"
+                         "给了它就**先探测、锁定真正在跑这份代码的线程，再只采它们**"
+                         "—— 同样时长能拿到几十倍样本，对游戏的干扰也小得多。"
+                         "由 profile_by_image.py 自动传入")
     ap.add_argument("--all-threads", action="store_true",
-                    help="采样全部线程（默认自动锁定在 JIT 区运行的仿真线程）")
+                    help="强制采样全部线程（覆盖 --target 的锁定）")
     ap.add_argument("--tid", type=int, action="append",
-                    help="只采样指定线程 ID（可重复；给了就不自动探测）")
+                    help="只采样指定线程 ID（可重复；给了就不探测）")
+    ap.add_argument("--verbose", "-v", action="store_true",
+                    help="额外输出诊断：各线程分布 / RIP 区分布 / 热点地址。"
+                         "被 profile_by_image.py 调用时不加")
     args = ap.parse_args()
 
     pid = args.pid or find_pid()
     if not pid:
         print("未找到游戏进程", file=sys.stderr)
         return 1
-    total = args.iterations * 5
-    print(f"PID {pid}，约 {args.iterations} 轮采样"
-          f"（每轮 {args.interval*1000:.0f}ms）...")
+    print(f"PID {pid}，采样 {args.duration:.1f} 秒 ...")
     hits, agg, nthreads, misses, per_thread, region_of = sample(
         pid, args.iterations, args.interval,
         auto=not args.all_threads, only_tids=set(args.tid) if args.tid else None,
-        duration=args.duration or None)
-    print(f"可采样线程 {nthreads} 个，读到 RIP {sum(hits.values())} 次，"
+        duration=args.duration or None, target_ranges=parse_ranges(args.target))
+    print(f"  可采样线程 {nthreads} 个，读到 RIP {sum(hits.values())} 次，"
           f"失败 {misses} 次")
     if args.hist:
         with open(args.hist, "w", encoding="utf-8", newline="\n") as f:
             f.write("rip\tcount\n")
             for rip, n in sorted(hits.items()):
                 f.write(f"{rip}\t{n}\n")
-        print(f"完整直方图（{len(hits)} 个不同地址）→ {args.hist}")
+        print(f"  直方图 {len(hits)} 个不同地址 → {args.hist}")
+
+    if not args.verbose:          # 以下都是诊断，平时不输出
+        return 0
     print()
-    print("=== 各线程的活动分布（只列有非 ntdll/win32u 活动的线程）===")
-    for tid, cnt in sorted(per_thread.items(),
-                           key=lambda kv: -sum(kv[1].values())):
-        total_t = sum(cnt.values())
-        # 该线程最多的几个地址
+    print("=== 各线程的活动分布（只列有非 IMAGE 活动的线程）===")
+    rows_t = []
+    for tid, cnt in per_thread.items():
+        nonimg = sum(n for r, n in cnt.items()
+                     if region_of.get(r, (0, "IMAGE"))[1] != "IMAGE")
+        if nonimg:
+            rows_t.append((tid, sum(cnt.values()), nonimg, cnt))
+    for tid, tot_t, nonimg, cnt in sorted(rows_t, key=lambda x: -x[2]):
         top = cnt.most_common(3)
         summary = "  ".join(f"0x{r:X}x{n}" for r, n in top)
-        print(f"  TID {tid:<7} 采样 {total_t:>5}  |  {summary}")
+        print(f"  TID {tid:<7} 采样 {tot_t:>5}  其中非 IMAGE {nonimg:>5}  |  {summary}")
+    if not rows_t:
+        print("  （无 —— 所有线程都泡在系统 dll 里）")
     print()
     print("=== RIP 按内存区分布（Top 12）===")
     print(f"{'采样数':>8} {'占比':>7}  {'区基址':<16} 类型    首个命中地址")

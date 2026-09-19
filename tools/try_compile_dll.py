@@ -28,25 +28,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
 DLL = os.path.join(GAME, "compile.dll")
+# 部署转发层期间，上面的 compile.dll 就是转发层 —— 它会把我们自己的调用记成
+# 「捕获」写进 work/hook/，而那里是游戏真实捕获的地方（profile_by_image 默认
+# 取最新一对）。所以离线编译**优先用原始 DLL**；未部署时它不存在，退回上面那个。
+DLL_REAL = os.path.join(GAME, "compile_real.dll")
 
 
 def load_dll(call_nimmain=True):
-    """加载 compile.dll。
+    """加载编译器 DLL：**优先原始 DLL**（见 DLL_REAL 处的说明）。
 
     注意：Nim 编译的 dll 通常已经在 DllMain 里自行初始化。实测调用
     NimMain() 会触发 `types.nim(1515) source_buffer.len == 0 / Only call
     init once` 断言——所以默认**不**调它，只在需要时显式指定。
     """
-    if not os.path.isfile(DLL):
-        print(f"找不到 {DLL}", file=sys.stderr)
+    path = DLL_REAL if os.path.isfile(DLL_REAL) else DLL
+    if not os.path.isfile(path):
+        print(f"找不到 {path}", file=sys.stderr)
         return None
 
-    # compile.dll 依赖同目录的 libgcc_s_seh-1.dll / libwinpthread-1.dll，
+    # 编译器 DLL 依赖同目录的 libgcc_s_seh-1.dll / libwinpthread-1.dll，
     # 必须先把游戏目录加进 dll 搜索路径，否则 LoadLibrary 会失败。
     os.add_dll_directory(GAME)
 
-    print(f"加载 {DLL} ...")
-    dll = ctypes.CDLL(DLL)
+    print(f"加载 {os.path.basename(path)} ...")
+    dll = ctypes.CDLL(path)
     print("  加载成功")
 
     if call_nimmain:

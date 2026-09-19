@@ -61,6 +61,9 @@ def load_body(path):
 
 
 def run(args):
+    # 先 flush：输出走管道时父进程 stdout 是块缓冲，不 flush 的话子进程的输出会
+    # 插到我们已经 print 但还没落盘的内容前面，看起来顺序错乱
+    sys.stdout.flush()
     return subprocess.run(args, cwd=ROOT)
 
 
@@ -211,8 +214,14 @@ def main():
     if find_pid() != pid:                     # 采样前确认进程没变
         print("❌ 游戏进程变了，地址已失效 —— 重新跑一次", file=sys.stderr)
         return 1
-    run([PY, os.path.join(HERE, "sample_threads.py"),
-         "--duration", str(args.duration), "--all-threads", "--hist", raw])
+    # 把产物的字节范围交给采样器：它会先探测、锁定真正在跑这份机器码的线程，
+    # 再只采这些线程 —— 用精确判据筛选，而不是旧版「RIP 落在非 IMAGE 可执行区」
+    # 那种会把旧电路残留一起算进来的粗判据。
+    cmd = [PY, os.path.join(HERE, "sample_threads.py"),
+           "--duration", str(args.duration), "--hist", raw]
+    for b in bases:
+        cmd += ["--target", "0x%X:%d" % (b, len(body))]
+    run(cmd)
     if not os.path.exists(raw):
         print("❌ 采样没有产出直方图", file=sys.stderr)
         return 1

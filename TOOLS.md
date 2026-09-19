@@ -24,7 +24,7 @@
 | `deploy_compile_hook.py` | 部署 / 恢复转发层。带状态检查与防误操作 | ✅ |
 | `locate_jit_image.py` | 在游戏进程里定位某份机器码的加载地址。字节级特征 + **整段校验** + **多副本枚举** | ✅ |
 | `profile_by_image.py` | **一键**：定位 → 采样 → 按字节范围过滤 → 建映射 → 出报告 | ✅ |
-| `sample_threads.py` | 采样各线程 RIP（被一键脚本调用） | ⚠️ 线程探测判据仍靠瞬时 RIP；一键脚本用 `--all-threads` 绕过 |
+| `sample_threads.py` | 采样各线程 RIP（被一键脚本调用）。给 `--target BASE:LEN` 就**先用字节范围探测、锁定真正在跑这份代码的线程，再只采它们** | ✅ |
 | `build_component_map.py` | 建组件↔机器码偏移映射（被一键脚本调用） | ✅ 坐标偏差恒等，38/38 锚点全命中 |
 | `analyze_sim_hotspot.py` | 出组件级耗时报告（被一键脚本调用） | ✅ |
 
@@ -118,6 +118,9 @@ D:/bin/w64devkit/bin/nm.exe "<游戏目录>/Turing Complete.exe" > work/symbols/
 
 ## 四、待办：工具层面的技术债
 
-1. `sample_threads.py` 的线程探测判据换成 `QueryThreadCycleTime`（不需要挂起线程）
+1. ~~`sample_threads.py` 的线程探测判据换成 `QueryThreadCycleTime`~~ ✅ 已完成
+   （2026-09-19），**但没用 `QueryThreadCycleTime`** —— 那东西给的是线程累计
+   **周期数**，只能回答"哪个线程在烧 CPU"，**给不出 RIP**，替代不了采样。
+   实际改成了**用产物字节范围探测**（`--target`），与过滤判据同源。
 2. `hw_breakpoint_trace.py` 补上 DR 清理，或直接删除
 3. ~~`profile_by_image.py` 的调用方式封装~~ ✅ 已完成（默认取最新一对，另有 `--watch`）

@@ -124,23 +124,23 @@ def main():
     for _, cid, _ in comps:
         if cid not in comp_of:
             comp_of[cid] = len(comp_of)
-    print(f"源码 {len(lines)} 行：{len(comps)} 个注释段 → {len(comp_of)} 个组件")
+    print(f"  源码 {len(lines)} 行 → {len(comp_of)} 个组件")
 
     marked_text = insert_marks(lines, comps)
-    t = time.time()
-    dll = load_dll(call_nimmain=False)
+    dll = load_dll(call_nimmain=False, quiet=True)
     if dll is None:
         return 1
-    print(f"  （加载耗时 {time.time() - t:.2f}s）")
 
-    print("编译无标记版本 ...")
+    # end="" + flush=True：让"正在编译"立刻可见，结果接着打在同一行。
+    # 不 flush 的话中途那 0.8 秒没有任何输出，看起来像卡住（踩过）。
+    print("  编译无标记版本 ...", end="", flush=True)
     t = time.time()
     plain = compile_to_bytes(dll, text.encode("utf-8"))
-    print(f"  产物 {len(plain)} 字节  （{time.time() - t:.2f}s）")
-    print("编译带标记版本 ...")
+    print(f" 产物 {len(plain)} 字节（{time.time() - t:.2f}s）")
+    print("  编译带标记版本 ...", end="", flush=True)
     t = time.time()
     marked = compile_to_bytes(dll, marked_text.encode("utf-8"))
-    print(f"  产物 {len(marked)} 字节  （{time.time() - t:.2f}s）")
+    print(f" 产物 {len(marked)} 字节（{time.time() - t:.2f}s）")
 
     anchors = []
     for i in range(len(comps) + 1):          # 最后一枚是终点标记
@@ -150,7 +150,7 @@ def main():
             return 1
         anchors.append(p)
     end_anchor = anchors.pop()
-    print(f"锚点 {len(anchors)}/{len(comps)} + 1 终点标记，全部命中")
+    print(f"  锚点 {len(anchors)}/{len(comps)} 全部命中")
 
     jit_len = len(plain) - NIMSTR_HDR
     rows = []
@@ -169,13 +169,9 @@ def main():
             f.write(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\t{r[5]}\t{r[6]}\t{r[6] - r[5]}\n")
 
     covered = max(r[6] for r in rows)
-    print(f"\n映射表 → {args.out}")
-    print(f"JIT 内代码 {jit_len} 字节；组件覆盖 0 .. {covered}")
-    print(f"组件区之后（循环尾部等公共代码）: {jit_len - covered} 字节")
-    print(f"\n{len(rows)} 段 / {len(comp_of)} 个组件，前 6 段:")
-    for r in rows[:6]:
-        print(f"  段#{r[0]:<4} 组件#{r[1]:<4} {r[3]:<24} 源码行{r[4]:<6} "
-              f"JIT偏移 {r[5]:>6}..{r[6]:<6} ({r[6] - r[5]}B)")
+    print(f"  组件覆盖 0..{covered} 字节；其后 {jit_len - covered} 字节是公共代码"
+          f"（循环尾部等，不属于任何组件）")
+    print(f"  映射表 → {os.path.relpath(args.out, ROOT)}")
 
     if args.keep:
         for path, data in ((os.path.join(WORK, "maps", "marked.si"), marked_text.encode("utf-8")),
@@ -183,7 +179,8 @@ def main():
                            (os.path.join(WORK, "maps", "plain.bin"), plain)):
             with open(path, "wb") as f:
                 f.write(data)
-        print(f"中间产物已存到 {WORK}/maps/marked.si, maps/marked.bin, maps/plain.bin")
+        print(f"  中间产物 → {os.path.relpath(os.path.join(WORK, 'maps'), ROOT)}/"
+              f"marked.si, marked.bin, plain.bin")
     return 0
 
 

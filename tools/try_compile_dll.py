@@ -36,13 +36,20 @@ DLL_REAL = os.path.join(GAME, "compile_real.dll")
 _DLL_DIRS = []      # 见 load_dll()：add_dll_directory 的句柄必须存活
 
 
-def load_dll(call_nimmain=True):
+def load_dll(call_nimmain=True, quiet=False):
     """加载编译器 DLL：**优先原始 DLL**（见 DLL_REAL 处的说明）。
 
     注意：Nim 编译的 dll 通常已经在 DllMain 里自行初始化。实测调用
     NimMain() 会触发 `types.nim(1515) source_buffer.len == 0 / Only call
     init once` 断言——所以默认**不**调它，只在需要时显式指定。
+
+    quiet=True 只抑制这几行过程提示（失败仍然照报）—— 一键流程里它是噪音。
     """
+
+    def say(*a):
+        if not quiet:
+            print(*a)
+
     path = DLL_REAL if os.path.isfile(DLL_REAL) else DLL
     if not os.path.isfile(path):
         print(f"找不到 {path}", file=sys.stderr)
@@ -56,17 +63,17 @@ def load_dll(call_nimmain=True):
     # 可能命中**别的**同名 libwinpthread，行为与性能都不可预期。
     _DLL_DIRS.append(os.add_dll_directory(GAME))
 
-    print(f"加载 {os.path.basename(path)} ...")
+    say(f"加载 {os.path.basename(path)} ...")
     dll = ctypes.CDLL(path)
-    print("  加载成功")
+    say("  加载成功")
 
     if call_nimmain:
-        print("调用 NimMain() 初始化运行时 ...")
+        say("调用 NimMain() 初始化运行时 ...")
         dll.NimMain.restype = None
         dll.NimMain()
-        print("  初始化完成")
+        say("  初始化完成")
     else:
-        print("  跳过 NimMain（假定 DllMain 已完成初始化）")
+        say("  跳过 NimMain（假定 DllMain 已完成初始化）")
     return dll
 
 

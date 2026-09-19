@@ -102,8 +102,10 @@ def main():
     ap.add_argument("--hist", required=True, help="RIP 直方图（sample_threads.py --hist 产物）")
     ap.add_argument("--map", dest="mapfile", default=os.path.join(WORK, "maps", "component_map.tsv"))
     ap.add_argument("--pid", type=int)
-    ap.add_argument("--top", type=int, default=20, help="列出前 N 个组件类型")
-    ap.add_argument("--instances", type=int, default=10, help="列出前 N 个组件实例")
+    ap.add_argument("--top", type=int, default=0,
+                    help="只列前 N 个组件类型；0（默认）= 全部")
+    ap.add_argument("--instances", type=int, default=-1,
+                    help="组件实例：负数（默认 -1）= 全部，0 = 不输出，正数 = 前 N 个")
     args = ap.parse_args()
 
     rows = []
@@ -161,20 +163,34 @@ def main():
     if in_jit == 0:
         print("\n没有采样点落在组件代码上 —— 电路可能没在运行，或采样时它处于空闲。")
         return 0
+    inst_count = Counter(r[2] for r in rows)
     print()
-    print(f"=== 组件类型 → 采样占比（Top {args.top}）===")
+    n_type = len(inst_count) if args.top <= 0 else min(args.top, len(inst_count))
+    print(f"=== 组件类型 → 采样占比（共 {n_type} 种）===")
     print(cell("采样数", 8, True), cell("占比", 7, True), cell("实例数", 6, True),
           cell("平均字节", 9, True), " 组件类型")
     print("-" * 64)
-    inst_count = Counter(r[2] for r in rows)
-    for t, n in per_type.most_common(args.top):
+    # ⚠️ 以**映射表**为准列出全部类型，而不是只列采到的 —— 否则采样为 0 的类型会
+    # 整行消失（如 com_cc_input / com_cc_output），看起来像"电路里没有这些组件"。
+    # 实测就因此被误问过一次。
+    order = sorted(inst_count, key=lambda t: (-per_type.get(t, 0), t))
+    if args.top > 0:
+        order = order[:args.top]
+    for t in order:
+        n = per_type.get(t, 0)
         avg = sum(r[5] - r[4] for r in rows if r[2] == t) / max(1, inst_count[t])
         print(cell(str(n), 8, True), cell(f"{100 * n / in_jit:.1f}%", 7, True),
               cell(str(inst_count[t]), 6, True), cell(f"{avg:.0f}", 9, True), " " + t)
-    if args.instances:
+
+    if args.instances != 0:
         print()
-        print(f"=== 最热的 {args.instances} 个组件实例 ===")
-        for i, n in per_inst.most_common(args.instances):
+        # 同样以映射表为准列**全部**实例（含一次都没采到的），按采样数降序
+        all_inst = sorted(range(len(rows)), key=lambda i: -per_inst.get(i, 0))
+        if args.instances > 0:
+            all_inst = all_inst[:args.instances]
+        print(f"=== 组件实例（按采样降序，共 {len(all_inst)} 个）===")
+        for i in all_inst:
+            n = per_inst.get(i, 0)
             r = rows[i]
             print(f"  组件#{i:<4} {r[2]:<24} 源码行{r[3]:<6} {n:>7} 点 ({100 * n / in_jit:.1f}%)")
     return 0

@@ -153,7 +153,8 @@ def main():
     ap.add_argument("--img", help="编译产物（hook_out_*.bin）")
     ap.add_argument("--duration", type=float, default=10.0, help="采样秒数")
     ap.add_argument("--pid", type=int)
-    ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--top", type=int, default=0,
+                    help="组件类型表只列前 N 个；0（默认）= 全部")
     ap.add_argument("--watch", action="store_true",
                     help="监听模式：自动发现新出现的 src/out 对并报告组件构成，"
                          "不做性能分析（用于人工验证「最新 ?= 正在跑」）")

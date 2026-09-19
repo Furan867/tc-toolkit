@@ -29,6 +29,7 @@ import os
 import re
 import struct
 import sys
+import time
 
 # Windows 下 stdout 走管道时默认 GBK，输出的中文会变成乱码
 for _s in (sys.stdout, sys.stderr):
@@ -113,16 +114,20 @@ def main():
     print(f"源码 {len(lines)} 行，组件 {len(comps)} 个")
 
     marked_text = insert_marks(lines, comps)
+    t = time.time()
     dll = load_dll(call_nimmain=False)
     if dll is None:
         return 1
+    print(f"  （加载耗时 {time.time() - t:.2f}s）")
 
     print("编译无标记版本 ...")
+    t = time.time()
     plain = compile_to_bytes(dll, text.encode("utf-8"))
-    print(f"  产物 {len(plain)} 字节")
+    print(f"  产物 {len(plain)} 字节  （{time.time() - t:.2f}s）")
     print("编译带标记版本 ...")
+    t = time.time()
     marked = compile_to_bytes(dll, marked_text.encode("utf-8"))
-    print(f"  产物 {len(marked)} 字节")
+    print(f"  产物 {len(marked)} 字节  （{time.time() - t:.2f}s）")
 
     anchors = []
     for i in range(len(comps) + 1):          # 最后一枚是终点标记

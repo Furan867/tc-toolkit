@@ -33,6 +33,8 @@ DLL = os.path.join(GAME, "compile.dll")
 # 取最新一对）。所以离线编译**优先用原始 DLL**；未部署时它不存在，退回上面那个。
 DLL_REAL = os.path.join(GAME, "compile_real.dll")
 
+_DLL_DIRS = []      # 见 load_dll()：add_dll_directory 的句柄必须存活
+
 
 def load_dll(call_nimmain=True):
     """加载编译器 DLL：**优先原始 DLL**（见 DLL_REAL 处的说明）。
@@ -48,7 +50,11 @@ def load_dll(call_nimmain=True):
 
     # 编译器 DLL 依赖同目录的 libgcc_s_seh-1.dll / libwinpthread-1.dll，
     # 必须先把游戏目录加进 dll 搜索路径，否则 LoadLibrary 会失败。
-    os.add_dll_directory(GAME)
+    #
+    # ⚠️ 返回的句柄**必须保持引用** —— 一旦被 GC，该目录就会从搜索路径里移除
+    # （Python 文档明确警告）。丢了它，依赖 DLL 就会退化成按 PATH 全路径搜索，
+    # 可能命中**别的**同名 libwinpthread，行为与性能都不可预期。
+    _DLL_DIRS.append(os.add_dll_directory(GAME))
 
     print(f"加载 {os.path.basename(path)} ...")
     dll = ctypes.CDLL(path)

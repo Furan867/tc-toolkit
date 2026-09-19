@@ -49,7 +49,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 （★ 2026-09-19 改的：早先是 src/out 各取一次号，编号差 1，配对要看 `src_069 ↔ out_070`，
 已统一。）
 
-### 四个容易踩的坑
+### 五个容易踩的坑
 
 1. **产物文件前 8 字节是长度头，不是机器码**。而且头字段的值等于**文件总长（含头
    自己）**，不是数据长度 —— 按 `head == len - 8` 判断会判错，带着头去搜会让特征
@@ -66,6 +66,25 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
    001–006 被 00:35 那批 001–004 覆盖掉）。**判断新旧一律看 mtime，不看编号** ——
    按编号取最大会选中旧进程的产物，它的 JIT 区已随进程消失 → 定位 0 候选，
    表现得像"工具坏了"。
+5. **`py` 启动器按脚本的 shebang 选解释器**（★ 2026-09-19 踩到，极隐蔽）。
+   首行写 `#!/usr/bin/env python3` 时，Windows 的 PyLauncher 把 `python3` 当
+   **版本说明符**，去 **PATH** 里找 `python3.exe` —— 本机命中 MSYS2 的
+   `D:/bin/msys2/ucrt64/bin/python3.exe`（Python 3.14.6）。同一个
+   `compile_real.dll` 在**那个**解释器里编译慢 **16 倍**（12.7s/次 vs 0.78s/次），
+   整条流程 12s 变 36s，**没有任何报错**，只是慢。
+
+   | 脚本首行 | `py` 选中 | `build_component_map` 耗时 |
+   |---|---|---|
+   | `#!/usr/bin/env python3` | MSYS2 python3.exe | **26s** |
+   | 无 shebang | 官方 3.13 | 2s |
+   | `#!python3` | 官方 3.13 | 2s |
+
+   **工具脚本一律写 `#!python3`**（PyLauncher 解析出「3.x」，走注册表而不是 PATH）。
+   已全量改过 `tools/` 下 16 个脚本。
+   缓解手段：`build_component_map` 现在会打印每次编译的耗时 —— 正常约 0.8s，
+   若看到十几秒，先查解释器（`py -c "import sys;print(sys.executable)"`）。
+   ⚠️ 未查明的一层：两个解释器加载的依赖 DLL 来源相同（都是游戏目录的版本），
+   所以「MSYS2 的 Python 为何慢 16 倍」只知其然。
 
 ---
 

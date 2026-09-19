@@ -49,6 +49,7 @@ ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
 
 from try_compile_dll import load_dll, make_nim_string  # noqa: E402
+from term import duration  # noqa: E402
 
 MARK_SIZE = 17      # 标记的机器码长度，实测恒定
 MAGIC_BASE = 0x13370000
@@ -133,14 +134,18 @@ def main():
 
     # end="" + flush=True：让"正在编译"立刻可见，结果接着打在同一行。
     # 不 flush 的话中途那 0.8 秒没有任何输出，看起来像卡住（踩过）。
+    # 耗时按标尺上色：正常约 0.8s（淡灰）；十几秒多半是解释器选错了，
+    # 见 TOOLS.md 坑 5 —— 那时它是唯一能一眼看出异常的地方
     print("  编译无标记版本 ...", end="", flush=True)
     t = time.time()
     plain = compile_to_bytes(dll, text.encode("utf-8"))
-    print(f" 产物 {len(plain)} 字节（{time.time() - t:.2f}s）")
+    dt = time.time() - t
+    print(f" 产物 {len(plain)} 字节（{duration(dt, format(dt, '.2f') + 's')}）")
     print("  编译带标记版本 ...", end="", flush=True)
     t = time.time()
     marked = compile_to_bytes(dll, marked_text.encode("utf-8"))
-    print(f" 产物 {len(marked)} 字节（{time.time() - t:.2f}s）")
+    dt = time.time() - t
+    print(f" 产物 {len(marked)} 字节（{duration(dt, format(dt, '.2f') + 's')}）")
 
     anchors = []
     for i in range(len(comps) + 1):          # 最后一枚是终点标记

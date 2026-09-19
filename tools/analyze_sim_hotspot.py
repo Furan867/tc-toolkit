@@ -36,8 +36,11 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
+
+from term import heat, paint  # noqa: E402
 
 MEM_COMMIT = 0x1000
 MEM_IMAGE = 0x1000000
@@ -177,9 +180,12 @@ def main():
 
     print()
     n_type = len(inst_count) if args.top <= 0 else min(args.top, len(inst_count))
-    print(f"=== 组件类型 → 采样占比（共 {n_type} 种）===")
-    print(cell("采样数", 8, True), cell("占比", 7, True), cell("组件数", 6, True),
-          cell("平均字节", 9, True), " 组件类型")
+    print(paint(f"=== 组件类型 → 采样占比（共 {n_type} 种）===", "bold"))
+    # 用 join(" ") 而不是直接拼接 —— 原先靠 print 的多参数自动补列间空格，
+    # 换成字符串拼接后会丢掉它们（表头挤成「占比组件数」）
+    print(paint(" ".join([cell("采样数", 8, True), cell("占比", 7, True),
+                          cell("组件数", 6, True), cell("平均字节", 9, True)]),
+                "bold") + " 组件类型")
     print("-" * 64)
     # ⚠️ 以**映射表**为准列出全部类型，而不是只列采到的 —— 否则采样为 0 的类型会
     # 整行消失（如 com_cc_input / com_cc_output），看起来像"电路里没有这些组件"。
@@ -189,9 +195,11 @@ def main():
         order = order[:args.top]
     for t in order:
         n = per_type.get(t, 0)
+        pct = 100 * n / in_jit
         tot = sum(sz for c, sz in comp_size.items() if comp_type[c] == t)
         avg = tot / max(1, inst_count[t])
-        print(cell(str(n), 8, True), cell(f"{100 * n / in_jit:.1f}%", 7, True),
+        # 先 cell() 对齐再 heat() 上色 —— 反过来的话 ANSI 转义会被算进宽度
+        print(cell(str(n), 8, True), heat(pct, cell(f"{pct:.1f}%", 7, True)),
               cell(str(inst_count[t]), 6, True), cell(f"{avg:.0f}", 9, True), " " + t)
 
     if args.instances != 0:
@@ -201,12 +209,13 @@ def main():
         # 实例表则是按热度排序的，截断后"看不到"只是表示它不热。
         all_comp = sorted(comp_type, key=lambda c: -per_inst.get(c, 0))
         all_comp = all_comp[:args.instances]
-        print(f"=== 最热的 {len(all_comp)} 个组件实例"
-              f"（全部 {len(comp_type)} 个，用 --instances 调整）===")
+        print(paint(f"=== 最热的 {len(all_comp)} 个组件实例"
+                    f"（全部 {len(comp_type)} 个，用 --instances 调整）===", "bold"))
         for c in all_comp:
             n = per_inst.get(c, 0)
+            pct = 100 * n / in_jit
             print(f"  组件#{c:<4} {comp_type[c]:<24} 源码行{comp_line[c]:<6} "
-                  f"{n:>7} 点 ({100 * n / in_jit:.1f}%)")
+                  f"{heat(pct, format(n, '>7'))} 点 ({heat(pct, format(pct, '.1f') + '%')})")
     return 0
 
 

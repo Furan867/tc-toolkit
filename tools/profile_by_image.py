@@ -42,6 +42,7 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+import term
 from winmem import k32, find_pid, open_process
 from locate_jit_image import locate  # noqa: E402
 
@@ -60,11 +61,19 @@ def load_body(path):
     return img[8:] if head == len(img) else img
 
 
+def stage(n, msg):
+    """阶段标题：[n/4] 标青色，便于在一屏输出里定位走到哪一步了。"""
+    return term.paint(f"[{n}/4]", "cyan") + " " + msg
+
+
 def run(args):
     # 先 flush：输出走管道时父进程 stdout 是块缓冲，不 flush 的话子进程的输出会
     # 插到我们已经 print 但还没落盘的内容前面，看起来顺序错乱
     sys.stdout.flush()
-    return subprocess.run(args, cwd=ROOT)
+    # 自己不该着色时，也让子进程别着色 —— 子进程各自判断 isatty，重定向到文件时
+    # 它们的 stdout 同样不是终端，但显式传 NO_COLOR 更稳妥（比如只重定向了父进程）
+    env = None if term.enabled() else dict(os.environ, NO_COLOR="1")
+    return subprocess.run(args, cwd=ROOT, env=env)
 
 
 def discover_pairs():
@@ -185,7 +194,7 @@ def main():
     if not pid:
         print("❌ 游戏没在运行", file=sys.stderr)
         return 1
-    print(f"[1/4] 定位产物（{len(body)} 字节机器码）在 PID {pid} 里的加载地址 ...")
+    print(stage(1, f"定位产物（{len(body)} 字节机器码）在 PID {pid} 里的加载地址 ..."))
     h = open_process(pid)
     if not h:
         print("❌ OpenProcess 失败", file=sys.stderr)
@@ -207,11 +216,12 @@ def main():
             print(f"❌ 没找到这份机器码（{len(hits)} 个候选全部未通过整段校验）")
         print("   电路跑的可能不是这份产物 —— 用 --img 指定别的 hook_out_*.bin")
         return 1
-    print("      → 找到 %d 个副本：%s" % (len(bases), ", ".join("0x%X" % b for b in bases)))
+    print("      → " + term.paint("找到 %d 个副本" % len(bases), "green")
+          + "：" + ", ".join("0x%X" % b for b in bases))
 
     # ── 2. 采样全部线程 ──
     raw = os.path.join(WORK, "tmp", "_prof_raw.tsv")
-    print(f"[2/4] 采样 {args.duration:.0f} 秒 ...")
+    print(stage(2, f"采样 {args.duration:.0f} 秒 ..."))
     if find_pid() != pid:                     # 采样前确认进程没变
         print("❌ 游戏进程变了，地址已失效 —— 重新跑一次", file=sys.stderr)
         return 1
@@ -252,8 +262,8 @@ def main():
     base = max(per_copy, key=per_copy.get)
     inside = per_copy[base]
     others = {b: n for b, n in per_copy.items() if b != base}
-    print(f"[3/4] 过滤：{total} 个采样点中 {inside} 个落在该机器码内"
-          f"（{100.0 * inside / max(total, 1):.2f}%）")
+    print(stage(3, f"过滤：{total} 个采样点中 {inside} 个落在该机器码内"
+                  f"（{100.0 * inside / max(total, 1):.2f}%）"))
     print(f"      正在跑的是副本 0x{base:X}"
           + (f"；另有 {len(others)} 个副本也收到采样 {sum(others.values())} 次"
              if others else ""))
@@ -264,7 +274,7 @@ def main():
                 g.write("%d%s%d%s" % (rip, TAB, cnt, NL))
 
     # ── 4. 建映射 + 出报告 ──
-    print("[4/4] 建组件映射 + 出报告 ...")
+    print(stage(4, "建组件映射 + 出报告 ..."))
     run([PY, os.path.join(HERE, "build_component_map.py"),
          "--src", args.src, "--keep"])
     run([PY, os.path.join(HERE, "analyze_sim_hotspot.py"),

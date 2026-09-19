@@ -167,6 +167,32 @@ def probe_threads(h, hts, ranges, rounds=PROBE_ROUNDS, interval=0.0005):
     return hit
 
 
+def _progress(done, total, samples, mode="auto", width=26):
+    """在 stderr 上画一行进度条（`\\r` 原地刷新）。
+
+    写 stderr 而不是 stdout —— stdout 是数据流（直方图要落到文件），进度条不该混进去。
+    默认只在**终端**里画：输出被重定向到文件时完全静默，免得日志全是回车符。
+    """
+    if mode == "never":
+        return
+    if mode == "auto" and not sys.stderr.isatty():
+        return
+    pct = min(1.0, done / total) if total else 0.0
+    fill = int(pct * width)
+    sys.stderr.write("\r  [%s%s] %5.1f%%  %5.1f/%.0fs  样本 %d   "
+                     % ("#" * fill, "-" * (width - fill), pct * 100,
+                        done, total, samples))
+    sys.stderr.flush()
+
+
+def _progress_end(mode="auto"):
+    """收尾：把进度条那行擦掉。"""
+    if mode == "never" or (mode == "auto" and not sys.stderr.isatty()):
+        return
+    sys.stderr.write("\r" + " " * 74 + "\r")
+    sys.stderr.flush()
+
+
 def parse_ranges(items):
     """把 --target 的 'BASE:LEN'（允许 0x 前缀）解析成 [(base, len)]。"""
     out = []
@@ -179,7 +205,7 @@ def parse_ranges(items):
 
 
 def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None,
-           target_ranges=None):
+           target_ranges=None, progress="auto"):
     h = k32.OpenProcess(0x0400 | 0x0010, False, pid)     # QUERY_INFO | VM_READ
     tids = list_threads(pid)
     hts = {}
@@ -207,13 +233,17 @@ def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None,
     hits = Counter()
     per_thread = {}
     misses = 0
+    nsamples = 0
     # 按轮数或按时长采样。实测每次 Suspend/Resume 约 0.45ms，比 interval 大得多，
     # 所以「按时长」才是可控的口径 —— 按轮数换算不出稳定的耗时。
     deadline = time.time() + duration if duration else None
+    t0 = time.time()
     n = 0
+    last_draw = 0.0
     while True:
+        now = time.time()
         if deadline is not None:
-            if time.time() >= deadline:
+            if now >= deadline:
                 break
         elif n >= iterations:
             break
@@ -226,9 +256,20 @@ def sample(pid, iterations, interval, auto=True, only_tids=None, duration=None,
             if rip:
                 hits[rip] += 1
                 per_thread.setdefault(tid, Counter())[rip] += 1
+                nsamples += 1
             else:
                 misses += 1
         time.sleep(interval)
+        # 进度条按**时间**节流：锁定线程后每秒上千轮，按轮数刷会把终端刷爆。
+        # 只在按时长采样时画 —— 按轮数采样的总进度没有时间轴可依。
+        if deadline is not None:
+            now = time.time()
+            if now - last_draw >= 0.1:
+                last_draw = now
+                _progress(now - t0, duration, nsamples, progress)
+    if deadline is not None:
+        _progress(duration, duration, nsamples, progress)
+        _progress_end(progress)
 
     # 把每个 RIP 归类到内存区
     region_of = {}
@@ -274,6 +315,9 @@ def main():
     ap.add_argument("--verbose", "-v", action="store_true",
                     help="额外输出诊断：各线程分布 / RIP 区分布 / 热点地址。"
                          "被 profile_by_image.py 调用时不加")
+    ap.add_argument("--progress", choices=("auto", "always", "never"), default="auto",
+                    help="采样进度条：auto=只在终端里显示（默认，重定向到文件时自动"
+                         "关闭）；always / never 强制开关")
     args = ap.parse_args()
 
     pid = args.pid or find_pid()
@@ -284,7 +328,8 @@ def main():
     hits, agg, nthreads, misses, per_thread, region_of = sample(
         pid, args.iterations, args.interval,
         auto=not args.all_threads, only_tids=set(args.tid) if args.tid else None,
-        duration=args.duration or None, target_ranges=parse_ranges(args.target))
+        duration=args.duration or None, target_ranges=parse_ranges(args.target),
+        progress=args.progress)
     print(f"  可采样线程 {nthreads} 个，读到 RIP {sum(hits.values())} 次，"
           f"失败 {misses} 次")
     if args.hist:

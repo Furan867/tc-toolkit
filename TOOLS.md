@@ -24,7 +24,7 @@
 | `deploy_compile_hook.py` | 部署 / 恢复转发层。带状态检查与防误操作 | ✅ |
 | `locate_jit_image.py` | 在游戏进程里定位某份机器码的加载地址。字节级特征 + **整段校验** + **多副本枚举** | ✅ |
 | `profile_by_image.py` | **一键**：定位 → 采样 → 按字节范围过滤 → 建映射 → 出报告 | ✅ |
-| `sample_threads.py` | 采样各线程 RIP（被一键脚本调用）。给 `--target BASE:LEN` 就**先用字节范围探测、锁定真正在跑这份代码的线程，再只采它们** | ✅ |
+| `sample_threads.py` | 采样各线程 RIP（被一键脚本调用）。给 `--target BASE:LEN` 就**先用字节范围探测、锁定真正在跑这份代码的线程，再只采它们**；带进度条（写 stderr，非终端时自动静默） | ✅ |
 | `build_component_map.py` | 建组件↔机器码偏移映射（被一键脚本调用） | ✅ 坐标偏差恒等，38/38 锚点全命中 |
 | `analyze_sim_hotspot.py` | 出组件级耗时报告（被一键脚本调用） | ✅ |
 

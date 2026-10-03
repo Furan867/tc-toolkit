@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import os
 import sys
@@ -52,13 +53,10 @@ BRANCH_MN = ("jmp", "je", "jne", "jz", "jnz", "jl", "jg", "jle", "jge",
              "ja", "jb", "jae", "jbe", "call", "ret")
 #: objdump 解不出的字节（含义不明）—— 改写必须绕开，扫描遇到就当不安全
 UNDECODED = "(bad)"
-#: 改写总开关。改成 False 就退回恒等改写（下次编译即生效，**不用重启游戏**）。
-#: 万一游戏里发现行为异常，先把这里关掉，再查是不是改写的错。
-ENABLE_REWRITE = True
-
-#: 回退标记文件：work/opt/ 下存在它，就退回恒等改写（下次编译即生效，
-#: **不用改代码、不用重启游戏**）—— 想做「开/关改写」的对照实验时切这个文件就行。
-REWRITE_OFF = os.path.normpath(os.path.join(HERE, os.pardir, "work", "opt", "no_rewrite"))
+#: 配置文件：reversing/opt.ini 的 [opt] 段。**每次编译重新读**，
+#: 所以改完下次编译就生效，不用重启游戏。
+CONF = os.path.normpath(os.path.join(HERE, os.pardir, "opt.ini"))
+TRUTHY = ("on", "1", "true", "yes")
 #: REX 前缀（0x40~0x4F）
 REX = range(0x40, 0x50)
 NOP = b"\x90"
@@ -155,8 +153,15 @@ def rewrite(data: bytes, insns) -> tuple[bytes, int, Counter]:
 
 
 def rewrite_on() -> bool:
-    """改写是否启用：编译期常量 + 运行期标记文件（后者不用改代码就能切）。"""
-    return ENABLE_REWRITE and not os.path.exists(REWRITE_OFF)
+    """改写是否启用，由 opt.ini 的 `[opt] rewrite` 决定（读不到就按开启处理）。"""
+    cp = configparser.ConfigParser()
+    try:
+        if not cp.read(CONF, encoding="utf-8"):
+            return True                       # 没有配置文件：默认开
+        return cp.get("opt", "rewrite", fallback="on").strip().lower() in TRUTHY
+    except (OSError, configparser.Error) as exc:
+        print(f"读配置失败，按开启处理：{exc}", file=sys.stderr)
+        return True
 
 
 def run(src: str, dst: str) -> int:
@@ -169,7 +174,7 @@ def run(src: str, dst: str) -> int:
     size0 = len(data)
 
     parsed = A.load_insns(src)
-    note = "未改写（解析失败）" if parsed is None else "未改写（开关关闭）"
+    note = "未改写（解析失败）" if parsed is None else "未改写（配置 rewrite = off）"
     if parsed is not None and rewrite_on():
         total, safe, _reasons = scan(parsed)
         data, done, skipped = rewrite(data, parsed)

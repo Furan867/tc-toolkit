@@ -55,6 +55,10 @@ UNDECODED = "(bad)"
 #: 改写总开关。改成 False 就退回恒等改写（下次编译即生效，**不用重启游戏**）。
 #: 万一游戏里发现行为异常，先把这里关掉，再查是不是改写的错。
 ENABLE_REWRITE = True
+
+#: 回退标记文件：work/opt/ 下存在它，就退回恒等改写（下次编译即生效，
+#: **不用改代码、不用重启游戏**）—— 想做「开/关改写」的对照实验时切这个文件就行。
+REWRITE_OFF = os.path.normpath(os.path.join(HERE, os.pardir, "work", "opt", "no_rewrite"))
 #: REX 前缀（0x40~0x4F）
 REX = range(0x40, 0x50)
 NOP = b"\x90"
@@ -150,6 +154,11 @@ def rewrite(data: bytes, insns) -> tuple[bytes, int, Counter]:
     return bytes(out), done, skipped
 
 
+def rewrite_on() -> bool:
+    """改写是否启用：编译期常量 + 运行期标记文件（后者不用改代码就能切）。"""
+    return ENABLE_REWRITE and not os.path.exists(REWRITE_OFF)
+
+
 def run(src: str, dst: str) -> int:
     try:
         with open(src, "rb") as f:
@@ -161,7 +170,7 @@ def run(src: str, dst: str) -> int:
 
     parsed = A.load_insns(src)
     note = "未改写（解析失败）" if parsed is None else "未改写（开关关闭）"
-    if parsed is not None and ENABLE_REWRITE:
+    if parsed is not None and rewrite_on():
         total, safe, _reasons = scan(parsed)
         data, done, skipped = rewrite(data, parsed)
         note = f"改写 {done} 处 / 模式 {total} 处（可改 {safe} 处）"
@@ -176,7 +185,7 @@ def run(src: str, dst: str) -> int:
         return 2
 
     # 自校验：改写后的产物必须仍能完整反汇编（零空洞），否则这次改写作废
-    if parsed is not None and ENABLE_REWRITE:
+    if parsed is not None and rewrite_on():
         if len(data) != size0:
             print(f"❌ 长度变了（{size0} → {len(data)}）—— 这次不改写", file=sys.stderr)
             return 3

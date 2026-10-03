@@ -10,6 +10,10 @@
     python tools/analyze_jit_code.py <dump.bin> --start 0x17690 --stop 0x1e5d0
     python tools/analyze_jit_code.py <dump.bin> --base 0x022FEADE0000
 
+`--start` / `--stop` 都是**文件偏移**。若文件前 8 字节是长度头（小端整数，
+值等于文件总长 —— `compile()` 产物的形态），默认自动跳过。
+解析完会自检「偏移连续 / 零空洞 / 字节总长」，不自洽就报错退出。
+
 统计的冗余模式
 --------------
 1. mov A,B 紧跟 mov B,A            —— 来回搬运，两条都是纯浪费
@@ -24,32 +28,110 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from pathlib import Path
+from typing import TypedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OBJDUMP = r"D:\bin\w64devkit\bin\objdump.exe"
 
-LINE_RE = re.compile(r"^\s+([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*(\S+)\s*(.*)$")
+#: objdump 的字节列上限是 7 字节，更长的指令（如 10 字节的 movabs）会把剩余
+#: 字节另起一行，那一行**没有助记符**（形态 `      6f:\t7f 00 00 `）。
+#: 旧正则用 `(\S+)` 抓助记符，回溯后会把行尾最后一个字节吃成「助记符 00」。
+INS_RE = re.compile(
+    r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*\t\s*([a-z][a-z0-9.]*)\s*(.*)$")
+CONT_RE = re.compile(r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*$")
+
+
+class Stats(TypedDict):
+    """stats() 的返回结构。"""
+
+    n: int
+    ping: int
+    cl: int
+    mask: int
+    kinds: Counter[str]
+    save: int
+
+
+def header_len(path):
+    """产物前 8 字节是长度头（小端整数，值 == 文件总长），不是机器码。"""
+    size = os.path.getsize(path)
+    if size < 8:
+        return 0
+    head = Path(path).read_bytes()[:8]
+    return 8 if int.from_bytes(head, "little", signed=True) == size else 0
+
+
+def parse_objdump(text):
+    """objdump 输出 → [[偏移, 字节, 助记符, 操作数], ...]，续行拼回上一条。
+
+    不拼续行的话，10 字节的 movabs 只能拿到前 7 字节 —— 偏移与长度对不上，
+    将来做重定位会整体错位。
+    """
+    insns = []
+    for line in text.splitlines():
+        m = INS_RE.match(line)
+        if m:
+            insns.append([int(m.group(1), 16),
+                          bytes.fromhex(m.group(2).replace(" ", "")),
+                          m.group(3), m.group(4).split("#")[0].strip()])
+            continue
+        c = CONT_RE.match(line)
+        if c and insns:
+            insns[-1][1] += bytes.fromhex(c.group(2).replace(" ", ""))
+    return insns
+
+
+def check_coverage(insns, begin, end):
+    """自检：(空洞数, 重叠数, 尾部缺口)。指令字节应恰好铺满 [begin, end)。"""
+    holes = overlap = 0
+    prev_end = begin
+    for off, raw, _mn, _ops in insns:
+        if off > prev_end:
+            holes += 1
+        elif off < prev_end:
+            overlap += 1
+        prev_end = off + len(raw)
+    return holes, overlap, end - prev_end
 
 
 def disasm(path, start, stop):
-    cmd = [OBJDUMP, "-D", "-b", "binary", "-m", "i386:x86-64", "-M", "intel"]
-    if start is not None:
-        cmd.append(f"--start-address={start}")
+    """反汇编，返回 [(偏移, 助记符, 操作数), ...]；解析不自洽时返回 None。"""
+    size = os.path.getsize(path)
+    head = header_len(path)
+    begin = head if start is None else start
+    end = size if stop is None else stop
+
+    cmd = [OBJDUMP, "-D", "-b", "binary", "-m", "i386:x86-64", "-M", "intel",
+           f"--start-address={begin}"]
     if stop is not None:
         cmd.append(f"--stop-address={stop}")
     cmd.append(path)
     out = subprocess.run(cmd, capture_output=True, text=True,
                          encoding="utf-8", errors="replace")
-    insns = []
-    for line in out.stdout.splitlines():
-        m = LINE_RE.match(line)
-        if m:
-            insns.append((int(m.group(1), 16), m.group(3),
-                          m.group(4).split("#")[0].strip()))
-    return insns
+
+    parsed = parse_objdump(out.stdout)
+    if not parsed:
+        print("objdump 未解析出任何指令", file=sys.stderr)
+        return None
+
+    holes, overlap, tail = check_coverage(parsed, begin, end)
+    if holes or overlap:
+        print(f"❌ 解析不自洽：空洞 {holes} 段、重叠 {overlap} 段"
+              f"（区间 0x{begin:X}..0x{end:X}）—— 结果不可信", file=sys.stderr)
+        return None
+    note = f"，跳过 {head} 字节长度头" if head and start is None else ""
+    if tail:
+        print(f"解析自检：{len(parsed)} 条指令，偏移连续、零空洞{note}；"
+              f"尾部余 {tail} 字节（区间端点未对齐指令边界），"
+              f"覆盖至 0x{end - tail:X}", file=sys.stderr)
+    else:
+        print(f"解析自检：{len(parsed)} 条指令，偏移连续、零空洞、"
+              f"字节铺满 [0x{begin:X}, 0x{end:X}）{note}", file=sys.stderr)
+    return [(off, mn, ops) for off, _raw, mn, ops in parsed]
 
 
-def stats(insns):
+def stats(insns) -> Stats | None:
     n = len(insns)
     if not n:
         return None
@@ -70,8 +152,9 @@ def stats(insns):
             if len(p1) == 2 and len(p2) == 2 and p1 == p2:
                 mask += 1
     kinds = Counter(i[1] for i in insns)
-    return dict(n=n, ping=ping, cl=cl, mask=mask, kinds=kinds,
-                save=ping * 2 + cl + mask)
+    save = ping * 2 + cl + mask
+    return {"n": n, "ping": ping, "cl": cl, "mask": mask,
+            "kinds": kinds, "save": save}
 
 
 def main():
@@ -88,6 +171,8 @@ def main():
         return 1
 
     insns = disasm(args.file, args.start, args.stop)
+    if insns is None:
+        return 2
     rng = ""
     if args.start is not None:
         rng = f"  范围 0x{args.start:X}"

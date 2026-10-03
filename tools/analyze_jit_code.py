@@ -37,8 +37,12 @@ OBJDUMP = r"D:\bin\w64devkit\bin\objdump.exe"
 #: objdump 的字节列上限是 7 字节，更长的指令（如 10 字节的 movabs）会把剩余
 #: 字节另起一行，那一行**没有助记符**（形态 `      6f:\t7f 00 00 `）。
 #: 旧正则用 `(\S+)` 抓助记符，回溯后会把行尾最后一个字节吃成「助记符 00」。
+#:
+#: 助记符也允许 `(bad)`：objdump 对 64 位模式下非法的单字节（实测见 `62`、`2f`）
+#: 就这样输出。**必须收进来**，否则字节不连续 —— 实测某份 203480 字节的产物因此
+#: 出现 41 段空洞。它们含义不明，所以改写时一律绕开（见 optimize_image.py）。
 INS_RE = re.compile(
-    r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*\t\s*([a-z][a-z0-9.]*)\s*(.*)$")
+    r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*\t\s*([a-z][a-z0-9.]*|\(bad\))\s*(.*)$")
 CONT_RE = re.compile(r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*$")
 
 
@@ -95,8 +99,11 @@ def check_coverage(insns, begin, end):
     return holes, overlap, end - prev_end
 
 
-def disasm(path, start, stop):
-    """反汇编，返回 [(偏移, 助记符, 操作数), ...]；解析不自洽时返回 None。"""
+def load_insns(path, start=None, stop=None):
+    """反汇编并自检，返回 [[偏移, 字节, 助记符, 操作数], ...]；不自洽时返回 None。
+
+    与 disasm() 的区别是**保留原始字节** —— 改写器要靠字节长度判断能不能等长替换。
+    """
     size = os.path.getsize(path)
     head = header_len(path)
     begin = head if start is None else start
@@ -128,6 +135,14 @@ def disasm(path, start, stop):
     else:
         print(f"解析自检：{len(parsed)} 条指令，偏移连续、零空洞、"
               f"字节铺满 [0x{begin:X}, 0x{end:X}）{note}", file=sys.stderr)
+    return parsed
+
+
+def disasm(path, start, stop):
+    """同 load_insns()，但去掉字节：[(偏移, 助记符, 操作数), ...]。"""
+    parsed = load_insns(path, start, stop)
+    if parsed is None:
+        return None
     return [(off, mn, ops) for off, _raw, mn, ops in parsed]
 
 

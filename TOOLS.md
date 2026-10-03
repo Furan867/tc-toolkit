@@ -108,6 +108,22 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 
 ---
 
+## 一·C、产物改写（当前主线）
+
+转发层把产物交给 `optimize_image.py` 走一趟、再原样写回（见 `compile_hook.c` 的
+`optimize_inplace()`）。配置在 `opt.ini`，**每次编译重新读**，改完下次编译生效。
+
+| 工具 | 作用 | 状态 |
+|---|---|---|
+| `optimize_image.py` | **改写器**。当前规则：`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8` + 单条 4 字节 nop（等长，零重定位）。实测该规则把 219088 字节的电路从 **5.4 提到 6.9 MHz** | ✅ |
+| `check_shift_equiv.py` | 把改写前后的两段字节各拷进一块 RWX 内存**真的跑一遍**对比结果，验证规则语义等价（当前 5280 组） | ✅ |
+| `try_compile_dll.py --hook` | 强制加载转发层调 `compile()`，用于**离线**验证这条管路（注意转发层加载时会清空 `work/hook/`） | ✅ |
+
+运行痕迹都在 `work/opt/`：`hook.log`（每次编译是「已就地写回」还是「放弃」）、
+`optimize.log`（改写处数 / 是否被配置关掉）、`opt_stderr.log`（自检与抽查明细）。
+
+---
+
 ## 二、动态分析（对运行中的游戏）
 
 | 工具 | 作用 | 状态 |

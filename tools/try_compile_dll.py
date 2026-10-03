@@ -36,7 +36,7 @@ DLL_REAL = os.path.join(GAME, "compile_real.dll")
 _DLL_DIRS = []      # 见 load_dll()：add_dll_directory 的句柄必须存活
 
 
-def load_dll(call_nimmain=True, quiet=False):
+def load_dll(call_nimmain=True, quiet=False, prefer_real=True):
     """加载编译器 DLL：**优先原始 DLL**（见 DLL_REAL 处的说明）。
 
     注意：Nim 编译的 dll 通常已经在 DllMain 里自行初始化。实测调用
@@ -50,7 +50,7 @@ def load_dll(call_nimmain=True, quiet=False):
         if not quiet:
             print(*a)
 
-    path = DLL_REAL if os.path.isfile(DLL_REAL) else DLL
+    path = DLL_REAL if (prefer_real and os.path.isfile(DLL_REAL)) else DLL
     if not os.path.isfile(path):
         print(f"找不到 {path}", file=sys.stderr)
         return None
@@ -123,9 +123,12 @@ def main():
     ap.add_argument("--src", help="源码文件（默认用一小段测试文本）")
     ap.add_argument("--nimmain", action="store_true",
                     help="显式调用 NimMain()（默认不调，见 load_dll 注释）")
+    ap.add_argument("--hook", action="store_true",
+                    help="强制加载转发层 compile.dll（验证「转发层→子进程→写回」这条管路；"
+                         "注意转发层加载时会清空 work/hook/）")
     args = ap.parse_args()
 
-    dll = load_dll(call_nimmain=args.nimmain)
+    dll = load_dll(call_nimmain=args.nimmain, prefer_real=not args.hook)
     if dll is None:
         return 1
     if args.load and not args.compile:
@@ -134,7 +137,12 @@ def main():
 
     # ② 试调 compile
     if args.src:
-        source = open(args.src, "rb").read()
+        try:
+            with open(args.src, "rb") as f:
+                source = f.read()
+        except OSError as exc:
+            print(f"读不到源码文件：{exc}", file=sys.stderr)
+            return 1
     else:
         source = b"\n"      # 空源码，先看 API 是否接受
     print()
@@ -162,9 +170,13 @@ def main():
     if out_ptr and 0 < out_len < 64 * 1024 * 1024:
         content = ctypes.string_at(out_ptr, out_len)
         dest = os.path.join(ROOT, "work", "compile_out.bin")
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "wb") as f:
-            f.write(content)
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(content)
+        except OSError as exc:
+            print(f"写不出结果文件：{exc}", file=sys.stderr)
+            return 1
         print(f"\n结果内容 {len(content)} 字节 → {dest}")
         print("  前 160 字节:", repr(content[:160]))
     return 0

@@ -43,6 +43,18 @@
 #define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\hook"
 #define SEP      92        /* 反斜杠的 ASCII —— 写成字符字面量在多轮转义里会失真 */
 
+/* 产物改写器（MVP：把产物交给外部 Python 走一趟，再**就地**写回原缓冲）
+ *
+ * 这两个路径与 OUT_DIR 一样只能写死：转发层住在游戏目录里，它无从知道项目在哪
+ * （`compile_real.dll` 能用自身模块路径推导，是因为它与我们同在游戏目录 ——
+ * 见 ensure_real。改机器上的路径要改这三行）。
+ */
+#define OPT_DIR     "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\opt"
+#define OPT_PROJ    "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing"
+#define OPT_SCRIPT  OPT_PROJ "\\tools\\optimize_image.py"
+#define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
+#define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
+
 typedef void* (*compile_fn)(void* out, void* src, int flags);
 typedef void  (*void_fn)(void);
 
@@ -89,6 +101,104 @@ static void dump(const char* tag, const char* ext, const void* p, long long n, L
     DWORD written = 0;
     WriteFile(h, p, (DWORD)n, &written, NULL);
     CloseHandle(h);
+}
+
+static int write_file(const char* path, const void* p, long long n) {
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    DWORD written = 0;
+    BOOL ok = WriteFile(h, p, (DWORD)n, &written, NULL);
+    CloseHandle(h);
+    return ok && written == (DWORD)n;
+}
+
+/* 优化器的运行日志。恒等改写时 opt 与 raw 逐字节相同，光看产物分不出
+   「跑了但没改」和「压根没跑」—— 这行日志就是唯一的证据。 */
+static void opt_log(LONG seq, const char* tag) {
+    CreateDirectoryA(OPT_DIR, NULL);
+    char path[MAX_PATH];
+    sprintf(path, "%s%chook.log", OPT_DIR, SEP);
+    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[160];
+    int n = sprintf(line, "%04d-%02d-%02d %02d:%02d:%02d  %03ld  %s\r\n",
+                    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                    seq, tag);
+    DWORD w = 0;
+    WriteFile(h, line, (DWORD)n, &w, NULL);
+    CloseHandle(h);
+}
+
+/* 把产物交给外部改写器走一趟，成功则**就地**写回原缓冲区。
+ *
+ * MVP 的三条约束都落在这个函数里：
+ *   · 长度必须与原件相 —— 不等就放弃（因此不必动 out_len、不必动 8 字节头）
+ *   · 不换缓冲区 —— 直接覆盖原缓冲，于是没有「新内存谁分配、谁释放」的问题
+ *   · 任何一步失败都静默放弃 —— 游戏绝不该因为优化器出问题而受影响
+ */
+static void optimize_inplace(void* buf, long long len, LONG seq) {
+    if (!buf || len <= 0 || len > (64LL << 20)) return;
+    CreateDirectoryA(OPT_DIR, NULL);
+
+    char raw[MAX_PATH], opt[MAX_PATH], cmd[4 * MAX_PATH], err[MAX_PATH];
+    sprintf(raw, "%s%c%03ld.raw.bin", OPT_DIR, SEP, seq);
+    sprintf(opt, "%s%c%03ld.opt.bin", OPT_DIR, SEP, seq);
+    sprintf(err, "%s%copt_stderr.log", OPT_DIR, SEP);
+    if (!write_file(raw, buf, len)) { opt_log(seq, "写 raw 失败，放弃"); return; }
+
+    sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\"",
+            PY_EXE, OPT_SCRIPT, raw, opt);
+
+    /* 把子进程的输出/错误引到文件：游戏是 GUI 进程，标准句柄未必可用，
+       直接继承会让 Python 在写 stderr 时出怪事，且现场也留不下来。 */
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    HANDLE sink = CreateFileA(err, FILE_APPEND_DATA, FILE_SHARE_READ, &sa,
+                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    if (sink != INVALID_HANDLE_VALUE) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = sink;
+        si.hStdError = sink;
+    }
+    ZeroMemory(&pi, sizeof(pi));
+    BOOL started = CreateProcessA(NULL, cmd, NULL, NULL,
+                                  sink != INVALID_HANDLE_VALUE,
+                                  CREATE_NO_WINDOW, NULL, OPT_PROJ, &si, &pi);
+    if (sink != INVALID_HANDLE_VALUE) CloseHandle(sink);
+    if (!started) { opt_log(seq, "起子进程失败，放弃"); return; }
+
+    DWORD wait = WaitForSingleObject(pi.hProcess, OPT_TIMEOUT);
+    DWORD code = 1;
+    if (wait == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
+    else TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (wait != WAIT_OBJECT_0 || code != 0) { opt_log(seq, "子进程失败或超时，放弃"); return; }
+
+    HANDLE h = CreateFileA(opt, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) { opt_log(seq, "读不到 opt，放弃"); return; }
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart != len) {
+        CloseHandle(h);
+        opt_log(seq, "长度与原件不符，放弃（MVP 不改长度）");
+        return;
+    }
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buf, (DWORD)len, &got, NULL);
+    CloseHandle(h);
+    opt_log(seq, ok && got == (DWORD)len ? "已就地写回（长度未变）" : "写回失败");
 }
 
 /* 加载时清空 OUT_DIR 下的 .si / .bin。
@@ -147,7 +257,11 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     if (out) {
         long long olen = *(long long*)out;
         void* optr = *(void**)((char*)out + 8);
-        if (optr) dump("out", ".bin", optr, olen, seq);
+        if (optr) {
+            dump("out", ".bin", optr, olen, seq);
+            /* MVP：让产物去 Python 里转一圈，原样写回。任何一步失败都不影响返回。 */
+            optimize_inplace(optr, olen, seq);
+        }
     }
     return ret;
 }

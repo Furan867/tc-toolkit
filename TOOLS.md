@@ -50,7 +50,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 （★ 2026-09-19 改的：早先是 src/out 各取一次号，编号差 1，配对要看 `src_069 ↔ out_070`，
 已统一。）
 
-### 五个容易踩的坑
+### 六个容易踩的坑
 
 1. **产物文件前 8 字节是长度头，不是机器码**。而且头字段的值等于**文件总长（含头
    自己）**，不是数据长度 —— 按 `head == len - 8` 判断会判错，带着头去搜会让特征
@@ -86,6 +86,15 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
    若看到十几秒，先查解释器（`py -c "import sys;print(sys.executable)"`）。
    ⚠️ 未查明的一层：两个解释器加载的依赖 DLL 来源相同（都是游戏目录的版本），
    所以「MSYS2 的 Python 为何慢 16 倍」只知其然。
+6. **转发层部署期间，游戏目录的 `compile.dll` 不是编译器**（★ 2026-10-03 踩到）。
+   那时它就是转发层本身：**67375 字节**，与 `build/compile_hook.dll` 同源（mtime 一致）。
+   真编译器是 **`compile_real.dll`**（1800374 字节；符号 7447 行、代码符号 2012 个、
+   含 `passes` 的 1052 个）。**查静态信息（符号 / 导入表 / 反汇编）一律认它。**
+   踩法：照 `compile.dll` 查符号 —— 只剩 113 个代码符号、`rawNewString` 零命中，
+   于是误判「编译器不带 Nim 运行时」；而 `compile_real.dll` 内部**定义**着
+   `rawNewString`（T）、`newSeq`×60、`dealloc`×5，导入表只有 libgcc + KERNEL32 + UCRT，
+   **不碰游戏运行时**；游戏 exe 里另有一份独立的 `rawNewString`，两份运行时两个堆。
+   部署状态用 `python tools/deploy_compile_hook.py --status` 确认。
 
 ---
 

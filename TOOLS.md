@@ -107,7 +107,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 | `scan_game_mem.py` | 扫内存、dump JIT 可执行区 | ⚠️ **抓源码部分已废弃**（改用 hook `compile()`）；`--dump-exec` dump JIT 区仍有用 |
 | `try_compile_dll.py` | 独立加载 `compile.dll` 调用它（脱离游戏进程） | ✅ ⚠️ 转发层部署期间，**必须从游戏目录运行**（否则转发层找不到真 DLL） |
 | `analyze_gen_code.py` | 统计生成源码的组件构成与代码代价 | ⚠️ 需要源码文件输入 |
-| `analyze_jit_code.py` | 量化 JIT 机器码的冗余指令 | ⚠️ |
+| `analyze_jit_code.py` | 量化 JIT 机器码的冗余指令 | ❌ **反汇编解析有 bug（2026-10-03 发现，未修）**：objdump 对长指令的**缩进续行**（`6f:\t7f 00 00 `，无助记符）被 `LINE_RE` 回溯后误当成"助记符为 `00` 的指令" → 指令总数虚高 4471 条（55254 → 实际 50783），**冗余比例应报 31.6% 而非 29.0%**。跳转计数不受影响（跳转指令短，无续行）。**新主线要用可靠反汇编，先修它** |
 | `_deprecated_catch_compile_source.py` | 调试器 + 硬件断点抓 `compile()` 参数 | ❌ **会崩游戏**（DR 残留），已被转发层方案取代 |
 | `_deprecated_profile_current.py` | 旧的一键流程 | ❌ 第一步是扫内存抓源码，那个环节已被淘汰，必然报"没有语法完整的候选源码" |
 | `hw_breakpoint_trace.py` | 硬件断点追踪「谁写了某地址」 | ❌ **未清理调试寄存器**，就是 2026-09-17 崩游戏两次的元凶。**重启这条线前必须先修** |

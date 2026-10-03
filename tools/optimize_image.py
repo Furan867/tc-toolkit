@@ -7,8 +7,9 @@
     shl/shr/sar r, cl         REX? D3 <modrm>         2~3 字节
     ------------------------------------------------------------
     shl/shr/sar r, imm8       REX? C1 <modrm> <imm8>   3~4 字节
-    nop × 4                                            4 字节
-    填充后长度与原来**逐字节相同**，后续指令偏移一个都不动。
+    一条 4 字节 nop（0F 1F 40 00）                       4 字节
+    填充后长度与原来**逐字节相同**，后续指令偏移一个都不动；而且指令条数与原序列
+    持平（`mov`+`移位` 2 条 → `移位`+`nop` 2 条）—— 用一串 `90` 会反而多出 3 条。
 
 为什么等价：
 - 两个形式的移位量都只取低 5/6 位（32 位操作数 &0x1F、64 位 &0x3F），所以
@@ -59,7 +60,30 @@ CONF = os.path.normpath(os.path.join(HERE, os.pardir, "opt.ini"))
 TRUTHY = ("on", "1", "true", "yes")
 #: REX 前缀（0x40~0x4F）
 REX = range(0x40, 0x50)
-NOP = b"\x90"
+
+#: 单条就能填满 N 字节的 nop（Intel 推荐形态）。**必须用它，而不是一串 `90`**：
+#: 填充只是为了"不移动后面的指令"，每多一条 nop 就多占一份前端取指/解码带宽，
+#: 本来是为了不拖慢执行才做改写，不该反而把执行拖慢。
+NOPS = {
+    1: b"\x90",
+    2: b"\x66\x90",
+    3: b"\x0f\x1f\x00",
+    4: b"\x0f\x1f\x40\x00",
+    5: b"\x0f\x1f\x44\x00\x00",
+    6: b"\x66\x0f\x1f\x44\x00\x00",
+    7: b"\x0f\x1f\x80\x00\x00\x00\x00",
+    8: b"\x0f\x1f\x84\x00\x00\x00\x00\x00",
+    9: b"\x66\x0f\x1f\x84\x00\x00\x00\x00\x00",
+}
+
+
+def nops(n: int) -> bytes:
+    """用尽多少条指令填充 n 字节（越少越好）。"""
+    out = b""
+    while n > 9:
+        out += NOPS[9]
+        n -= 9
+    return out + (NOPS[n] if n else b"")
 
 
 def split_ops(ops: str) -> list[str]:
@@ -139,7 +163,7 @@ def rewrite(data: bytes, insns) -> tuple[bytes, int, Counter]:
         imm8 = raw1[1] & 0x3F                       # 两条形式都只看低 6 位
         new = rex + bytes([0xC1, body[1], imm8])
         window = len(raw1) + len(raw2)
-        filler = NOP * (window - len(new))           # 恒为 4 个
+        filler = nops(window - len(new))             # 恒为 4 字节，但只占 1 条指令
         if len(new) + len(filler) != window:
             skipped["窗口长度异常"] += 1
             continue

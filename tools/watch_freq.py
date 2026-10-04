@@ -22,8 +22,8 @@
 
 读哪里
 ------
-**只看退出时那份总结**（终端上就是，另外还落一份无色的 `work/opt/freq_summary.txt`）。
-逐事件的 `work/opt/freq_log.tsv` 只给脚本用，别手动读它 —— 监听几分钟就能摞
+**只看退出时那份总结**（终端上就是，另外还落一份无色的 `work/freq/freq_summary.txt`）。
+逐事件的 `work/freq/freq_log.tsv` 只给脚本用，别手动读它 —— 监听几分钟就能摞
 几百行，读它只会污染上下文。
 
 用法
@@ -50,12 +50,13 @@ import term
 import winmem
 
 ROOT = Path(__file__).resolve().parent.parent
-HOOK_DIR = ROOT / "work" / "hook"
-OUT_DIR = ROOT / "work" / "opt"
-LOG_PATH = OUT_DIR / "freq_log.tsv"
-SUMMARY_PATH = OUT_DIR / "freq_summary.txt"      # 给人读的总结（追加写，几十行）
+HOOK_DIR = ROOT / "work" / "hook"      # 转发层捕获（每次游戏会话被清空）
+OPT_DIR = ROOT / "work" / "opt"        # 转发层工作区（每次游戏会话被清空）
+FREQ_DIR = ROOT / "work" / "freq"      # 本工具的输出（跨会话保留，不会被人清掉）
+LOG_PATH = FREQ_DIR / "freq_log.tsv"
+SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"     # 给人读的总结（每次运行覆盖）
 OPT_INI = ROOT / "opt.ini"
-OPT_LOG = OUT_DIR / "optimize.log"
+OPT_LOG = OPT_DIR / "optimize.log"
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
@@ -318,7 +319,7 @@ def main() -> int:
     sink.write("session", note=f"开始记录 PID={pid} 基址=0x{base:X}")
     print(f"{term.paint('● 已连接', 'bold', 'green')}  PID {term.paint(str(pid), 'bold')}  "
           f"基址 {term.paint(f'0x{base:X}', 'blue')}  "
-          f"{term.paint('总结会写进 work/opt/freq_summary.txt  ·  Ctrl-C 结束', 'cyan')}\n")
+          f"{term.paint('总结会写进 work/freq/freq_summary.txt  ·  Ctrl-C 结束', 'cyan')}\n")
 
     regions: list[dict] = []
     on_heartbeat = False

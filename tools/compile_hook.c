@@ -22,7 +22,9 @@
  * 编号：**一次 compile() 调用取一个号，src 与 out 共用同一个号** ——
  *       hook_src_005.si 与 hook_out_005.bin 就是一对。
  *       计数器是本 DLL 的全局变量，**每次加载（游戏启动）都从 1 重新编号**，
- *       因此加载时会**清空目录里的 .si/.bin**（不含子目录），避免新旧同号混在一起。
+ *       因此加载时会清空目录里的 .si/.bin（不含子目录），并把 OPT_DIR 里的
+ *       中间产物（NNN.raw.bin / NNN.opt.bin / *.log）一并清掉 —— 两边的编号
+ *       是同一套，只清一边就会新旧同号混在一起。
  *
  * 契约（已由反汇编独立验证，2026-09-15 / 09-17 两次复核）
  * ------------------------------------------------------
@@ -234,10 +236,43 @@ static void purge_captures(void) {
     FindClose(h);
 }
 
+/* 加载时也清掉 OPT_DIR 里的中间产物。
+ *
+ * 为什么：OPT_DIR 里的 NNN.raw.bin / NNN.opt.bin / *.log 与 OUT_DIR 的捕获文件
+ * 共用同一个编号（都出自本 DLL 的 g_seq），却**从未跟着一起清** —— 实测
+ * optimize.log 里同一编号攒到 5 条（五轮游戏会话都编到过 001），而对应的
+ * hook_out_001.bin 只剩本轮那一份。后果是按编号回查产物信息时会摸到上一轮
+ * 会话的记录，指纹张冠李戴。
+ *
+ * 只删这三类，不整目录删 —— 免得误伤将来往这里放的东西。
+ */
+static void purge_workdir(void) {
+    char pat[MAX_PATH], path[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    lstrcpyA(pat, OPT_DIR);
+    lstrcatA(pat, "\\*");
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在 */
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (!ends_with_ci(fd.cFileName, ".raw.bin") &&
+            !ends_with_ci(fd.cFileName, ".opt.bin") &&
+            !ends_with_ci(fd.cFileName, ".log")) continue;
+        lstrcpyA(path, OPT_DIR);
+        lstrcatA(path, "\\");
+        lstrcatA(path, fd.cFileName);
+        DeleteFileA(path);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     (void)hinst;
     (void)reserved;
-    if (reason == DLL_PROCESS_ATTACH) purge_captures();
+    if (reason == DLL_PROCESS_ATTACH) {
+        purge_captures();
+        purge_workdir();
+    }
     return TRUE;
 }
 

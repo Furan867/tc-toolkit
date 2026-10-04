@@ -36,6 +36,7 @@ import statistics
 import struct
 import sys
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -56,23 +57,45 @@ OFF_CYCLE = 0x14624D608 - BASE_VA
 OFF_TIME = 0x14624D610 - BASE_VA
 OFF_SIM_SPEED = 0x14624D618 - BASE_VA
 
-BAR_UNIT_HZ = 0.5e6      # 柱状图每格代表的频率（满格 20 格 = 10 MHz）
-BAR_WIDTH = 20
+BAR_UNIT_HZ = 0.7e6      # 柱状图每格代表的频率（满 14 格 ≈ 9.8 MHz）
+BAR_WIDTH = 14
+IDLE_HEARTBEAT = 30.0    # 停机时每隔多少秒给一行心跳（免得看着像卡死）
 SEG_TOL = 0.05           # 段内允许的相对波动
 POLL = 0.1               # 轮询间隔（只为及时捕捉“游戏刚重算”的时刻）
 
 
+def disp_width(text: str) -> int:
+    """终端显示宽度 —— 中日韩全角字符占 2 列，len() 会算少，表格就歪了。"""
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
+def pad(text: str, width: int) -> str:
+    """按**显示宽度**补齐（对齐必须在着色之前完成）。"""
+    return text + " " * max(0, width - disp_width(text))
+
+
 def fmt_hz(hz: float) -> str:
-    """终端用的频率串，**固定 13 字符宽**（对齐必须在着色之前完成）。"""
+    """终端用的频率串，固定 13 显示列宽。"""
     if hz == 0:
-        return f"{'停机':>13}"
+        return pad("停机", 13)
     return f"{hz / 1e6:9.3f} MHz"
 
 
 def bar(hz: float) -> str:
-    """固定 BAR_WIDTH 字符宽的柱状条（未着色）。"""
-    n = max(0, min(BAR_WIDTH, int(hz / BAR_UNIT_HZ)))
+    """固定 BAR_WIDTH 显示列的柱状条（未着色）。
+
+    非零值**至少给一格** —— 电路自带的速度上限可能只有几 kHz，按比例算柱子
+    会全空，那就等于没有信息（实测电路 B 限 10 kHz 时就是这情况）。
+    """
+    if hz == 0:
+        return " " * BAR_WIDTH
+    n = max(1, min(BAR_WIDTH, int(hz / BAR_UNIT_HZ)))
     return "▇" * n + " " * (BAR_WIDTH - n)
+
+
+def hz_style(hz: float) -> tuple[str, ...]:
+    """频率与柱子的配色：低保真频率（多半是电路自带限速）用黄，正常用绿。"""
+    return ("bold", "yellow") if hz < 1e6 else ("bold", "green")
 
 
 class Sink:
@@ -186,7 +209,7 @@ def wait_for_game() -> tuple[int, int]:
             if base:
                 return pid, base
         if not hinted:
-            print(term.paint(f"等 {EXE} 启动 …（只读内存，不影响游戏）", "gray"), flush=True)
+            print(term.paint(f"等 {EXE} 启动 …（只读内存，不影响游戏）", "yellow"), flush=True)
             hinted = True
         time.sleep(2.0)
 
@@ -203,25 +226,30 @@ def main() -> int:
     pid, base = wait_for_game()
     h = winmem.open_process(pid)
     sink.write("session", note=f"开始记录 PID={pid} 基址=0x{base:X}")
-    print(f"{term.paint('● 已连接', 'bold', 'green')}  PID {pid}  模块基址 0x{base:X}  "
-          f"{term.paint('日志 work/opt/freq_log.tsv  ·  Ctrl-C 结束', 'gray')}\n")
+    print(f"{term.paint('● 已连接', 'bold', 'green')}  PID {term.paint(str(pid), 'bold')}  "
+          f"基址 {term.paint(f'0x{base:X}', 'blue')}  "
+          f"{term.paint('日志 work/opt/freq_log.tsv  ·  Ctrl-C 结束', 'cyan')}\n")
 
     def on_segment(index: int, samples: list[tuple[float, float]]) -> None:
         vals = [hz for _t, hz in samples]
         med = statistics.median(vals)
         dur = samples[-1][0] - samples[0][0] + 1.0
-        spread = "" if med == 0 else f" · 波动 {(max(vals) - min(vals)) / med * 100:.1f}%"
+        head = (f"{term.paint('├ 段', 'magenta')} "
+                f"{term.paint(pad(str(index), 2), 'bold', 'yellow')}")
+        if med == 0:
+            note = f"段{index} n={len(samples)} 时长={dur:.0f}s 停机"
+            sink.write("segment", note=note)
+            print(f"   {head}  {term.paint(f'停机 ×{len(samples)} 样本 · {dur:.0f}s', 'yellow')}")
+            return
+        spread = f"波动 {(max(vals) - min(vals)) / med * 100:.1f}%"
         transitional = len(samples) < 3
-        body = term.paint(fmt_hz(med), "bold", "cyan")
-        if transitional and med != 0:
-            body = term.paint(f"过渡 {fmt_hz(med)}", "gray")
-        print(f"   {term.paint('├ 段', 'gray')} {term.paint(str(index), 'yellow')} {body}"
-              f"{term.paint(spread, 'gray')}  "
-              f"{term.paint(f'×{len(samples)} 样本 · {dur:.0f}s' + ('（过渡）' if transitional else ''), 'gray')}")
-        sink.write("segment", hz=None if med == 0 else med,
-                   note=f"段{index} n={len(samples)} 时长={dur:.0f}s"
-                        + (f" 中位数={med:.0f}Hz" if med else " 停机")
-                        + (" 过渡" if transitional else ""))
+        note = (f"段{index} n={len(samples)} 时长={dur:.0f}s 中位数={med:.0f}Hz "
+                f"{spread}{' 过渡' if transitional else ''}")
+        sink.write("segment", hz=med, note=note)
+        print(f"   {head}  {term.paint(fmt_hz(med), *hz_style(med))}  "
+              f"{term.paint(f'×{len(samples)} 样本 · {dur:.0f}s', 'cyan')}  "
+              f"{term.paint(spread, 'cyan')}"
+              f"{term.paint('（过渡：窗口横跨切换点）' if transitional else '', 'yellow')}")
 
     seg = Segmenter(on_segment)
 
@@ -240,6 +268,7 @@ def main() -> int:
     last_game_time: float | None = None
     sampled_at = 0.0
     idle_rounds = 0
+    last_idle_note = 0.0
     deadline = time.time() + args.seconds if args.seconds > 0 else None
 
     try:
@@ -252,16 +281,17 @@ def main() -> int:
             for name in scan_hook_dir(seen):
                 m = re.search(r"(\d+)", name)
                 fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
-                print(f"{term.paint(clock, 'gray')}  {term.paint('▣ 编译点', 'bold', 'magenta')} "
+                print(f"{term.paint(clock, 'blue')}  {term.paint('▣ 编译点', 'bold', 'magenta')} "
                       f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}  "
-                      f"{term.paint(rewritten, 'dim')}  {term.paint('rewrite=' + rewrite, 'dim')}")
+                      f"{term.paint(rewritten, 'green')}  "
+                      f"{term.paint('rewrite=' + rewrite, 'cyan')}")
                 sink.write("compile", note=f"{name} 指纹={fp} {rewritten} rewrite={rewrite}")
                 seg.close()           # 编译点是天然的段分界
                 last_game_time = None
 
             if not winmem.find_pid(EXE):
                 sink.write("game", note="游戏已退出，等待重新启动")
-                print(f"{term.paint(clock, 'gray')}  {term.paint('○ 游戏退出，等待重启 …', 'yellow')}")
+                print(f"{term.paint(clock, 'blue')}  {term.paint('○ 游戏退出，等待重启 …', 'yellow')}")
                 pid, base = wait_for_game()
                 h = winmem.open_process(pid)
                 seen.clear()
@@ -284,20 +314,28 @@ def main() -> int:
                 continue
             if not fresh and idle_rounds == 0:
                 sink.write("note", note="游戏统计停更（可能已暂停 / 未运行电路），转为固定节奏记录")
-                print(f"{term.paint(clock, 'gray')}  "
-                      f"{term.paint('… 游戏统计停更（暂停 / 未运行电路），转为固定节奏记录', 'dim')}")
+                print(f"{term.paint(clock, 'blue')}  "
+                      f"{term.paint('… 游戏统计停更（暂停 / 未运行电路），转为固定节奏记录', 'yellow')}")
+                last_idle_note = time.time()
             idle_rounds = 0 if fresh else idle_rounds + 1
             last_game_time = game_time
             sampled_at = time.time()
 
             started = seg.add(time.time(), hz)
             sink.write("sample", hz, cycle)
+            if hz == 0:
+                # 停机不逐行刷屏：整段只在结束时汇总一行，中间给低频心跳，
+                # 免得看着像卡死。
+                if time.time() - last_idle_note >= IDLE_HEARTBEAT:
+                    last_idle_note = time.time()
+                    print(f"{term.paint(clock, 'blue')}  "
+                          f"{term.paint(f'· 停机中（本段已 {seg.count()}s）', 'yellow')}")
+                continue
             mark = term.paint("▲", "green") if started else " "
-            style = ("gray",) if hz == 0 else ("bold", "cyan")
-            bar_style = ("gray",) if hz == 0 else ("green",)
-            print(f"{term.paint(clock, 'gray')} {mark} {term.paint(fmt_hz(hz), *style)}  "
-                  f"{term.paint(bar(hz), *bar_style)}  "
-                  f"{term.paint(f'段{seg.no()}·{seg.count()}', 'gray')}")
+            style = hz_style(hz)
+            print(f"{term.paint(clock, 'blue')} {mark} {term.paint(fmt_hz(hz), *style)} "
+                  f"{term.paint(bar(hz), *style)} "
+                  f"{term.paint(f'段{seg.no()}·{seg.count()}', 'cyan')}")
     except KeyboardInterrupt:
         print()
     finally:

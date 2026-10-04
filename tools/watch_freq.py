@@ -134,7 +134,13 @@ class Segmenter:
         return statistics.median(hz for _t, hz in self.samples)
 
     def add(self, t: float, hz: float) -> bool:
-        """喂一个样本；返回 True 表示由此**开了一段新段**。"""
+        """喂一个样本；返回 True 表示由此**开了一段新段**。
+
+        ⚠️ 开新段时必须**先收尾旧段、再把本样本收进新段**。早期版本在 close()
+        之后直接 return，把新段的第一个样本悄悄丢了（计数从 0 开始、每段少一个
+        样本），见 2026-10-04 的终端输出 `段2·0`。
+        """
+        started = False
         if self.samples:
             ref = self.value()
             if hz == 0 or ref == 0:
@@ -143,9 +149,9 @@ class Segmenter:
                 same = abs(hz - ref) <= ref * SEG_TOL
             if not same:
                 self.close()
-                return True
+                started = True
         self.samples.append((t, hz))
-        return False
+        return started
 
     def close(self) -> None:
         if not self.samples:
@@ -163,9 +169,16 @@ class Segmenter:
 
 
 def scan_hook_dir(seen: set[str]) -> list[str]:
-    """返回新出现的产物文件名（首次调用只是登记现状，不算新）。"""
+    """返回新出现的**产物**文件名（首次调用只是登记现状，不算新）。
+
+    只认 `hook_out_*.bin`：一次编译会先后落 `hook_src_NNN.si` 与
+    `hook_out_NNN.bin`，两个都报就成了重复的编译点；而且 `.si` 出现的时刻
+    `optimize.log` 可能还没写，指纹 / 改写处数都不完整。
+    """
     try:
-        names = sorted(p.name for p in HOOK_DIR.iterdir() if p.is_file())
+        names = sorted(p.name for p in HOOK_DIR.iterdir()
+                       if p.is_file() and p.name.startswith("hook_out_")
+                       and p.suffix == ".bin")
     except OSError:
         return []
     new = [n for n in names if n not in seen]
@@ -234,8 +247,7 @@ def main() -> int:
         vals = [hz for _t, hz in samples]
         med = statistics.median(vals)
         dur = samples[-1][0] - samples[0][0] + 1.0
-        head = (f"{term.paint('├ 段', 'magenta')} "
-                f"{term.paint(pad(str(index), 2), 'bold', 'yellow')}")
+        head = f"{term.paint(f'[段 {index}]', 'bold', 'magenta')}"
         if med == 0:
             note = f"段{index} n={len(samples)} 时长={dur:.0f}s 停机"
             sink.write("segment", note=note)
@@ -276,15 +288,15 @@ def main() -> int:
             if deadline and time.time() >= deadline:
                 break
             time.sleep(min(POLL, args.interval))
-            clock = datetime.now().strftime("%H:%M:%S")
+            clock = datetime.now().strftime("[%H:%M:%S]")
 
             for name in scan_hook_dir(seen):
                 m = re.search(r"(\d+)", name)
                 fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
+                extra = f"  {term.paint(rewritten, 'green')}" if rewritten else ""
                 print(f"{term.paint(clock, 'blue')}  {term.paint('▣ 编译点', 'bold', 'magenta')} "
-                      f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}  "
-                      f"{term.paint(rewritten, 'green')}  "
-                      f"{term.paint('rewrite=' + rewrite, 'cyan')}")
+                      f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
+                      f"{extra}  {term.paint('rewrite=' + rewrite, 'cyan')}")
                 sink.write("compile", note=f"{name} 指纹={fp} {rewritten} rewrite={rewrite}")
                 seg.close()           # 编译点是天然的段分界
                 last_game_time = None

@@ -46,8 +46,12 @@ short 模式的重定位面（探查 work/tmp/probe_jmp.py，2026-10-05 实测�
 - check_reloc **全量**逐指令对照 mn/ops —— 改坏任何数据字节都会让该处反汇编
   文本变化而暴露，整体退回原样。
 
-已知残留风险（接受）：假设游戏从产物**开头**调用（第一个窗口 0xF3 > 头部 8 字节，
-入口前的指令原样未动）。若实测发现入口在中部固定偏移，此模式作废。
+**入口协议（2026-10-05 实测确认，short 首次上线即崩后查实）**：compile() 的
+40 字节输出里 qword[2] 是**入口偏移**（实测：空源码 0x212F、RV32IM 0x215B，
+落在固定前缀末尾、组件区之前）—— 游戏每 tick 从这个偏移调用产物。
+缩短平移后必须同步更新它（--entry 传入旧值，写 NNN.entry.txt 给转发层改回
+Result[2]），否则游戏跳进指令中间：实测主频掉到 0.566（≈5.4/9.5，每 tick
+扫完尾部 22680 字节 nop）后越界崩溃。等长模式不动任何偏移，无需更新。
 
 用法
 ----
@@ -364,7 +368,7 @@ def rewrite_mode() -> str:
         return "on"
 
 
-def run(src: str, dst: str) -> int:
+def run(src: str, dst: str, entry: int | None = None) -> int:
     try:
         with open(src, "rb") as f:
             data0 = f.read()                        # 原样，自校验失败时回写它
@@ -378,10 +382,16 @@ def run(src: str, dst: str) -> int:
     mode = rewrite_mode()
     short_used = False
     wins = None
+    new_entry = None
     note = "未改写（解析失败）" if parsed is None else f"未改写（rewrite = {mode}）"
 
+    if parsed is not None and mode == "short" and entry is None:
+        # 防呆：老转发层不传 --entry，short 会把游戏跳崩（见 docstring 入口协议）
+        print("⚠ 转发层没传入口偏移（老版本？）→ 退回等长改写", file=sys.stderr)
+        mode = "on"
+
     if parsed is not None and mode == "short":
-        r = rewrite_short(data, parsed)
+        r = rewrite_short(data0, parsed)
         if r is None:
             print("❌ 缩短改写防御未过 → 退回等长改写（收益保底）", file=sys.stderr)
             mode = "on"
@@ -390,10 +400,19 @@ def run(src: str, dst: str) -> int:
             note = f"缩短改写 {done} 处 / 重定位 {reloc} 条"
             for k, v in skipped.most_common(4):
                 print(f"    放弃 {v:>5} 处：{k}", file=sys.stderr)
-            short_used = True
+            map_off = _map_maker(wins)
+            starts = ({parsed[i][0] for i in range(len(parsed))}
+                      | {w[1] + 5 for w in wins})
+            if entry is None or entry not in starts or map_off(entry) is None:
+                print(f"❌ 入口偏移 0x{entry:X} 不在指令边界 → 退回等长改写", file=sys.stderr)
+                mode, data, wins = "on", data0, None
+            else:
+                new_entry = map_off(entry)
+                note += f" / 入口 0x{entry:X}→0x{new_entry:X}"
+                short_used = True
 
     if parsed is not None and mode == "on" and not short_used:
-        data, done, skipped = rewrite(data, parsed)
+        data, done, skipped = rewrite(data0, parsed)
         note = f"改写 {done} 处 / 模式 {done + sum(skipped.values())} 处（等长）"
         for k, v in skipped.most_common(4):
             print(f"    放弃 {v:>5} 处：{k}", file=sys.stderr)
@@ -440,6 +459,19 @@ def run(src: str, dst: str) -> int:
             write_out(data0)
             return 4
 
+    # 入口文件最后才写（一切自检通过后）：任何失败路径都没写过它，
+    # 转发层读不到就不会改 Result[2]，游戏拿到的仍是原样产物与原样入口。
+    if short_used and new_entry is not None:
+        entry_path = os.path.join(os.path.dirname(dst),
+                                   os.path.basename(dst).split(".")[0] + ".entry.txt")
+        try:
+            with open(entry_path, "w", encoding="ascii") as f:
+                f.write(hex(new_entry))
+        except OSError as exc:
+            print(f"❌ 写不出入口文件：{exc} → 整体退回原样", file=sys.stderr)
+            write_out(data0)
+            return 6
+
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
         with open(LOG, "a", encoding="utf-8") as f:
@@ -456,8 +488,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="产物改写器（等长 / 缩短两模式）")
     ap.add_argument("--in", dest="src", required=True, help="转发层落盘的原始产物")
     ap.add_argument("--out", dest="dst", required=True, help="要写回游戏的产物")
+    ap.add_argument("--entry", help="产物入口偏移（转发层从 Result[2] 取来，十六进制）——"
+                    "缩短模式必须同步更新它，否则游戏跳进指令中间（见模块 docstring）")
     args = ap.parse_args()
-    return run(args.src, args.dst)
+    entry = int(args.entry, 16) if args.entry else None
+    return run(args.src, args.dst, entry)
 
 
 if __name__ == "__main__":

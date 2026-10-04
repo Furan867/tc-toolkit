@@ -32,6 +32,10 @@
  *   NimStr = {long long len; void* ptr}      字符数据在 ptr + 8（不是内联！）
  *   Result = {long long out_len; void* out_ptr; ...}   共 40 字节
  *   注意 out_len 的值等于**整个缓冲的长度**（含 8 字节头），不是机器码长度。
+ *   qword[2]（out+16）= **入口偏移**（2026-10-05 实测：空源码 0x212F、RV32IM
+ *   0x215B，落在固定前缀末尾、组件区之前）—— 游戏每 tick 从产物的这个偏移
+ *   进入。缩短改写会平移它，必须同步更新，否则游戏跳进指令中间（实测必崩）。
+ *   改写器把新偏移写在 NNN.entry.txt，由本层读回改 qword[2]。
  *
  * 编译
  * ----
@@ -115,6 +119,21 @@ static int write_file(const char* path, const void* p, long long n) {
     return ok && written == (DWORD)n;
 }
 
+/* 读 NNN.entry.txt（一行十六进制）—— 改写器在缩短模式下写的新入口偏移。
+   文件不存在（等长/off/防御未过）返回 FALSE，本层就不动 Result[2]。 */
+static BOOL read_entry(const char* path, long long* val) {
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return FALSE;
+    char buf[32];
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
+    CloseHandle(h);
+    if (!ok || got == 0) return FALSE;
+    buf[got] = 0;
+    return sscanf(buf, "%llx", (unsigned long long*)val) == 1;
+}
+
 /* 优化器的运行日志。恒等改写时 opt 与 raw 逐字节相同，光看产物分不出
    「跑了但没改」和「压根没跑」—— 这行日志就是唯一的证据。 */
 static void opt_log(LONG seq, const char* tag) {
@@ -142,18 +161,23 @@ static void opt_log(LONG seq, const char* tag) {
  *   · 不换缓冲区 —— 直接覆盖原缓冲，于是没有「新内存谁分配、谁释放」的问题
  *   · 任何一步失败都静默放弃 —— 游戏绝不该因为优化器出问题而受影响
  */
-static void optimize_inplace(void* buf, long long len, LONG seq) {
+static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     if (!buf || len <= 0 || len > (64LL << 20)) return;
     CreateDirectoryA(OPT_DIR, NULL);
 
     char raw[MAX_PATH], opt[MAX_PATH], cmd[4 * MAX_PATH], err[MAX_PATH];
+    char entry[MAX_PATH];
     sprintf(raw, "%s%c%03ld.raw.bin", OPT_DIR, SEP, seq);
     sprintf(opt, "%s%c%03ld.opt.bin", OPT_DIR, SEP, seq);
     sprintf(err, "%s%copt_stderr.log", OPT_DIR, SEP);
+    sprintf(entry, "%s%c%03ld.entry.txt", OPT_DIR, SEP, seq);
+    DeleteFileA(entry);   /* 防残留：上一轮同号的入口文件不能影响本轮 */
     if (!write_file(raw, buf, len)) { opt_log(seq, "写 raw 失败，放弃"); return; }
 
-    sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\"",
-            PY_EXE, OPT_SCRIPT, raw, opt);
+    /* 把 Result[2]（旧入口偏移）传给改写器 —— 缩短模式必须同步更新它 */
+    sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX",
+            PY_EXE, OPT_SCRIPT, raw, opt,
+            out ? *(long long*)((char*)out + 16) : 0LL);
 
     /* 把子进程的输出/错误引到文件：游戏是 GUI 进程，标准句柄未必可用，
        直接继承会让 Python 在写 stderr 时出怪事，且现场也留不下来。 */
@@ -200,7 +224,16 @@ static void optimize_inplace(void* buf, long long len, LONG seq) {
     DWORD got = 0;
     BOOL ok = ReadFile(h, buf, (DWORD)len, &got, NULL);
     CloseHandle(h);
-    opt_log(seq, ok && got == (DWORD)len ? "已就地写回（长度未变）" : "写回失败");
+    if (!ok || got != (DWORD)len) { opt_log(seq, "写回失败"); return; }
+    opt_log(seq, "已就地写回（长度未变）");
+
+    /* 缩短模式：改写器把平移后的入口偏移写在 NNN.entry.txt，
+       必须同步改回 Result[2]，否则游戏按旧偏移调进指令中间（实测必崩） */
+    long long v = 0;
+    if (read_entry(entry, &v) && v > 0 && v < len) {
+        *(long long*)((char*)out + 16) = v;
+        opt_log(seq, "入口偏移已更新");
+    }
 }
 
 /* 加载时清空 OUT_DIR 下的 .si / .bin。
@@ -257,6 +290,7 @@ static void purge_workdir(void) {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (!ends_with_ci(fd.cFileName, ".raw.bin") &&
             !ends_with_ci(fd.cFileName, ".opt.bin") &&
+            !ends_with_ci(fd.cFileName, ".entry.txt") &&
             !ends_with_ci(fd.cFileName, ".log")) continue;
         lstrcpyA(path, OPT_DIR);
         lstrcatA(path, "\\");
@@ -295,7 +329,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         if (optr) {
             dump("out", ".bin", optr, olen, seq);
             /* MVP：让产物去 Python 里转一圈，原样写回。任何一步失败都不影响返回。 */
-            optimize_inplace(optr, olen, seq);
+            optimize_inplace(optr, olen, seq, out);
         }
     }
     return ret;

@@ -14,3 +14,6 @@ __pycache__/
 
 # 构建产物（由 tools/compile_hook.c 编译而来）
 build/
+
+# 运行时开关：每次「开 / 关」对照实验都要改，不进 git（模板见 opt.ini.example）
+opt.ini

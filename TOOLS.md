@@ -32,11 +32,19 @@
 ### 目录约定
 
 ```
-work/hook/     捕获的源码(.si)与产物(.bin)   ← 同号即一对；**转发层加载时清空**
+work/hook/     捕获的源码(.si)与产物(.bin)   ← 同号即一对
+work/opt/      转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log 等三个 log
+work/freq/     主频采样输出：freq_log.tsv（事件）与 freq_summary.txt（给人读）
 work/symbols/  符号表          work/maps/   组件映射表与建映射中间产物
 work/reports/  分析报告        work/tmp/    一次性中间产物
 build/         compile_hook.dll（构建产物）
 ```
+
+**清空语义**（★ 2026-10-05 统一）：`work/hook/` 与 `work/opt/` 都是**转发层的工作区**，
+两边的编号同出一源（DLL 的 `g_seq`），所以**每次加载（游戏启动）一起清空** —— 只清
+一边就会新旧同号混在一起（实测 `optimize.log` 里同一编号攒到 5 条，而对应的
+`hook_out_001.bin` 只剩本轮那份，回查指纹就会张冠李戴）。
+`work/freq/` 是**采样数据**，跨会话保留 —— 它早先住在 `work/opt/` 里，会被一起清掉。
 
 ### 用法
 
@@ -119,8 +127,22 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 | `check_shift_equiv.py` | 把改写前后的两段字节各拷进一块 RWX 内存**真的跑一遍**对比结果，验证规则语义等价（当前 5280 组） | ✅ |
 | `try_compile_dll.py --hook` | 强制加载转发层调 `compile()`，用于**离线**验证这条管路（注意转发层加载时会清空 `work/hook/`） | ✅ |
 
-运行痕迹都在 `work/opt/`：`hook.log`（每次编译是「已就地写回」还是「放弃」）、
-`optimize.log`（改写处数 / 是否被配置关掉）、`opt_stderr.log`（自检与抽查明细）。
+运行痕迹都在 `work/opt/`（**每次游戏启动清空**）：`hook.log`（每次编译是「已就地写回」
+还是「放弃」）、`optimize.log`（改写处数 / 是否被配置关掉 / 产物 sha256）、
+`opt_stderr.log`（自检与抽查明细）。
+
+**`opt.ini` 不在 git 里**（★ 2026-10-05）：它每做一次「开 / 关」对照实验都要改，
+留着会让工作区长期显示为脏。模板是 `opt.ini.example`，首次
+`cp opt.ini.example opt.ini`。切换方式就是搬注释符（`;` 与 `#` 都行，
+`configparser` 两种都认）：
+
+```ini
+rewrite = on
+; rewrite = off
+```
+
+同一时刻**只能有一行生效** —— 两行都放开时 configparser 会因重复 key 报错，
+`rewrite_on()` 便按「开启」兜底。
 
 ---
 

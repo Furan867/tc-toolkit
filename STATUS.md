@@ -393,8 +393,16 @@ DR 断点、捕获 RIP 并自动分离。**已知缺陷**：地址靠命令行�
 `(cycle 增量) / (时间增量)`；紧邻的 `last_cycle_count`（0x624D608）与
 `last_speed_check`（0x624D610，Unix 时间戳 double）就是这两个快照。
 
-取数用 `tools/read_freq.py`（单次）或 `tools/watch_freq.py`（被动常驻，落
-`work/opt/freq_log.tsv`），**不再需要人眼读 UI**。
+取数用 `tools/read_freq.py`（单次快照）或 `tools/watch_freq.py`（被动常驻），
+**不再需要人眼读 UI**。常驻采样器的产物在 `work/freq/`（★ 2026-10-05 从 `work/opt/`
+迁出 —— 那里每次游戏启动会被转发层清空）：
+
+- `freq_summary.txt` —— **给人读的总结，取数只读它**（每次运行覆盖）。按「一次编译
+  → 一次运行」的区间归并，**一个电路一行**（取该区间最大的非停机段中位数；
+  过渡值天然偏低，取最大就把它排除了），行内带产物 sha256 前 8 位 = 电路指纹，
+  同电路重复编译指纹相同、可直接横向比。
+- `freq_log.tsv` —— 事件流（会话 / 编译点 / 段摘要 / 总结），只给脚本用；
+  回溯历史用 `grep summary`，别整文件读（监听几分钟就几百行）。
 
 判据（实测，原始数据 `work/freq_1.txt`）：
 

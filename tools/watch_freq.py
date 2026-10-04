@@ -226,8 +226,10 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
 def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str]]:
     """按「一次编译 → 一次运行」的区间归并，**一个电路一行**。
 
-    两次编译之间必然是同一次运行，所以每个区间只取最大的有效段中位数当代表；
-    过渡段（< 3 样本）与停机段不参与。一次都没跑起来的区间直接省略。
+    两次编译之间必然是同一次运行，所以每个区间只取**最大的非停机段中位数**当
+    代表。不设样本数下限：过渡值（窗口横跨切换点）总是偏低，取最大就天然把它
+    排除了；反之，短时间运行（稳定段只有 1~2 个样本）也能被如实报出来 ——
+    行内的样本数就是读者判断可靠性的依据。一次都没跑起来的区间省略。
     返回 (标题, **无色**文本行) —— 终端与 freq_summary.txt 共用同一份文字。
     """
     lines: list[str] = []
@@ -236,7 +238,7 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
     for region in regions:
         segments = region["segments"]
         total += sum(len(vals) for _med, vals in segments)
-        runs = [(med, vals) for med, vals in segments if med > 0 and len(vals) >= 3]
+        runs = [(med, vals) for med, vals in segments if med > 0]
         if runs:
             nth += 1
             med, vals = max(runs, key=lambda mv: mv[0])
@@ -250,9 +252,6 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
             if region["rewrite"]:
                 row += f"  rewrite={region['rewrite']}"
             lines.append(row)
-            if region["idle_before_run"]:
-                lines.append(f"      └ 首次运行前有停机 {region['idle_before_run']}s"
-                             f"（切电路 / 重编译后常被停一次，要再点运行）")
         elif verbose:
             lines.append(f"   --) {region['label']:<8s} 未运行")
         if verbose:
@@ -327,7 +326,7 @@ def main() -> int:
     def new_region(label: str, fp: str = "", rewritten: str = "",
                    rewrite: str = "") -> None:
         regions.append({"label": label, "fp": fp, "rewritten": rewritten,
-                        "rewrite": rewrite, "segments": [], "idle_before_run": 0})
+                        "rewrite": rewrite, "segments": []})
 
     def report_compile(label: str, name: str, starter: bool = False) -> None:
         """打一条编译点（启动时补报的那条标为"起始"）。"""
@@ -342,18 +341,12 @@ def main() -> int:
         sink.write("compile", note=f"{tag} {name} 指纹={fp} {rewritten} rewrite={rewrite}")
 
     def on_segment(samples: list[tuple[float, float]]) -> None:
-        """段收尾时不打印，只记账：落一行日志 + 存进当前区间（退出时按区间归并）。
-
-        当前区间里**首个运行段之前**的停机单独计数 —— 切电路 / 重编译后常常
-        会被停一次、要再点运行，这个现象必须出现在报告里。
-        """
+        """段收尾时不打印，只记账：落一行日志 + 存进当前区间（退出时按区间归并）。"""
         vals = [hz for _t, hz in samples]
         med = statistics.median(vals)
         dur = samples[-1][0] - samples[0][0] + 1.0
         region = regions[-1]
         region["segments"].append((med, vals))
-        if med == 0 and not any(m > 0 for m, _v in region["segments"][:-1]):
-            region["idle_before_run"] += len(vals)
         spread = 0.0 if med == 0 else (max(vals) - min(vals)) / med * 100
         sink.write("segment", hz=None if med == 0 else med,
                    note=f"{region['label']} n={len(samples)} 时长={dur:.0f}s "

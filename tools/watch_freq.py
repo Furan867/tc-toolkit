@@ -4,28 +4,33 @@
 为什么是被动的
 --------------
 游戏每秒重算一次实测主频（`sim_speed`，float32 Hz，模块内偏移 0x624D618）。
-本工具按同一节奏轮询它，把样本落进 `work/opt/freq_log.tsv`，同时在终端实时
-显示。切配置 / 重编译电路之后**不需要再叫人跑脚本**。
+本工具按同一节奏轮询它，在终端实时显示，退出时给一份按「编译区间」归并的
+总结。切配置 / 重编译电路之后**不需要再叫人跑脚本**。
 
-实测判据（2026-10-04，数据见 work/freq_1.txt）
----------------------------------------------
+实测判据（2026-10-04，原始数据 work/freq_1.txt）
+-----------------------------------------------
     暂停 / 停止        → 0            （游戏自己把统计归零）
     电路自带速度上限   → 停在上限值   （实测电路 B 限 10 kHz：非 0 但极低）
     启动 / 停止那一秒  → 一个混合值   （窗口横跨切换点，会自成小段）
 
-所以 **低值不能当噪声丢**，只按值分段；样本数 < 3 的段判为"过渡"，不计入统计。
-混合值天然自成 1 样本的小段，因此不需要额外丢弃段首尾。
+所以 **低值不能当噪声丢**，只按值分段；样本数 < 3 的段判为"过渡"，不参与统计。
 
 产物 ↔ 电路
 ----------
 编译点从 `work/opt/optimize.log` 取该产物的 **sha256 前 8 位**当"电路指纹"——
-同一电路反复编译指纹相同，日志里据此能把重复测量自动归组。
+同一电路反复编译指纹相同。
+
+读哪里
+------
+**只看退出时那份总结**（终端上就是，另外还落一份无色的 `work/opt/freq_summary.txt`）。
+逐事件的 `work/opt/freq_log.tsv` 只给脚本用，别手动读它 —— 监听几分钟就能摞
+几百行，读它只会污染上下文。
 
 用法
 ----
     py tools/watch_freq.py                  # Ctrl-C 停
-    py tools/watch_freq.py --seconds 30     # 记 30 秒后自动收尾
-    py tools/watch_freq.py --interval 0.25  # 轮询更密（游戏仍是每秒才换值）
+    py tools/watch_freq.py --seconds 60     # 记 60 秒后自动收尾
+    py tools/watch_freq.py -v               # 总结里附上逐段明细
 """
 from __future__ import annotations
 
@@ -48,21 +53,21 @@ ROOT = Path(__file__).resolve().parent.parent
 HOOK_DIR = ROOT / "work" / "hook"
 OUT_DIR = ROOT / "work" / "opt"
 LOG_PATH = OUT_DIR / "freq_log.tsv"
+SUMMARY_PATH = OUT_DIR / "freq_summary.txt"      # 给人读的总结（追加写，几十行）
 OPT_INI = ROOT / "opt.ini"
 OPT_LOG = OUT_DIR / "optimize.log"
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
-# last_cycle_count 在 0x624D608，本工具不读它 —— “电路是否在推进”靠
+# last_cycle_count 在 0x624D608，本工具不读它 —— "电路是否在推进"靠
 # last_speed_check 变不变来判断。
 OFF_TIME = 0x14624D610 - BASE_VA
 OFF_SIM_SPEED = 0x14624D618 - BASE_VA
 
 BAR_UNIT_HZ = 0.7e6      # 柱状图每格代表的频率（满 14 格 ≈ 9.8 MHz）
 BAR_WIDTH = 14
-IDLE_HEARTBEAT = 30.0    # 停机时每隔多少秒给一行心跳（免得看着像卡死）
 SEG_TOL = 0.05           # 段内允许的相对波动
-POLL = 0.1               # 轮询间隔（只为及时捕捉“游戏刚重算”的时刻）
+POLL = 0.1               # 轮询间隔（只为及时捕捉"游戏刚重算"的时刻）
 
 
 def disp_width(text: str) -> int:
@@ -100,7 +105,10 @@ def hz_style(hz: float) -> tuple[str, ...]:
 
 
 class Sink:
-    """终端 + 日志双写：终端给人看，日志给脚本读（TSV，不掺颜色）。"""
+    """终端 + 日志双写：终端给人看，日志给脚本读（TSV，不掺颜色）。
+
+    日志**只记事件与段摘要**，不逐样本落盘 —— 后者会让文件长到几百行。
+    """
 
     def __init__(self, log_path: Path):
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,7 +134,6 @@ class Segmenter:
     def __init__(self, on_close):
         self.on_close = on_close
         self.samples: list[tuple[float, float]] = []      # (本地时刻, Hz)
-        self.closed = 0                                   # 已关闭的段数
 
     def value(self) -> float:
         return statistics.median(hz for _t, hz in self.samples)
@@ -154,13 +161,8 @@ class Segmenter:
     def close(self) -> None:
         if not self.samples:
             return
-        self.closed += 1
-        self.on_close(self.closed, self.samples)
+        self.on_close(self.samples)
         self.samples = []
-
-    def no(self) -> int:
-        """当前段的编号。"""
-        return self.closed + 1
 
     def count(self) -> int:
         return len(self.samples)
@@ -183,6 +185,17 @@ def scan_hook_dir(seen: set[str]) -> list[str]:
     seen.clear()
     seen.update(names)
     return new
+
+
+def latest_product() -> str | None:
+    """当前 hook 目录里最新的产物（用来在启动时补报"现在跑的是哪个"）。"""
+    try:
+        names = sorted(p.name for p in HOOK_DIR.iterdir()
+                       if p.is_file() and p.name.startswith("hook_out_")
+                       and p.suffix == ".bin")
+    except OSError:
+        return None
+    return names[-1] if names else None
 
 
 def opt_info(num: str | None) -> tuple[str, str, str]:
@@ -210,43 +223,61 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
-def print_summary(collected: list[tuple[float, list[float]]], sink: Sink) -> None:
-    """退出时统一总结：相邻同类段先合并（编译点会把同一频率切成好几段），
-    只报**平均值与波动** —— 段号对读者没意义，过程逐行已经在终端上流过一遍。
+def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str]]:
+    """按「一次编译 → 一次运行」的区间归并，**一个电路一行**。
 
-    日志里也只留这一条摘要，不再逐样本落盘（15 秒就能摞几百行，读它只会
-    污染上下文）。
+    两次编译之间必然是同一次运行，所以每个区间只取最大的有效段中位数当代表；
+    过渡段（< 3 样本）与停机段不参与。一次都没跑起来的区间直接省略。
+    返回 (标题, **无色**文本行) —— 终端与 freq_summary.txt 共用同一份文字。
     """
-    if not collected:
-        print(term.paint("（没有采到任何样本）", "yellow"))
-        return
-    merged: list[tuple[float, list[float]]] = []
-    for med, vals in collected:
-        if merged:
-            prev_med, prev_vals = merged[-1]
-            same = (med == 0 and prev_med == 0) or (
-                med != 0 and prev_med != 0 and abs(med - prev_med) <= prev_med * SEG_TOL)
-            if same:
-                merged[-1] = (prev_med, prev_vals + vals)
-                continue
-        merged.append((med, vals))
+    lines: list[str] = []
+    nth = 0
+    total = 0
+    for region in regions:
+        segments = region["segments"]
+        total += sum(len(vals) for _med, vals in segments)
+        runs = [(med, vals) for med, vals in segments if med > 0 and len(vals) >= 3]
+        if runs:
+            nth += 1
+            med, vals = max(runs, key=lambda mv: mv[0])
+            row = (f"  {nth:>2d}) {region['label']:<8s} {med / 1e6:8.3f} MHz"
+                   f"  ×{len(vals):<3d} 样本"
+                   f"  波动 {(max(vals) - min(vals)) / med * 100:5.2f}%")
+            if region["fp"] and region["fp"] != "-":
+                row += f"   指纹 {region['fp']}"
+            if region["rewritten"]:
+                row += f"  {region['rewritten']}"
+            if region["rewrite"]:
+                row += f"  rewrite={region['rewrite']}"
+            lines.append(row)
+            if region["idle_before_run"]:
+                lines.append(f"      └ 首次运行前有停机 {region['idle_before_run']}s"
+                             f"（切电路 / 重编译后常被停一次，要再点运行）")
+        elif verbose:
+            lines.append(f"   --) {region['label']:<8s} 未运行")
+        if verbose:
+            for med, vals in segments:
+                what = "停机" if med == 0 else f"{med / 1e6:8.3f} MHz"
+                lines.append(f"      · {region['label']:<8s} {what}"
+                             f"  ×{len(vals):<3d} {'过渡' if len(vals) < 3 else ''}")
+    return f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s", lines
 
-    total = sum(len(vals) for _med, vals in merged)
-    print(f"\n{term.paint('── 总结 ──', 'bold', 'magenta')}  "
-          f"{term.paint(f'{len(merged)} 段 · 共 {total} 个样本', 'cyan')}")
-    for nth, (med, vals) in enumerate(merged, 1):
-        tag = term.paint(f"{nth})", "bold", "yellow")
-        if med == 0:
-            print(f"   {tag} {term.paint(pad('停机', 13), 'yellow')}  "
-                  f"{term.paint(f'×{len(vals)}', 'cyan')}")
-            continue
-        spread = (max(vals) - min(vals)) / med * 100
-        print(f"   {tag} {term.paint(fmt_hz(med), *hz_style(med))}  "
-              f"{term.paint(f'×{len(vals)} 样本', 'cyan')}  "
-              f"{term.paint(f'波动 {spread:.2f}%', 'cyan')}")
-    sink.write("summary", note="; ".join(
-        "停机" if med == 0 else f"{med / 1e6:.3f}MHz" for med, _vals in merged
-    ) + f" （共 {total} 样本）")
+
+def print_summary(regions: list[dict], sink: Sink, verbose: bool = False) -> None:
+    """终端打印总结，并另落一份**无色**的 freq_summary.txt —— 以后取数只读它，
+    不再去碰逐事件的 freq_log.tsv（那文件会长到几百行）。"""
+    title, lines = summarize(regions, verbose)
+    print()
+    print(term.paint(f"── 总结 ──  {title}", "bold", "magenta"))
+    for line in lines:
+        print(line)
+    if not lines:
+        print(term.paint("   （本次没有跑起来的电路）", "yellow"))
+    body = lines or ["   （本次没有跑起来的电路）"]
+    with SUMMARY_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S}  {title} ===\n")
+        fh.write("".join(f"{ln}\n" for ln in body))
+    sink.write("summary", note=title)
 
 
 def wait_for_game() -> tuple[int, int]:
@@ -270,6 +301,8 @@ def main() -> int:
                     help="两次样本的最小间隔秒（默认 1.0，与游戏重算节奏一致；再密不产生新信息）")
     ap.add_argument("--seconds", type=float, default=0.0,
                     help="记录指定秒数后自动收尾（默认 0 = 一直记到 Ctrl-C）")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="总结里附上每个区间的逐段明细")
     args = ap.parse_args()
 
     sink = Sink(LOG_PATH)
@@ -278,20 +311,52 @@ def main() -> int:
     sink.write("session", note=f"开始记录 PID={pid} 基址=0x{base:X}")
     print(f"{term.paint('● 已连接', 'bold', 'green')}  PID {term.paint(str(pid), 'bold')}  "
           f"基址 {term.paint(f'0x{base:X}', 'blue')}  "
-          f"{term.paint('日志 work/opt/freq_log.tsv  ·  Ctrl-C 结束', 'cyan')}\n")
+          f"{term.paint('总结会写进 work/opt/freq_summary.txt  ·  Ctrl-C 结束', 'cyan')}\n")
 
-    collected: list[tuple[float, list[float]]] = []
+    regions: list[dict] = []
+    on_heartbeat = False
 
-    def on_segment(index: int, samples: list[tuple[float, float]]) -> None:
-        """段收尾时**不打印**（段号对读者无意义、还打断节奏），只记账：落一行到
-        日志，并收进 `collected` 供退出时统一总结。"""
+    def say(text: str) -> None:
+        """输出一行；若上一条是原地刷新的心跳行，先把位置让出来。"""
+        nonlocal on_heartbeat
+        if on_heartbeat:
+            sys.stdout.write("\n")
+            on_heartbeat = False
+        print(text, flush=True)
+
+    def new_region(label: str, fp: str = "", rewritten: str = "",
+                   rewrite: str = "") -> None:
+        regions.append({"label": label, "fp": fp, "rewritten": rewritten,
+                        "rewrite": rewrite, "segments": [], "idle_before_run": 0})
+
+    def report_compile(label: str, name: str, starter: bool = False) -> None:
+        """打一条编译点（启动时补报的那条标为"起始"）。"""
+        m = re.search(r"(\d+)", name)
+        fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
+        tag = "起始编译" if starter else "编译点"
+        when = datetime.now().strftime("[%H:%M:%S]")
+        say(f"{term.paint(when, 'blue')}  {term.paint('▣ ' + tag, 'bold', 'magenta')} "
+            f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
+            + (f"  {term.paint(rewritten, 'green')}" if rewritten else "")
+            + f"  {term.paint('rewrite=' + rewrite, 'cyan')}")
+        sink.write("compile", note=f"{tag} {name} 指纹={fp} {rewritten} rewrite={rewrite}")
+
+    def on_segment(samples: list[tuple[float, float]]) -> None:
+        """段收尾时不打印，只记账：落一行日志 + 存进当前区间（退出时按区间归并）。
+
+        当前区间里**首个运行段之前**的停机单独计数 —— 切电路 / 重编译后常常
+        会被停一次、要再点运行，这个现象必须出现在报告里。
+        """
         vals = [hz for _t, hz in samples]
         med = statistics.median(vals)
         dur = samples[-1][0] - samples[0][0] + 1.0
+        region = regions[-1]
+        region["segments"].append((med, vals))
+        if med == 0 and not any(m > 0 for m, _v in region["segments"][:-1]):
+            region["idle_before_run"] += len(vals)
         spread = 0.0 if med == 0 else (max(vals) - min(vals)) / med * 100
-        collected.append((med, vals))
         sink.write("segment", hz=None if med == 0 else med,
-                   note=f"段{index} n={len(samples)} 时长={dur:.0f}s "
+                   note=f"{region['label']} n={len(samples)} 时长={dur:.0f}s "
                         + ("停机" if med == 0 else f"中位数={med:.0f}Hz 波动={spread:.1f}%")
                         + (" 过渡" if len(samples) < 3 else ""))
 
@@ -305,10 +370,18 @@ def main() -> int:
         return struct.unpack("<f", raw_speed)[0], struct.unpack("<d", raw_time)[0]
 
     seen: set[str] = set()
-    scan_hook_dir(seen)               # 首次只登记现状，不报成"新编译"
+    scan_hook_dir(seen)               # 首次只登记现状，不重复报成"新编译"
+    starter = latest_product()
+    if starter:
+        report_compile("", starter, starter=True)
+        m = re.search(r"(\d+)", starter)
+        fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
+        new_region(f"#{m.group(1)}" if m else starter, fp, rewritten, rewrite)
+    else:
+        new_region("起始")
+
     last_game_time: float | None = None
     sampled_at = 0.0
-    last_idle_note = 0.0
     deadline = time.time() + args.seconds if args.seconds > 0 else None
 
     try:
@@ -319,19 +392,17 @@ def main() -> int:
             clock = datetime.now().strftime("[%H:%M:%S]")
 
             for name in scan_hook_dir(seen):
+                seg.close()           # 先让旧段落进旧区间
+                report_compile("", name)
                 m = re.search(r"(\d+)", name)
                 fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
-                extra = f"  {term.paint(rewritten, 'green')}" if rewritten else ""
-                print(f"{term.paint(clock, 'blue')}  {term.paint('▣ 编译点', 'bold', 'magenta')} "
-                      f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
-                      f"{extra}  {term.paint('rewrite=' + rewrite, 'cyan')}")
-                sink.write("compile", note=f"{name} 指纹={fp} {rewritten} rewrite={rewrite}")
-                seg.close()           # 编译点是天然的段分界
+                new_region(f"#{m.group(1)}" if m else name, fp, rewritten, rewrite)
                 last_game_time = None
 
             if not winmem.find_pid(EXE):
                 sink.write("game", note="游戏已退出，等待重新启动")
-                print(f"{term.paint(clock, 'blue')}  {term.paint('○ 游戏退出，等待重启 …', 'yellow')}")
+                say(f"{term.paint(clock, 'blue')}  "
+                    f"{term.paint('○ 游戏退出，等待重启 …', 'yellow')}")
                 pid, base = wait_for_game()
                 h = winmem.open_process(pid)
                 seen.clear()
@@ -345,9 +416,9 @@ def main() -> int:
                 continue
             hz, game_time = cur
 
-            # 停机时游戏的统计会**整体冻结**（连 last_speed_check 都不再更新），所以
-            # 不能只靠“游戏换了值”出样本 —— 那样停机期间一行记录也不会有，段长
-            # 无从得知。两条腿：游戏一重算就立刻记（相位对齐），否则到点兜底记一次。
+            # 停机时游戏的统计会**整体冻结**（连 last_speed_check 都不再更新），
+            # 所以不能只靠"游戏换了值"出样本 —— 那样停机期间一行记录也不会有。
+            # 两条腿：游戏一重算就立刻记（相位对齐），否则到点兜底记一次。
             fresh = game_time != last_game_time
             due = time.time() - sampled_at >= args.interval
             if not fresh and not due:
@@ -357,22 +428,23 @@ def main() -> int:
 
             started = seg.add(time.time(), hz)
             if hz == 0:
-                # 停机不逐行刷屏：中间只给低频心跳（第一秒也来一条，免得看着像
-                # 卡死），整段的平均与波动留到退出时的总结。
-                if time.time() - last_idle_note >= IDLE_HEARTBEAT:
-                    last_idle_note = time.time()
-                    print(f"{term.paint(clock, 'blue')}  "
-                          f"{term.paint(f'· 仍在停机（已 {seg.count()}s）', 'yellow')}")
+                # 停机心跳与采样同频，但**原地刷新同一行**，所以不会刷屏。
+                sys.stdout.write("\r" + term.paint(
+                    f"{clock}  · 仍在停机（已 {seg.count()}s）", "yellow"))
+                sys.stdout.flush()
+                on_heartbeat = True
                 continue
             mark = term.paint("▲", "green") if started else " "
             style = hz_style(hz)
-            print(f"{term.paint(clock, 'blue')} {mark} {term.paint(fmt_hz(hz), *style)}"
-                  f" {term.paint(bar(hz), *style)}")
+            say(f"{term.paint(clock, 'blue')} {mark} {term.paint(fmt_hz(hz), *style)}"
+                f" {term.paint(bar(hz), *style)}")
     except KeyboardInterrupt:
         print()
     finally:
+        if on_heartbeat:
+            sys.stdout.write("\n")
         seg.close()
-        print_summary(collected, sink)
+        print_summary(regions, sink, args.verbose)
         sink.write("session", note="结束记录")
         sink.close()
         print(term.paint("■ 已停止", "bold", "green"))

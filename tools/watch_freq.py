@@ -53,7 +53,8 @@ OPT_LOG = OUT_DIR / "optimize.log"
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
-OFF_CYCLE = 0x14624D608 - BASE_VA
+# last_cycle_count 在 0x624D608，本工具不读它 —— “电路是否在推进”靠
+# last_speed_check 变不变来判断。
 OFF_TIME = 0x14624D610 - BASE_VA
 OFF_SIM_SPEED = 0x14624D618 - BASE_VA
 
@@ -107,15 +108,12 @@ class Sink:
         self.fh = log_path.open("a", encoding="utf-8")
         if fresh:
             self.fh.write("# tools/watch_freq.py 追加写（TSV）\n")
-            self.fh.write("# 列：时间\t类型\t值(Hz)\tcycle\t备注\n")
+            self.fh.write("# 列：时间\t类型\t值(Hz)\t备注\n")
             self.fh.flush()
 
-    def write(self, kind: str, hz: float | None = None, cycle: int | None = None,
-              note: str = "") -> None:
-        self.fh.write(
-            f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{kind}\t"
-            f"{'' if hz is None else round(hz)}\t"
-            f"{'' if cycle is None else cycle}\t{note}\n")
+    def write(self, kind: str, hz: float | None = None, note: str = "") -> None:
+        self.fh.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{kind}\t"
+                      f"{'' if hz is None else round(hz)}\t{note}\n")
         self.fh.flush()
 
     def close(self) -> None:
@@ -212,6 +210,45 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
+def print_summary(collected: list[tuple[float, list[float]]], sink: Sink) -> None:
+    """退出时统一总结：相邻同类段先合并（编译点会把同一频率切成好几段），
+    只报**平均值与波动** —— 段号对读者没意义，过程逐行已经在终端上流过一遍。
+
+    日志里也只留这一条摘要，不再逐样本落盘（15 秒就能摞几百行，读它只会
+    污染上下文）。
+    """
+    if not collected:
+        print(term.paint("（没有采到任何样本）", "yellow"))
+        return
+    merged: list[tuple[float, list[float]]] = []
+    for med, vals in collected:
+        if merged:
+            prev_med, prev_vals = merged[-1]
+            same = (med == 0 and prev_med == 0) or (
+                med != 0 and prev_med != 0 and abs(med - prev_med) <= prev_med * SEG_TOL)
+            if same:
+                merged[-1] = (prev_med, prev_vals + vals)
+                continue
+        merged.append((med, vals))
+
+    total = sum(len(vals) for _med, vals in merged)
+    print(f"\n{term.paint('── 总结 ──', 'bold', 'magenta')}  "
+          f"{term.paint(f'{len(merged)} 段 · 共 {total} 个样本', 'cyan')}")
+    for nth, (med, vals) in enumerate(merged, 1):
+        tag = term.paint(f"{nth})", "bold", "yellow")
+        if med == 0:
+            print(f"   {tag} {term.paint(pad('停机', 13), 'yellow')}  "
+                  f"{term.paint(f'×{len(vals)}', 'cyan')}")
+            continue
+        spread = (max(vals) - min(vals)) / med * 100
+        print(f"   {tag} {term.paint(fmt_hz(med), *hz_style(med))}  "
+              f"{term.paint(f'×{len(vals)} 样本', 'cyan')}  "
+              f"{term.paint(f'波动 {spread:.2f}%', 'cyan')}")
+    sink.write("summary", note="; ".join(
+        "停机" if med == 0 else f"{med / 1e6:.3f}MHz" for med, _vals in merged
+    ) + f" （共 {total} 样本）")
+
+
 def wait_for_game() -> tuple[int, int]:
     """等游戏出现，返回 (pid, 模块基址)。只读内存，不碰游戏。"""
     hinted = False
@@ -243,43 +280,34 @@ def main() -> int:
           f"基址 {term.paint(f'0x{base:X}', 'blue')}  "
           f"{term.paint('日志 work/opt/freq_log.tsv  ·  Ctrl-C 结束', 'cyan')}\n")
 
+    collected: list[tuple[float, list[float]]] = []
+
     def on_segment(index: int, samples: list[tuple[float, float]]) -> None:
+        """段收尾时**不打印**（段号对读者无意义、还打断节奏），只记账：落一行到
+        日志，并收进 `collected` 供退出时统一总结。"""
         vals = [hz for _t, hz in samples]
         med = statistics.median(vals)
         dur = samples[-1][0] - samples[0][0] + 1.0
-        head = f"{term.paint(f'[段 {index}]', 'bold', 'magenta')}"
-        if med == 0:
-            note = f"段{index} n={len(samples)} 时长={dur:.0f}s 停机"
-            sink.write("segment", note=note)
-            print(f"   {head}  {term.paint(f'停机 ×{len(samples)} 样本 · {dur:.0f}s', 'yellow')}")
-            return
-        spread = f"波动 {(max(vals) - min(vals)) / med * 100:.1f}%"
-        transitional = len(samples) < 3
-        note = (f"段{index} n={len(samples)} 时长={dur:.0f}s 中位数={med:.0f}Hz "
-                f"{spread}{' 过渡' if transitional else ''}")
-        sink.write("segment", hz=med, note=note)
-        print(f"   {head}  {term.paint(fmt_hz(med), *hz_style(med))}  "
-              f"{term.paint(f'×{len(samples)} 样本 · {dur:.0f}s', 'cyan')}  "
-              f"{term.paint(spread, 'cyan')}"
-              f"{term.paint('（过渡：窗口横跨切换点）' if transitional else '', 'yellow')}")
+        spread = 0.0 if med == 0 else (max(vals) - min(vals)) / med * 100
+        collected.append((med, vals))
+        sink.write("segment", hz=None if med == 0 else med,
+                   note=f"段{index} n={len(samples)} 时长={dur:.0f}s "
+                        + ("停机" if med == 0 else f"中位数={med:.0f}Hz 波动={spread:.1f}%")
+                        + (" 过渡" if len(samples) < 3 else ""))
 
     seg = Segmenter(on_segment)
 
     def read_all():
         raw_speed = winmem.rpm(h, base + OFF_SIM_SPEED, 4)
-        raw_cycle = winmem.rpm(h, base + OFF_CYCLE, 8)
         raw_time = winmem.rpm(h, base + OFF_TIME, 8)
-        if raw_speed is None or raw_cycle is None or raw_time is None:
+        if raw_speed is None or raw_time is None:
             return None
-        return (struct.unpack("<f", raw_speed)[0],
-                struct.unpack("<q", raw_cycle)[0],
-                struct.unpack("<d", raw_time)[0])
+        return struct.unpack("<f", raw_speed)[0], struct.unpack("<d", raw_time)[0]
 
     seen: set[str] = set()
     scan_hook_dir(seen)               # 首次只登记现状，不报成"新编译"
     last_game_time: float | None = None
     sampled_at = 0.0
-    idle_rounds = 0
     last_idle_note = 0.0
     deadline = time.time() + args.seconds if args.seconds > 0 else None
 
@@ -315,7 +343,7 @@ def main() -> int:
             cur = read_all()
             if cur is None:
                 continue
-            hz, cycle, game_time = cur
+            hz, game_time = cur
 
             # 停机时游戏的统计会**整体冻结**（连 last_speed_check 都不再更新），所以
             # 不能只靠“游戏换了值”出样本 —— 那样停机期间一行记录也不会有，段长
@@ -324,37 +352,30 @@ def main() -> int:
             due = time.time() - sampled_at >= args.interval
             if not fresh and not due:
                 continue
-            if not fresh and idle_rounds == 0:
-                sink.write("note", note="游戏统计停更（可能已暂停 / 未运行电路），转为固定节奏记录")
-                print(f"{term.paint(clock, 'blue')}  "
-                      f"{term.paint('… 游戏统计停更（暂停 / 未运行电路），转为固定节奏记录', 'yellow')}")
-                last_idle_note = time.time()
-            idle_rounds = 0 if fresh else idle_rounds + 1
             last_game_time = game_time
             sampled_at = time.time()
 
             started = seg.add(time.time(), hz)
-            sink.write("sample", hz, cycle)
             if hz == 0:
-                # 停机不逐行刷屏：整段只在结束时汇总一行，中间给低频心跳，
-                # 免得看着像卡死。
+                # 停机不逐行刷屏：中间只给低频心跳（第一秒也来一条，免得看着像
+                # 卡死），整段的平均与波动留到退出时的总结。
                 if time.time() - last_idle_note >= IDLE_HEARTBEAT:
                     last_idle_note = time.time()
                     print(f"{term.paint(clock, 'blue')}  "
-                          f"{term.paint(f'· 停机中（本段已 {seg.count()}s）', 'yellow')}")
+                          f"{term.paint(f'· 仍在停机（已 {seg.count()}s）', 'yellow')}")
                 continue
             mark = term.paint("▲", "green") if started else " "
             style = hz_style(hz)
-            print(f"{term.paint(clock, 'blue')} {mark} {term.paint(fmt_hz(hz), *style)} "
-                  f"{term.paint(bar(hz), *style)} "
-                  f"{term.paint(f'段{seg.no()}·{seg.count()}', 'cyan')}")
+            print(f"{term.paint(clock, 'blue')} {mark} {term.paint(fmt_hz(hz), *style)}"
+                  f" {term.paint(bar(hz), *style)}")
     except KeyboardInterrupt:
         print()
     finally:
         seg.close()
+        print_summary(collected, sink)
         sink.write("session", note="结束记录")
         sink.close()
-        print(term.paint("■ 已停止，样本已写入 work/opt/freq_log.tsv", "bold", "green"))
+        print(term.paint("■ 已停止", "bold", "green"))
     return 0
 
 

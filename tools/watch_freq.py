@@ -223,7 +223,7 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
-def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str]]:
+def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str], str]:
     """按「一次编译 → 一次运行」的区间归并，**一个电路一行**。
 
     两次编译之间必然是同一次运行，所以每个区间只取**最大的非停机段中位数**当
@@ -233,6 +233,7 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
     返回 (标题, **无色**文本行) —— 终端与 freq_summary.txt 共用同一份文字。
     """
     lines: list[str] = []
+    digest: list[str] = []
     nth = 0
     total = 0
     for region in regions:
@@ -252,6 +253,7 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
             if region["rewrite"]:
                 row += f"  rewrite={region['rewrite']}"
             lines.append(row)
+            digest.append(f"{region['label']}={med / 1e6:.3f}MHz")
         elif verbose:
             lines.append(f"   --) {region['label']:<8s} 未运行")
         if verbose:
@@ -259,13 +261,19 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
                 what = "停机" if med == 0 else f"{med / 1e6:8.3f} MHz"
                 lines.append(f"      · {region['label']:<8s} {what}"
                              f"  ×{len(vals):<3d} {'过渡' if len(vals) < 3 else ''}")
-    return f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s", lines
+    title = f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s"
+    return title, lines, " ".join(digest) or "无运行区间"
 
 
 def print_summary(regions: list[dict], sink: Sink, verbose: bool = False) -> None:
-    """终端打印总结，并另落一份**无色**的 freq_summary.txt —— 以后取数只读它，
-    不再去碰逐事件的 freq_log.tsv（那文件会长到几百行）。"""
-    title, lines = summarize(regions, verbose)
+    """终端打印总结，并把同一份无色文字**覆盖写**进 freq_summary.txt —— 该文件只
+    保留最近一次（几十行），取数时读它就行。
+
+    想回溯历史不必另存归档：freq_log.tsv 的 `summary` 行每次都带一行紧凑摘要
+    （`#007=6.974MHz #008=6.961MHz …`），`grep summary` 一下就是全部历史，
+    不用去读那几百行的事件流。
+    """
+    title, lines, digest = summarize(regions, verbose)
     print()
     print(term.paint(f"── 总结 ──  {title}", "bold", "magenta"))
     for line in lines:
@@ -273,10 +281,10 @@ def print_summary(regions: list[dict], sink: Sink, verbose: bool = False) -> Non
     if not lines:
         print(term.paint("   （本次没有跑起来的电路）", "yellow"))
     body = lines or ["   （本次没有跑起来的电路）"]
-    with SUMMARY_PATH.open("a", encoding="utf-8") as fh:
-        fh.write(f"\n=== {datetime.now():%Y-%m-%d %H:%M:%S}  {title} ===\n")
+    with SUMMARY_PATH.open("w", encoding="utf-8") as fh:
+        fh.write(f"=== {datetime.now():%Y-%m-%d %H:%M:%S}  {title} ===\n")
         fh.write("".join(f"{ln}\n" for ln in body))
-    sink.write("summary", note=title)
+    sink.write("summary", note=f"{title} | {digest}")
 
 
 def wait_for_game() -> tuple[int, int]:

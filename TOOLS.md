@@ -131,7 +131,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 | `winmem.py` | **公共基础设施**：只读的进程/内存访问（`find_pid` / `find_module` / `rpm` / `iter_exec_regions` / `MBI`） | ✅ 被多个脚本 import |
 | `term.py` | **公共基础设施**：终端着色。`NO_COLOR` / `FORCE_COLOR` / `isatty()` 三级判断；`paint` / `heat`（按占比）/ `duration`（按耗时）。重定向到文件时自动禁用 | ✅ |
 | `read_freq.py` | **读游戏当前实测主频**（UI 显示的那个 MHz）。`sim_speed` = float32 Hz，模块内偏移 `0x624D618`；同时用 `last_cycle_count` / `last_speed_check` 自算一条对照。对照实验不必再靠人眼读数。⚠️ Steam 更新会让偏移位移 | ✅ |
-| `watch_freq.py` | **被动主频采样器**：终端实时显示（停机心跳用 `\r` 原地刷新，不刷屏），退出时按「编译区间」给一份总结 —— 两次编译之间必是同一次运行，所以**一个电路一行**（取该区间最大的有效段中位数，过渡段与停机段不参与，没跑起来的区间省略）。**取数只读 `work/opt/freq_summary.txt`**（几十行）；`work/opt/freq_log.tsv` 只记事件与段摘要，别手动读它。编译点带产物 sha256 前 8 位 = **电路指纹**（同电路重复编译指纹相同）。启动时也会补报当前在跑的产物 | ✅ |
+| `watch_freq.py` | **被动主频采样器**：终端实时显示（停机心跳用 `\r` 原地刷新，不刷屏），退出时按「编译区间」给一份总结 —— 两次编译之间必是同一次运行，所以**一个电路一行**（取该区间最大的有效段中位数，过渡段与停机段不参与，没跑起来的区间省略）。**取数只读 `work/opt/freq_summary.txt`**（几十行，**每次运行覆盖**，只留最近一份；历史靠 `freq_log.tsv` 的 `summary` 行回溯，`grep summary` 即可，不必读那几百行事件流）；`work/opt/freq_log.tsv` 只记事件与段摘要，别手动读。编译点带产物 sha256 前 8 位 = **电路指纹**（同电路重复编译指纹相同）。启动时也会补报当前在跑的产物 | ✅ |
 | `scan_game_mem.py` | 扫内存、dump JIT 可执行区 | ⚠️ **抓源码部分已废弃**（改用 hook `compile()`）；`--dump-exec` dump JIT 区仍有用 |
 | `try_compile_dll.py` | 独立加载 `compile.dll` 调用它（脱离游戏进程） | ✅ ⚠️ 转发层部署期间，**必须从游戏目录运行**（否则转发层找不到真 DLL） |
 | `analyze_gen_code.py` | 统计生成源码的组件构成与代码代价 | ⚠️ 需要源码文件输入 |

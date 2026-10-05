@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import statistics
@@ -56,7 +57,11 @@ FREQ_DIR = ROOT / "work" / "freq"      # 本工具的输出（跨会话保留，
 LOG_PATH = FREQ_DIR / "freq_log.tsv"
 SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"     # 给人读的总结（每次运行覆盖）
 OPT_LOG = OPT_DIR / "optimize.log"          # 改写子进程写的（实际执行值）
-HOOK_LOG = OPT_DIR / "hook.log"               # 转发层写的（编译时刻的配置值）
+# ⚠ 转发层的 hook.log 用 GetPrivateProfileString 读 opt.ini，而 Windows 对该 API
+# 有**进程内缓存**：编辑器刚保存完就读，可能仍拿到旧值（实测 #043 hook.log 写 on、
+# 而实际跑的是 short_cse）。**别拿它判定模式**，只认 optimize.log（改写器自己写的
+# 实际执行值）。这里留着仅供人工对照。
+HOOK_LOG = OPT_DIR / "hook.log"
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
@@ -231,29 +236,28 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
-def mode_from_hook_log(num: str | None) -> str:
-    """转发层 hook.log 里该次编译的 rewrite 配置值（起改写子进程前写的）。"""
+def product_fingerprint(num: str | None) -> str:
+    """电路指纹：该次编译**原始产物**（`hook_out_NNN.bin`）的 sha256 前 8 位。
+
+    自己算，不从 optimize.log 取，两个原因：
+    - **即时可得**：编译点行是在改写子进程还没写完日志时打的，取日志就只能是空；
+      208881 字节算一次 sha256 实测 28 ms。
+    - **口径正确**：optimize.log 里记的是**改写后**产物的 sha —— 同一电路切
+      off/on/short 会得到不同指纹（实测 MIPS：off 是 e83fd490、on 是 e108ccda），
+      当「电路指纹」用是错的；原始产物则与改写模式无关。
+
+    产物文件被下一次游戏启动清掉时退化成 "-"。
+    """
     if not num:
-        return "?"
+        return "-"
     try:
-        for line in reversed(HOOK_LOG.read_text(encoding="utf-8").splitlines()):
-            m = re.search(rf"\b{num}\s+rewrite=(\S+)", line)
-            if m:
-                return m.group(1)
+        h = hashlib.sha256()
+        with open(HOOK_DIR / f"hook_out_{num}.bin", "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()[:8]
     except OSError:
-        pass
-    return "?"
-
-
-def mode_of(num: str | None) -> str:
-    """rewrite 模式的取值顺序：optimize.log 的**实际执行值**优先（short 防御
-    未过会退 on，只有改写器自己知道），子进程还没写成（编译点行打印时）
-    或没写成（失败/超时）时退回转发层 hook.log 的**配置值** —— 两边唯一
-    可能不一致的情形就是 short 退回 on，各表一层信息。"""
-    if not num:
-        return "?"
-    _fp, _rw, rewrite = opt_info(num)
-    return rewrite if rewrite != "?" else mode_from_hook_log(num)
+        return "-"
 
 
 def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str], str]:
@@ -278,9 +282,9 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
             med, vals = max(runs, key=lambda mv: mv[0])
             # 区间创建时查 optimize.log 多半拿不到（改写子进程还在跑），
             # 所以区间只记编号，摘要时重查 —— 这时 optimize.log 早已写好。
-            fp, rewritten, _rw = (opt_info(region["num"])
-                                  if region["num"] else ("-", "", "?"))
-            rewrite = mode_of(region["num"])
+            fp = product_fingerprint(region["num"])
+            _f, rewritten, rewrite = (opt_info(region["num"])
+                                      if region["num"] else ("-", "", "?"))
             m = re.search(r"(\d+)", rewritten)
             n_rw = m.group(1) if m else "-"
             row = (f"{nth:>2d}) {region['label']:<5s}{med / 1e6:6.3f}"
@@ -377,16 +381,16 @@ def main() -> int:
 
         这一行在改写子进程还没写 optimize.log 时就要打，所以：
         - 显示 **#编号**而不是 `hook_out_037.bin`（编号才是各区间的键）；
-        - 指纹/改写处数没就绪时显示 `…`（不是 `-`，免得被读成“没有指纹”）；
-        - rewrite 没就绪时用转发层 hook.log 的**配置值**并标上 `(配置)` ——
-          摘要里才是实际执行值（short 防御未过会退 on），两者不一致本身就是信息。"""
+        - 指纹自己算（product_fingerprint，即时可得）；
+        - rewrite 只认 optimize.log 的**实际执行值**，没就绪就显示 `…` ——
+          不用转发层 hook.log 的配置值：它是 `GetPrivateProfileString` 读的，
+          Windows 对 INI 有进程内缓存，编辑器刚保存时可能返回旧值（实测 #043
+          hook.log 写 on、实际跑的是 short_cse），拿它当显示值只会误导。"""
         m = re.search(r"(\d+)", name)
         num = m.group(1) if m else None
-        fp, rewritten, actual = opt_info(num)
-        if actual != "?":
-            rewrite = actual
-        else:
-            rewrite = f"{mode_from_hook_log(num)}(配置)" if num else "?"
+        fp = product_fingerprint(num)
+        _f, rewritten, actual = opt_info(num)
+        rewrite = actual if actual != "?" else "…"
         tag = "起始编译" if starter else "编译点"
         when = datetime.now().strftime("[%H:%M:%S]")
         who = f"#{num}" if num else name

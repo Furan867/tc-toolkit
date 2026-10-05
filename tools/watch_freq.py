@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import statistics
@@ -56,11 +57,13 @@ FREQ_DIR = ROOT / "work" / "freq"      # 本工具的输出（跨会话保留，
 LOG_PATH = FREQ_DIR / "freq_log.tsv"
 SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"     # 给人读的总结（每次运行覆盖）
 OPT_LOG = OPT_DIR / "optimize.log"          # 改写子进程写的（实际执行值）
-# ⚠ 转发层的 hook.log 用 GetPrivateProfileString 读 opt.ini，而 Windows 对该 API
-# 有**进程内缓存**：编辑器刚保存完就读，可能仍拿到旧值（实测 #043 hook.log 写 on、
-# 而实际跑的是 short_cse）。**别拿它判定模式**，只认 optimize.log（改写器自己写的
-# 实际执行值）。这里留着仅供人工对照。
+# 转发层 hook.log 里每编译一条 `rewrite=<值>`：它是转发层**起改写子进程之前**按
+# 当时的 opt.ini 写下的，且 2026-10-05 起会把这个值作为 `--mode` 传给改写器 ——
+# 两边同源，正常情况必然一致。万一不一致（历史上 C 侧自己维护过一份白名单，
+# 把 short_cse 当非法值归成 on），编译点行会直接把差异标出来，那正是要查的信号。
 HOOK_LOG = OPT_DIR / "hook.log"
+
+OPT_WAIT = 15.0        # 见过 hook_out 后等 opt.bin 的上限秒数（转发层自己等子进程 8 秒）
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
@@ -174,11 +177,11 @@ class Segmenter:
 
 
 def scan_hook_dir(seen: set[str]) -> list[str]:
-    """返回新出现的**产物**文件名（首次调用只是登记现状，不算新）。
+    """返回新出现的 `hook_out_NNN.bin` 文件名（首次调用只登记现状，不算新）。
 
-    只认 `hook_out_*.bin`：一次编译会先后落 `hook_src_NNN.si` 与
-    `hook_out_NNN.bin`，两个都报就成了重复的编译点；而且 `.si` 出现的时刻
-    `optimize.log` 可能还没写，指纹 / 改写处数都不完整。
+    它只用来发现「**编译发生了**」—— 报编译点用的是 `scan_opt_products`（改写后
+    的那种产物）。只认 hook_out_*.bin：一次编译会先后落 hook_src_NNN.si 与
+    hook_out_NNN.bin，两个都报就成了重复的编译点。
     """
     try:
         names = sorted(p.name for p in HOOK_DIR.iterdir()
@@ -193,14 +196,53 @@ def scan_hook_dir(seen: set[str]) -> list[str]:
 
 
 def latest_product() -> str | None:
-    """当前 hook 目录里最新的产物（用来在启动时补报"现在跑的是哪个"）。"""
+    """当前 opt 目录里最新的**改写后产物**编号（启动时补报"现在跑的是哪个"）。"""
     try:
-        names = sorted(p.name for p in HOOK_DIR.iterdir()
-                       if p.is_file() and p.name.startswith("hook_out_")
-                       and p.suffix == ".bin")
+        names = sorted(p.name[:3] for p in OPT_DIR.iterdir()
+                       if p.is_file() and p.name.endswith(".opt.bin")
+                       and p.name[:3].isdigit())
     except OSError:
         return None
     return names[-1] if names else None
+
+
+def scan_opt_products(seen: set[str]) -> list[str]:
+    """返回新出现的**改写后产物** `NNN.opt.bin` 的编号（首次只登记现状）。
+
+    编译点以它为准：改写器是「先写产物 → 自校验 → 写 entry → **最后**写日志」，
+    所以产物一出现就代表这一趟改写走完了 —— 此时算指纹、读 optimize.log 都有值。
+    原来的信号是 `hook_out_NNN.bin`（转发层刚落盘、改写子进程还没跑完），只能
+    打占位符。
+    """
+    try:
+        names = sorted(p.name[:3] for p in OPT_DIR.iterdir()
+                       if p.is_file() and p.name.endswith(".opt.bin")
+                       and p.name[:3].isdigit())
+    except OSError:
+        return []
+    new = [n for n in names if n not in seen]
+    seen.clear()
+    seen.update(names)
+    return new
+
+
+def product_fp(num: str | None) -> str:
+    """指纹：该次编译**实际写回游戏的机器码**（`NNN.opt.bin`）的 sha256 前 8 位。
+
+    自己算，不去读 optimize.log 里那串 sha256 —— 两者同源（日志那行就是改写器
+    对这份数据算的），但改写器**最后**才写日志，产物出现的瞬间日志可能还差几毫秒。
+    208881 字节实测 28 ms。产物被下一次游戏启动清掉时返回 "-"。
+    """
+    if not num:
+        return "-"
+    try:
+        h = hashlib.sha256()
+        with open(OPT_DIR / f"{num}.opt.bin", "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()[:8]
+    except OSError:
+        return "-"
 
 
 def opt_info(num: str | None) -> tuple[str, str, str]:
@@ -236,11 +278,6 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
 
 
 def mode_from_hook_log(num: str | None) -> str:
-    """转发层 hook.log 里该次编译的 rewrite 配置值。
-
-    转发层是在**起改写子进程之前**按当时的编译参数写下这一行的，与产物同批次
-    输出 —— 所以它不会因为中途改 opt.ini 而错位（直接读 opt.ini 的当前值才会）。
-    """
     if not num:
         return "?"
     try:
@@ -251,17 +288,6 @@ def mode_from_hook_log(num: str | None) -> str:
     except OSError:
         pass
     return "?"
-
-
-def mode_of(num: str | None) -> str:
-    """rewrite 模式的取值顺序：optimize.log 的**实际执行值**优先（short 防御
-    未过会退 on，只有改写器自己知道），子进程还没写成（编译点行打印时）
-    或没写成（失败/超时）时退回转发层 hook.log 的**配置值** —— 两边唯一
-    可能不一致的情形就是 short 退回 on，各表一层信息。"""
-    if not num:
-        return "?"
-    _fp, _rw, rewrite = opt_info(num)
-    return rewrite if rewrite != "?" else mode_from_hook_log(num)
 
 
 def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str], str]:
@@ -284,11 +310,14 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
         if runs:
             nth += 1
             med, vals = max(runs, key=lambda mv: mv[0])
-            # 区间创建时查 optimize.log 多半拿不到（改写子进程还在跑），
-            # 所以区间只记编号，摘要时重查 —— 这时 optimize.log 早已写好。
-            fp, rewritten, _rw = (opt_info(region["num"])
+            # 区间只记编号，摘要时重查 —— 读数只依赖产物与日志，跟当时终端
+            # 打印了什么无关。
+            fp = product_fp(region["num"])
+            _f, rewritten, _rw = (opt_info(region["num"])
                                   if region["num"] else ("-", "", "?"))
-            rewrite = mode_of(region["num"])
+            if fp == "-" and _f != "-":
+                fp = _f          # 产物已被清（游戏重启过）：退回日志里记的 sha
+            rewrite = _rw if _rw != "?" else mode_from_hook_log(region["num"])
             m = re.search(r"(\d+)", rewritten)
             n_rw = m.group(1) if m else "-"
             row = (f"{nth:>2d}) {region['label']:<5s}{med / 1e6:6.3f}"
@@ -376,28 +405,30 @@ def main() -> int:
         print(text, flush=True)
 
     def new_region(label: str, num: str | None = None) -> None:
-        """开一个新区间，只记编号 —— 指纹/模式等摘要时才查（编译点检测时
-        改写子进程多半还没写 optimize.log，竞态见 summarize）。"""
+        """开一个新区间，只记编号 —— 指纹/模式等摘要时再查。"""
         regions.append({"label": label, "num": num, "segments": []})
 
-    def report_compile(label: str, name: str, starter: bool = False) -> None:
+    def report_compile(num: str | None, starter: bool = False) -> None:
         """打一条编译点（启动时补报的那条标为"起始"）。
 
-        这一行在改写子进程还没写 optimize.log 时就要打，所以：
-        - 显示 **#编号**而不是 `hook_out_037.bin`（编号才是各区间的键）；
-        - 指纹 / 改写处数这时多半还没就绪（改写子进程还在跑），显示 `…`；
-        - rewrite 退回转发层 hook.log 的**编译时刻配置值**（与产物同批次写，
-          不受中途改 opt.ini 影响），摘要里才是实际执行值。"""
-        m = re.search(r"(\d+)", name)
-        num = m.group(1) if m else None
-        fp, rewritten, _rw = opt_info(num)
-        rewrite = mode_of(num)
+        信号取自**改写后产物** NNN.opt.bin 出现，所以该有的都有：
+        - 指纹：自己算这份机器码的 sha256 前 8 位（= 实际写回游戏的那份）；
+        - 改写处数 / rewrite：读 optimize.log 的实际执行值。
+        若转发层 hook.log 记的配置值与实际执行值不同，直接把差异标出来。"""
         tag = "起始编译" if starter else "编译点"
         when = datetime.now().strftime("[%H:%M:%S]")
-        who = f"#{num}" if num else name
+        who = f"#{num}" if num else "?"
+        fp = product_fp(num)
+        _logfp, rewritten, actual = opt_info(num)
+        cfg = mode_from_hook_log(num)
+        if actual == "?":
+            rewrite = cfg if cfg != "?" else "?"
+        elif cfg != "?" and cfg != actual:
+            rewrite = f"{actual}（hook.log 记 {cfg}）"
+        else:
+            rewrite = actual
         say(f"{term.paint(when, 'blue')}  {term.paint('▣ ' + tag, 'bold', 'magenta')} "
-            f"{term.paint(who, 'bold')}  "
-            f"{term.paint('指纹 ' + (fp if fp != '-' else '…'), 'blue')}"
+            f"{term.paint(who, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
             + (f"  {term.paint(rewritten, 'green')}" if rewritten else "")
             + f"  {term.paint('rewrite=' + rewrite, 'cyan')}")
         sink.write("compile", note=f"{tag} {who} 指纹={fp} {rewritten} rewrite={rewrite}")
@@ -424,13 +455,15 @@ def main() -> int:
             return None
         return struct.unpack("<f", raw_speed)[0], struct.unpack("<d", raw_time)[0]
 
-    seen: set[str] = set()
-    scan_hook_dir(seen)               # 首次只登记现状，不重复报成"新编译"
+    seen_hook: set[str] = set()       # hook_out_*.bin —— 只用来发现“编译发生了”
+    seen_opt: set[str] = set()        # NNN.opt.bin   —— 改写走完，用它报编译点
+    pending: dict[str, float] = {}    # 见过 hook_out、还没等到 opt 的编号
+    scan_hook_dir(seen_hook)
+    scan_opt_products(seen_opt)       # 首次只登记现状，不重复报成"新编译"
     starter = latest_product()
     if starter:
-        report_compile("", starter, starter=True)
-        m = re.search(r"(\d+)", starter)
-        new_region(f"#{m.group(1)}" if m else starter, m.group(1) if m else None)
+        report_compile(starter, starter=True)
+        new_region(f"#{starter}", starter)
     else:
         new_region("起始")
 
@@ -445,12 +478,30 @@ def main() -> int:
             time.sleep(min(POLL, args.interval))
             clock = datetime.now().strftime("[%H:%M:%S]")
 
-            for name in scan_hook_dir(seen):
-                seg.close()           # 先让旧段落进旧区间
-                report_compile("", name)
+            # 两条腿：hook_out 出现 = 编译发生了；opt.bin 出现 = 改写走完了。
+            # 编译点以 opt 为准（那时指纹与日志都就绪），hook_out 只用来记待办，
+            # 免得改写器压根没产出时这里一声不响。
+            for name in scan_hook_dir(seen_hook):
                 m = re.search(r"(\d+)", name)
-                new_region(f"#{m.group(1)}" if m else name, m.group(1) if m else None)
+                if m:
+                    pending.setdefault(m.group(1), time.time())
+            for num in scan_opt_products(seen_opt):
+                pending.pop(num, None)
+                seg.close()           # 先让旧段落进旧区间
+                report_compile(num)
+                new_region(f"#{num}", num)
                 last_game_time = None
+            for num, t0 in list(pending.items()):
+                if time.time() - t0 > OPT_WAIT:
+                    pending.pop(num)
+                    seg.close()
+                    say(f"{term.paint(clock, 'blue')}  "
+                        f"{term.paint(f'❌ 编译点 #{num}：改写后产物一直没出现', 'red')}"
+                        f"  {term.paint('（看 work/opt/opt_stderr.log）', 'yellow')}")
+                    sink.write("compile",
+                               note=f"#{num} 改写后产物缺失（超时 {OPT_WAIT:.0f}s）")
+                    new_region(f"#{num}", num)
+                    last_game_time = None
 
             if not winmem.find_pid(EXE):
                 sink.write("game", note="游戏已退出，等待重新启动")
@@ -458,8 +509,11 @@ def main() -> int:
                     f"{term.paint('○ 游戏退出，等待重启 …', 'yellow')}")
                 pid, base = wait_for_game()
                 h = winmem.open_process(pid)
-                seen.clear()
-                scan_hook_dir(seen)
+                seen_hook.clear()
+                seen_opt.clear()
+                pending.clear()
+                scan_hook_dir(seen_hook)
+                scan_opt_products(seen_opt)
                 last_game_time = None
                 sink.write("game", note=f"重连 PID={pid} 基址=0x{base:X}")
                 continue

@@ -22,7 +22,7 @@
 | 工具 | 作用 | 状态 |
 |---|---|---|
 | `compile_hook.c` | **转发层本体**。把游戏的 `compile.dll` 换掉，记录 `compile()` 的入参（源码）与产物，再转发给真实现 | ✅ |
-| `deploy_compile_hook.py` | 部署 / 恢复转发层。带状态检查与防误操作 | ✅ |
+| `deploy_compile_hook.py` | 部署 / 恢复转发层；**`--build` 顺带编译**（调 w64devkit 的 gcc，路径可用 `W64DEVKIT_GCC` 覆盖）、`--status` 看状态。已部署状态下 `--deploy` 只更新转发层 DLL，不必先 `--restore`；游戏在跑时直接拒绝执行 | ✅ |
 | `locate_jit_image.py` | 在游戏进程里定位某份机器码的加载地址。字节级特征 + **整段校验** + **多副本枚举** | ✅ |
 | `profile_by_image.py` | **一键**：定位 → 采样 → 按字节范围过滤 → 建映射 → 出报告 | ✅ |
 | `sample_threads.py` | 采样各线程 RIP（被一键脚本调用）。给 `--target BASE:LEN` 就**先用字节范围探测、锁定真正在跑这份代码的线程，再只采它们**；带进度条（写 stderr，非终端时自动静默） | ✅ |
@@ -123,7 +123,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `optimize_image.py` | **改写器**，三态 `rewrite = on/short/off`。规则①：`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8`（恒缩 4 B）；规则②（**仅 short**）：删紧邻重复装载 `mov r,imm … mov r,imm`（实测 482 处 / 2568 B）。`on`（等长填充，零重定位）把 219088 字节的电路从 **5.4 提到 6.9 MHz**；`short`（缩短 + 全量重定位 950 条跳转）实测 **6.84 → 8.05 MHz（+17.7%）**，防御不过自动退回 `on` | ✅ |
+| `optimize_image.py` | **改写器**，四态 `rewrite = on/short/short_cse/off`；模式优先取转发层传的 `--mode`（见 STATUS 的「模式传递链」），没传才自己读 opt.ini。规则①：`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8`（恒缩 4 B）；规则②（**仅 short**）：删紧邻重复装载 `mov r,imm … mov r,imm`（实测 482 处 / 2568 B）。`on`（等长填充，零重定位）把 219088 字节的电路从 **5.4 提到 6.9 MHz**；`short`（缩短 + 全量重定位 950 条跳转）实测 **6.84 → 8.05 MHz（+17.7%）**，防御不过自动退回 `on` | ✅ |
 | `check_shift_equiv.py` | 把改写前后的两段字节各拷进一块 RWX 内存**真的跑一遍**对比结果，验证规则语义等价（当前 5280 组） | ✅ |
 | `try_compile_dll.py --hook` | 强制加载转发层调 `compile()`，用于**离线**验证这条管路（注意转发层加载时会清空 `work/hook/`） | ✅ |
 
@@ -146,7 +146,7 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 （`rep stos`），所以判它得用 `startswith`，不能靠隐式写表查键。
 
 运行痕迹都在 `work/opt/`（**每次游戏启动清空**）：`hook.log`（每次编译三行：
-`rewrite=配置值`〔起子进程前写，编译时刻的配置〕→ 已就地写回 / 放弃 → 入口偏移
+`rewrite=模式`〔起子进程前写，**同一份值会经 `--mode` 传给改写器**，所以两边同源〕→ 已就地写回 / 放弃 → 入口偏移
 已更新〔仅 short〕）、`optimize.log`（改写处数 / **实际执行的模式** / 产物 sha256）、
 `opt_stderr.log`（自检与抽查明细）。判定一次编译「配置了什么」看 `hook.log` 的
 rewrite 行，「实际改成了什么」看 `optimize.log` —— 两者不一致就是 short 退回了 on。
@@ -175,7 +175,7 @@ rewrite = on
 | `winmem.py` | **公共基础设施**：只读的进程/内存访问（`find_pid` / `find_module` / `rpm` / `iter_exec_regions` / `MBI`） | ✅ 被多个脚本 import |
 | `term.py` | **公共基础设施**：终端着色。`NO_COLOR` / `FORCE_COLOR` / `isatty()` 三级判断；`paint` / `heat`（按占比）/ `duration`（按耗时）。重定向到文件时自动禁用 | ✅ |
 | `read_freq.py` | **读游戏当前实测主频**（UI 显示的那个 MHz）。`sim_speed` = float32 Hz，模块内偏移 `0x624D618`；同时用 `last_cycle_count` / `last_speed_check` 自算一条对照。对照实验不必再靠人眼读数。⚠️ Steam 更新会让偏移位移 | ✅ |
-| `watch_freq.py` | **被动主频采样器**：终端实时显示（停机心跳用 `\r` 原地刷新，不刷屏），退出时按「编译区间」给一份总结 —— 两次编译之间必是同一次运行，所以**一个电路一行**（取该区间最大的有效段中位数，过渡段与停机段不参与，没跑起来的区间省略）。**取数只读 `work/freq/freq_summary.txt`**（几十行，**每次运行覆盖**，只留最近一份；历史靠同目录 `freq_log.tsv` 的 `summary` 行回溯，`grep summary` 即可，不必读那几百行事件流）；`work/freq/freq_log.tsv` 只记事件与段摘要，别手动读。编译点带产物 sha256 前 8 位 = **电路指纹**（同电路重复编译指纹相同）。启动时也会补报当前在跑的产物 | ✅ |
+| `watch_freq.py` | **被动主频采样器**：终端实时显示（停机心跳用 `\r` 原地刷新，不刷屏），退出时按「编译区间」给一份总结 —— 两次编译之间必是同一次运行，所以**一个电路一行**（取该区间最大的有效段中位数，过渡段与停机段不参与，没跑起来的区间省略）。**取数只读 `work/freq/freq_summary.txt`**（几十行，**每次运行覆盖**，只留最近一份；历史靠同目录 `freq_log.tsv` 的 `summary` 行回溯，`grep summary` 即可，不必读那几百行事件流）；`work/freq/freq_log.tsv` 只记事件与段摘要，别手动读。编译点以 `work/opt/NNN.opt.bin`（**实际写回游戏的机器码**）出现为信号，指纹是采样器自己算的这份产物的 sha256 前 8 位（会随 rewrite 模式变；想认「是不是同一个电路」看 `hook_out_NNN.bin` 的 sha）。启动时补报当前在跑的产物；`hook_out` 出现 15 秒仍无 `opt.bin` 会报一条「改写后产物缺失」 | ✅ |
 | `scan_game_mem.py` | 扫内存、dump JIT 可执行区 | ⚠️ **抓源码部分已废弃**（改用 hook `compile()`）；`--dump-exec` dump JIT 区仍有用 |
 | `try_compile_dll.py` | 独立加载 `compile.dll` 调用它（脱离游戏进程） | ✅ ⚠️ 转发层部署期间，**必须从游戏目录运行**（否则转发层找不到真 DLL） |
 | `analyze_gen_code.py` | 统计生成源码的组件构成与代码代价 | ⚠️ 需要源码文件输入 |

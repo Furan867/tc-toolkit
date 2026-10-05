@@ -218,8 +218,10 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
                     m = re.search(r"改写 (\d+) 处", line)
                     if m:
                         rewritten = f"改写 {m.group(1)} 处"
-                    if "缩短改写" in line:
-                        rewrite = "short"
+                    if "CSE 删" in line:
+                        rewrite = "short_cse"      # 缩短 + 删重复装载
+                    elif "缩短改写" in line:
+                        rewrite = "short"          # 纯缩短（不带 CSE）
                     elif "（等长）" in line:
                         rewrite = "on"
                     elif "未改写" in line:

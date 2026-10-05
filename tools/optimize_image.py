@@ -1,8 +1,8 @@
 #!python3
 """产物改写器。
 
-一条改写规则（`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8`），两种落地方式，
-由 opt.ini 的 `rewrite` 三态选择：
+一条改写规则（`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8`）加一项删除规则，
+由 opt.ini 的 `rewrite` 四态选择：
 
     mov ecx, imm32            B9 <imm32>              5 字节
     shl/shr/sar r, cl         REX? D3 <modrm>         2~3 字节
@@ -16,6 +16,11 @@
                   rip 相对（探查：rel32 跳转/调用 949 条 + rip 相对 3 处）。
                   产物总长不变（尾部补 nop）→ 不动长度字段、不换缓冲区。
                   任一防御检查不过 → 子进程非 0 退出 → 转发层放弃写回
+  rewrite = short_cse （缩短 + 删重复装载）在 short 之上再删「第二条重复装载」
+                  `mov r,imm … mov r,imm`（六条件全过才删，实测 482 处 / 2568 字节）。
+                  与 short 共用同一套缩短/重定位框架，收缩量可变：窗口 4 B、
+                  CSE 整条 5/6 B。**short 仍是不带 CSE 的纯缩短**，好与已测的
+                  8.05 MHz 对照
   rewrite = off   原样返回（对照实验）
 
 为什么等价：
@@ -548,20 +553,21 @@ def check_reloc(old, new, wins, cse) -> list[str]:
 
 
 def rewrite_mode() -> str:
-    """三态：'on'（等长）/ 'short'（缩短+重定位）/ 'off'。读不到配置默认 'on'。
+    """四态：'on'（等长）/ 'short'（缩短+重定位）/ 'short_cse'（缩短 + 删重复装载）
+    / 'off'。读不到配置默认 'on'。
 
     环境变量 `OPT_REWRITE` 优先于 opt.ini —— 离线验证用（opt.ini 归游戏内实验用，
     验证时不应该去动它）：`OPT_REWRITE=short py tools/optimize_image.py --in ...  `
     """
     v = os.environ.get("OPT_REWRITE", "").strip().lower()
-    if v in ("on", "short", "off"):
+    if v in ("on", "short", "short_cse", "off"):
         return v
     cp = configparser.ConfigParser()
     try:
         if not cp.read(CONF, encoding="utf-8"):
             return "on"                       # 没有配置文件：默认等长改写
         v = cp.get("opt", "rewrite", fallback="on").strip().lower()
-        return v if v in ("on", "short", "off") else "on"
+        return v if v in ("on", "short", "short_cse", "off") else "on"
     except (OSError, configparser.Error) as exc:
         print(f"读配置失败，按 on 处理：{exc}", file=sys.stderr)
         return "on"
@@ -585,23 +591,25 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
     new_entry = None
     note = "未改写（解析失败）" if parsed is None else f"未改写（rewrite = {mode}）"
 
-    if parsed is not None and mode == "short" and entry is None:
+    if parsed is not None and mode in ("short", "short_cse") and entry is None:
         # 防呆：老转发层不传 --entry，short 会把游戏跳崩（见 docstring 入口协议）
         print("⚠ 转发层没传入口偏移（老版本？）→ 退回等长改写", file=sys.stderr)
         mode = "on"
 
-    if parsed is not None and mode == "short":
+    if parsed is not None and mode in ("short", "short_cse"):
         wins, skipped = find_windows(parsed)
-        cse = find_cse(parsed, exclude={w[0] for w in wins})
+        cse = (find_cse(parsed, exclude={w[0] for w in wins})
+               if mode == "short_cse" else [])
         r = rewrite_short(data0, parsed, wins, cse, skipped)
         if r is None:
             print("❌ 缩短改写防御未过 → 退回等长改写（收益保底）", file=sys.stderr)
             mode = "on"
         else:
             data, reloc = r
-            cut_b = sum(c[2] for c in cse)
-            note = (f"缩短改写 {len(wins)} 处 / CSE 删 {len(cse)} 处（{cut_b} B）"
-                    f" / 重定位 {reloc} 条")
+            note = f"缩短改写 {len(wins)} 处"
+            if cse:
+                note += f" / CSE 删 {len(cse)} 处（{sum(c[2] for c in cse)} B）"
+            note += f" / 重定位 {reloc} 条"
             for k, v in skipped.most_common(4):
                 print(f"    放弃 {v:>5} 处：{k}", file=sys.stderr)
             for i, off, size in cse[:3]:                 # 留几处明细供人工抽查

@@ -35,7 +35,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import re
 import statistics
@@ -236,44 +235,33 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
-def configured_mode() -> str:
-    """当前 opt.ini 的 rewrite 取值 —— 直接读文件，复用改写器的同一份逻辑。
+def mode_from_hook_log(num: str | None) -> str:
+    """转发层 hook.log 里该次编译的 rewrite 配置值。
 
-    为什么要这个：编译点行打印时改写子进程还没写完 optimize.log，拿不到
-    「实际执行值」；又不能用转发层 hook.log 的（GetPrivateProfileString 有
-    进程内缓存，刚保存完可能返回旧值）。自己读文件就没这两个问题。
-    它表示「你配的是什么」；摘要里的才是「实际跑了什么」，两者不同 = 缩短
-    被防御退回（optimize.log 的等长行会带 `⚠ 缩短未生效：原因`）。
-    """
-    try:
-        import optimize_image as optmod
-        return optmod.rewrite_mode()
-    except Exception:                      # 配置读不了也不能让监听器倒下
-        return "?"
-
-
-def product_fingerprint(num: str | None) -> str:
-    """电路指纹：该次编译**原始产物**（`hook_out_NNN.bin`）的 sha256 前 8 位。
-
-    自己算，不从 optimize.log 取，两个原因：
-    - **即时可得**：编译点行是在改写子进程还没写完日志时打的，取日志就只能是空；
-      208881 字节算一次 sha256 实测 28 ms。
-    - **口径正确**：optimize.log 里记的是**改写后**产物的 sha —— 同一电路切
-      off/on/short 会得到不同指纹（实测 MIPS：off 是 e83fd490、on 是 e108ccda），
-      当「电路指纹」用是错的；原始产物则与改写模式无关。
-
-    产物文件被下一次游戏启动清掉时退化成 "-"。
+    转发层是在**起改写子进程之前**按当时的编译参数写下这一行的，与产物同批次
+    输出 —— 所以它不会因为中途改 opt.ini 而错位（直接读 opt.ini 的当前值才会）。
     """
     if not num:
-        return "-"
+        return "?"
     try:
-        h = hashlib.sha256()
-        with open(HOOK_DIR / f"hook_out_{num}.bin", "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        return h.hexdigest()[:8]
+        for line in reversed(HOOK_LOG.read_text(encoding="utf-8").splitlines()):
+            m = re.search(rf"\b{num}\s+rewrite=(\S+)", line)
+            if m:
+                return m.group(1)
     except OSError:
-        return "-"
+        pass
+    return "?"
+
+
+def mode_of(num: str | None) -> str:
+    """rewrite 模式的取值顺序：optimize.log 的**实际执行值**优先（short 防御
+    未过会退 on，只有改写器自己知道），子进程还没写成（编译点行打印时）
+    或没写成（失败/超时）时退回转发层 hook.log 的**配置值** —— 两边唯一
+    可能不一致的情形就是 short 退回 on，各表一层信息。"""
+    if not num:
+        return "?"
+    _fp, _rw, rewrite = opt_info(num)
+    return rewrite if rewrite != "?" else mode_from_hook_log(num)
 
 
 def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str], str]:
@@ -298,9 +286,9 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
             med, vals = max(runs, key=lambda mv: mv[0])
             # 区间创建时查 optimize.log 多半拿不到（改写子进程还在跑），
             # 所以区间只记编号，摘要时重查 —— 这时 optimize.log 早已写好。
-            fp = product_fingerprint(region["num"])
-            _f, rewritten, rewrite = (opt_info(region["num"])
-                                      if region["num"] else ("-", "", "?"))
+            fp, rewritten, _rw = (opt_info(region["num"])
+                                  if region["num"] else ("-", "", "?"))
+            rewrite = mode_of(region["num"])
             m = re.search(r"(\d+)", rewritten)
             n_rw = m.group(1) if m else "-"
             row = (f"{nth:>2d}) {region['label']:<5s}{med / 1e6:6.3f}"
@@ -318,8 +306,6 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
     title = f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s"
     if lines:
         lines.insert(0, "   #      主频 样本   波动 指纹      改写  rewrite")
-        lines.insert(1, "   （指纹 = 该次编译**原始产物** sha256 前 8 位，与 rewrite 模式无关："
-                        "同一电路切模式应当同指纹）")
     return title, lines, " ".join(digest) or "无运行区间"
 
 
@@ -399,15 +385,13 @@ def main() -> int:
 
         这一行在改写子进程还没写 optimize.log 时就要打，所以：
         - 显示 **#编号**而不是 `hook_out_037.bin`（编号才是各区间的键）；
-        - 指纹自己算（product_fingerprint，即时可得）；
-        - rewrite：实际执行值还没就绪，就取**当前 opt.ini 的配置值**
-          （configured_mode，自己读文件）—— 不是转发层 hook.log 那个
-          （GetPrivateProfileString 有缓存，实测 #043 写出 on 而实际跑 short_cse）。"""
+        - 指纹 / 改写处数这时多半还没就绪（改写子进程还在跑），显示 `…`；
+        - rewrite 退回转发层 hook.log 的**编译时刻配置值**（与产物同批次写，
+          不受中途改 opt.ini 影响），摘要里才是实际执行值。"""
         m = re.search(r"(\d+)", name)
         num = m.group(1) if m else None
-        fp = product_fingerprint(num)
-        _f, rewritten, actual = opt_info(num)
-        rewrite = actual if actual != "?" else configured_mode()
+        fp, rewritten, _rw = opt_info(num)
+        rewrite = mode_of(num)
         tag = "起始编译" if starter else "编译点"
         when = datetime.now().strftime("[%H:%M:%S]")
         who = f"#{num}" if num else name

@@ -76,7 +76,6 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import configparser
 import hashlib
 import os
 import re
@@ -569,25 +568,48 @@ def check_reloc(old, new, wins, cse) -> list[str]:
     return bad
 
 
+VALID_MODES = ("on", "short", "short_cse", "off")
+
+
 def rewrite_mode() -> str:
     """四态：'on'（等长）/ 'short'（缩短+重定位）/ 'short_cse'（缩短 + 删重复装载）
     / 'off'。读不到配置默认 'on'。
 
     环境变量 `OPT_REWRITE` 优先于 opt.ini —— 离线验证用（opt.ini 归游戏内实验用，
     验证时不应该去动它）：`OPT_REWRITE=short py tools/optimize_image.py --in ...  `
+
+    ⚠️ 读法必须与**转发层**（`compile_hook.c` 的 GetPrivateProfileString）行为一致：
+    取 [opt] 段里**第一个** rewrite 行，重复 key 不报错。以前用 configparser，
+    它在重复 key 上抛 DuplicateOptionError → 本函数兑底成 on，而转发层取第一个
+    —— 切 opt.ini 的**中间态**（新行已放开、旧行还没注释）被编译撞上时两边不一致，
+    short 就静默失效（2026-10-05 实测：MIPS 三次 short/short_cse 全是 on，
+    hook.log 写 rewrite=short 而 optimize.log 写「等长」，就是这两个读到的不一样）。
     """
     v = os.environ.get("OPT_REWRITE", "").strip().lower()
-    if v in ("on", "short", "short_cse", "off"):
+    if v in VALID_MODES:
         return v
-    cp = configparser.ConfigParser()
     try:
-        if not cp.read(CONF, encoding="utf-8"):
-            return "on"                       # 没有配置文件：默认等长改写
-        v = cp.get("opt", "rewrite", fallback="on").strip().lower()
-        return v if v in ("on", "short", "short_cse", "off") else "on"
-    except (OSError, configparser.Error) as exc:
+        with open(CONF, encoding="utf-8") as f:
+            in_opt = False
+            for line in f:
+                s = line.strip()
+                if s.startswith("["):
+                    in_opt = s.lower() == "[opt]"
+                    continue
+                if not in_opt or s.startswith((";", "#")) or "=" not in s:
+                    continue
+                k, _, val = s.partition("=")
+                if k.strip().lower() != "rewrite":
+                    continue
+                val = val.strip().lower()          # 第一个匹配行即生效（与转发层一致）
+                if val not in VALID_MODES:
+                    print(f"⚠ opt.ini 的 rewrite 值非法（{val!r}）→ 按 on 处理",
+                          file=sys.stderr)
+                    return "on"
+                return val
+    except OSError as exc:
         print(f"读配置失败，按 on 处理：{exc}", file=sys.stderr)
-        return "on"
+    return "on"                                  # 没有配置文件 / 没这行：默认等长改写
 
 
 def run(src: str, dst: str, entry: int | None = None) -> int:

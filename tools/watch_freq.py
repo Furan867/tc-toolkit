@@ -55,7 +55,8 @@ OPT_DIR = ROOT / "work" / "opt"        # 转发层工作区（每次游戏会话
 FREQ_DIR = ROOT / "work" / "freq"      # 本工具的输出（跨会话保留，不会被人清掉）
 LOG_PATH = FREQ_DIR / "freq_log.tsv"
 SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"     # 给人读的总结（每次运行覆盖）
-OPT_LOG = OPT_DIR / "optimize.log"
+OPT_LOG = OPT_DIR / "optimize.log"          # 改写子进程写的（实际执行值）
+HOOK_LOG = OPT_DIR / "hook.log"               # 转发层写的（编译时刻的配置值）
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
@@ -228,6 +229,31 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
+def mode_from_hook_log(num: str | None) -> str:
+    """转发层 hook.log 里该次编译的 rewrite 配置值（起改写子进程前写的）。"""
+    if not num:
+        return "?"
+    try:
+        for line in reversed(HOOK_LOG.read_text(encoding="utf-8").splitlines()):
+            m = re.search(rf"\b{num}\s+rewrite=(\S+)", line)
+            if m:
+                return m.group(1)
+    except OSError:
+        pass
+    return "?"
+
+
+def mode_of(num: str | None) -> str:
+    """rewrite 模式的取值顺序：optimize.log 的**实际执行值**优先（short 防御
+    未过会退 on，只有改写器自己知道），子进程还没写成（编译点行打印时）
+    或没写成（失败/超时）时退回转发层 hook.log 的**配置值** —— 两边唯一
+    可能不一致的情形就是 short 退回 on，各表一层信息。"""
+    if not num:
+        return "?"
+    _fp, _rw, rewrite = opt_info(num)
+    return rewrite if rewrite != "?" else mode_from_hook_log(num)
+
+
 def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str], str]:
     """按「一次编译 → 一次运行」的区间归并，**一个电路一行**。
 
@@ -248,11 +274,11 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
         if runs:
             nth += 1
             med, vals = max(runs, key=lambda mv: mv[0])
-            # 区间创建时查 optimize.log 多半拿不到：转发层先 dump hook_out
-            # 再起改写子进程（几百毫秒），扫到新产物时那行还没写 —— 所以
-            # 区间只记编号，摘要时重查（这时编译早已完成，拿到权威值）。
-            fp, rewritten, rewrite = (opt_info(region["num"])
-                                      if region["num"] else ("-", "", "?"))
+            # 区间创建时查 optimize.log 多半拿不到（改写子进程还在跑），
+            # 所以区间只记编号，摘要时重查 —— 这时 optimize.log 早已写好。
+            fp, rewritten, _rw = (opt_info(region["num"])
+                                  if region["num"] else ("-", "", "?"))
+            rewrite = mode_of(region["num"])
             m = re.search(r"(\d+)", rewritten)
             n_rw = m.group(1) if m else "-"
             row = (f"{nth:>2d}) {region['label']:<5s}{med / 1e6:6.3f}"
@@ -345,9 +371,14 @@ def main() -> int:
         regions.append({"label": label, "num": num, "segments": []})
 
     def report_compile(label: str, name: str, starter: bool = False) -> None:
-        """打一条编译点（启动时补报的那条标为"起始"）。"""
+        """打一条编译点（启动时补报的那条标为"起始"）。
+
+        rewrite 取转发层 hook.log 的配置值（编译时刻写的，立即可得）；指纹 /
+        改写处数此时多半还没有（改写子进程还在跑），摘要时才补全。"""
         m = re.search(r"(\d+)", name)
-        fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
+        num = m.group(1) if m else None
+        fp, rewritten, _rw = opt_info(num)
+        rewrite = mode_of(num)
         tag = "起始编译" if starter else "编译点"
         when = datetime.now().strftime("[%H:%M:%S]")
         say(f"{term.paint(when, 'blue')}  {term.paint('▣ ' + tag, 'bold', 'magenta')} "
@@ -378,23 +409,6 @@ def main() -> int:
             return None
         return struct.unpack("<f", raw_speed)[0], struct.unpack("<d", raw_time)[0]
 
-    # 编译点行要等 optimize.log 写出那行再打：hook_out_NNN.bin 是真编译器
-    # 编译完就落盘的，但改写子进程（py 冷启动 + objdump 反汇编 + 全量对照
-    # 自检）还要几百毫秒到几秒才写日志 —— 立刻打只能打出 rewrite=? 。区间
-    # 记账不受影响：检测到新产物就立即开新区间，只是打印行晚一点。
-    pending: list[tuple[str, float]] = []   # (产物文件名, 等待截止时刻)
-
-    def flush_pending(now: float) -> None:
-        """把等到日志的编译点行打出来；没等到且没超时就留到下一轮。"""
-        while pending:
-            name, until = pending[0]
-            m = re.search(r"(\d+)", name)
-            fp, _rw, rewrite = opt_info(m.group(1) if m else None)
-            if rewrite == "?" and now < until:
-                return
-            pending.pop(0)
-            report_compile("", name)
-
     seen: set[str] = set()
     scan_hook_dir(seen)               # 首次只登记现状，不重复报成"新编译"
     starter = latest_product()
@@ -418,11 +432,10 @@ def main() -> int:
 
             for name in scan_hook_dir(seen):
                 seg.close()           # 先让旧段落进旧区间
+                report_compile("", name)
                 m = re.search(r"(\d+)", name)
                 new_region(f"#{m.group(1)}" if m else name, m.group(1) if m else None)
-                pending.append((name, time.time() + 5.0))   # 最多等 5s，超时打占位
                 last_game_time = None
-            flush_pending(time.time())
 
             if not winmem.find_pid(EXE):
                 sink.write("game", note="游戏已退出，等待重新启动")
@@ -432,7 +445,6 @@ def main() -> int:
                 h = winmem.open_process(pid)
                 seen.clear()
                 scan_hook_dir(seen)
-                pending.clear()   # 重启后编号重新从 1 计，旧 pending 会对错日志行
                 last_game_time = None
                 sink.write("game", note=f"重连 PID={pid} 基址=0x{base:X}")
                 continue

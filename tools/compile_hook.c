@@ -172,6 +172,18 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     sprintf(err, "%s%copt_stderr.log", OPT_DIR, SEP);
     sprintf(entry, "%s%c%03ld.entry.txt", OPT_DIR, SEP, seq);
     DeleteFileA(entry);   /* 防残留：上一轮同号的入口文件不能影响本轮 */
+
+    /* 把 rewrite 配置写进 hook.log（起子进程前）：监听主频的程序要拿
+       「编译时刻」的配置值，等改写子进程写 optimize.log 要几百毫秒起。
+       读法与 Python 侧 rewrite_mode() 一致：读不到/非法都按 on。 */
+    char mode[32] = "on";
+    GetPrivateProfileStringA("opt", "rewrite", "on", mode, sizeof(mode),
+                              OPT_PROJ "\\opt.ini");
+    if (strcmp(mode, "on") && strcmp(mode, "short") && strcmp(mode, "off"))
+        lstrcpyA(mode, "on");
+    char tag[40];
+    sprintf(tag, "rewrite=%s", mode);
+    opt_log(seq, tag);
     if (!write_file(raw, buf, len)) { opt_log(seq, "写 raw 失败，放弃"); return; }
 
     /* 把 Result[2]（旧入口偏移）传给改写器 —— 缩短模式必须同步更新它 */

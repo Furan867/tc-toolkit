@@ -248,15 +248,16 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
         if runs:
             nth += 1
             med, vals = max(runs, key=lambda mv: mv[0])
-            row = (f"  {nth:>2d}) {region['label']:<8s} {med / 1e6:8.3f} MHz"
-                   f"  ×{len(vals):<3d} 样本"
-                   f"  波动 {(max(vals) - min(vals)) / med * 100:5.2f}%")
-            if region["fp"] and region["fp"] != "-":
-                row += f"   指纹 {region['fp']}"
-            if region["rewritten"]:
-                row += f"  {region['rewritten']}"
-            if region["rewrite"]:
-                row += f"  rewrite={region['rewrite']}"
+            # 区间创建时查 optimize.log 多半拿不到：转发层先 dump hook_out
+            # 再起改写子进程（几百毫秒），扫到新产物时那行还没写 —— 所以
+            # 区间只记编号，摘要时重查（这时编译早已完成，拿到权威值）。
+            fp, rewritten, rewrite = (opt_info(region["num"])
+                                      if region["num"] else ("-", "", "?"))
+            m = re.search(r"(\d+)", rewritten)
+            n_rw = m.group(1) if m else "-"
+            row = (f"{nth:>2d}) {region['label']:<5s}{med / 1e6:6.3f}"
+                   f" {len(vals):>3d}  {(max(vals) - min(vals)) / med * 100:5.2f}"
+                   f" {fp:<8s} {n_rw:>5s}  {rewrite}")
             lines.append(row)
             digest.append(f"{region['label']}={med / 1e6:.3f}MHz")
         elif verbose:
@@ -267,6 +268,8 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
                 lines.append(f"      · {region['label']:<8s} {what}"
                              f"  ×{len(vals):<3d} {'过渡' if len(vals) < 3 else ''}")
     title = f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s"
+    if lines:
+        lines.insert(0, "   #       主频样本   波动 指纹      改写  rewrite")
     return title, lines, " ".join(digest) or "无运行区间"
 
 
@@ -336,10 +339,10 @@ def main() -> int:
             on_heartbeat = False
         print(text, flush=True)
 
-    def new_region(label: str, fp: str = "", rewritten: str = "",
-                   rewrite: str = "") -> None:
-        regions.append({"label": label, "fp": fp, "rewritten": rewritten,
-                        "rewrite": rewrite, "segments": []})
+    def new_region(label: str, num: str | None = None) -> None:
+        """开一个新区间，只记编号 —— 指纹/模式等摘要时才查（编译点检测时
+        改写子进程多半还没写 optimize.log，竞态见 summarize）。"""
+        regions.append({"label": label, "num": num, "segments": []})
 
     def report_compile(label: str, name: str, starter: bool = False) -> None:
         """打一条编译点（启动时补报的那条标为"起始"）。"""
@@ -350,7 +353,9 @@ def main() -> int:
         say(f"{term.paint(when, 'blue')}  {term.paint('▣ ' + tag, 'bold', 'magenta')} "
             f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
             + (f"  {term.paint(rewritten, 'green')}" if rewritten else "")
-            + f"  {term.paint('rewrite=' + rewrite, 'cyan')}")
+            + f"  {term.paint('rewrite=' + rewrite, 'cyan')}"
+            + (f"  {term.paint('（改写子进程未完，摘要时修正）', 'yellow')}"
+               if rewrite == "?" else ""))
         sink.write("compile", note=f"{tag} {name} 指纹={fp} {rewritten} rewrite={rewrite}")
 
     def on_segment(samples: list[tuple[float, float]]) -> None:
@@ -381,8 +386,7 @@ def main() -> int:
     if starter:
         report_compile("", starter, starter=True)
         m = re.search(r"(\d+)", starter)
-        fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
-        new_region(f"#{m.group(1)}" if m else starter, fp, rewritten, rewrite)
+        new_region(f"#{m.group(1)}" if m else starter, m.group(1) if m else None)
     else:
         new_region("起始")
 
@@ -401,8 +405,7 @@ def main() -> int:
                 seg.close()           # 先让旧段落进旧区间
                 report_compile("", name)
                 m = re.search(r"(\d+)", name)
-                fp, rewritten, rewrite = opt_info(m.group(1) if m else None)
-                new_region(f"#{m.group(1)}" if m else name, fp, rewritten, rewrite)
+                new_region(f"#{m.group(1)}" if m else name, m.group(1) if m else None)
                 last_game_time = None
 
             if not winmem.find_pid(EXE):

@@ -269,7 +269,7 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
                              f"  ×{len(vals):<3d} {'过渡' if len(vals) < 3 else ''}")
     title = f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s"
     if lines:
-        lines.insert(0, "   #       主频样本   波动 指纹      改写  rewrite")
+        lines.insert(0, "   #      主频 样本   波动 指纹      改写  rewrite")
     return title, lines, " ".join(digest) or "无运行区间"
 
 
@@ -353,9 +353,7 @@ def main() -> int:
         say(f"{term.paint(when, 'blue')}  {term.paint('▣ ' + tag, 'bold', 'magenta')} "
             f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
             + (f"  {term.paint(rewritten, 'green')}" if rewritten else "")
-            + f"  {term.paint('rewrite=' + rewrite, 'cyan')}"
-            + (f"  {term.paint('（改写子进程未完，摘要时修正）', 'yellow')}"
-               if rewrite == "?" else ""))
+            + f"  {term.paint('rewrite=' + rewrite, 'cyan')}")
         sink.write("compile", note=f"{tag} {name} 指纹={fp} {rewritten} rewrite={rewrite}")
 
     def on_segment(samples: list[tuple[float, float]]) -> None:
@@ -380,6 +378,23 @@ def main() -> int:
             return None
         return struct.unpack("<f", raw_speed)[0], struct.unpack("<d", raw_time)[0]
 
+    # 编译点行要等 optimize.log 写出那行再打：hook_out_NNN.bin 是真编译器
+    # 编译完就落盘的，但改写子进程（py 冷启动 + objdump 反汇编 + 全量对照
+    # 自检）还要几百毫秒到几秒才写日志 —— 立刻打只能打出 rewrite=? 。区间
+    # 记账不受影响：检测到新产物就立即开新区间，只是打印行晚一点。
+    pending: list[tuple[str, float]] = []   # (产物文件名, 等待截止时刻)
+
+    def flush_pending(now: float) -> None:
+        """把等到日志的编译点行打出来；没等到且没超时就留到下一轮。"""
+        while pending:
+            name, until = pending[0]
+            m = re.search(r"(\d+)", name)
+            fp, _rw, rewrite = opt_info(m.group(1) if m else None)
+            if rewrite == "?" and now < until:
+                return
+            pending.pop(0)
+            report_compile("", name)
+
     seen: set[str] = set()
     scan_hook_dir(seen)               # 首次只登记现状，不重复报成"新编译"
     starter = latest_product()
@@ -403,10 +418,11 @@ def main() -> int:
 
             for name in scan_hook_dir(seen):
                 seg.close()           # 先让旧段落进旧区间
-                report_compile("", name)
                 m = re.search(r"(\d+)", name)
                 new_region(f"#{m.group(1)}" if m else name, m.group(1) if m else None)
+                pending.append((name, time.time() + 5.0))   # 最多等 5s，超时打占位
                 last_game_time = None
+            flush_pending(time.time())
 
             if not winmem.find_pid(EXE):
                 sink.write("game", note="游戏已退出，等待重新启动")
@@ -416,6 +432,7 @@ def main() -> int:
                 h = winmem.open_process(pid)
                 seen.clear()
                 scan_hook_dir(seen)
+                pending.clear()   # 重启后编号重新从 1 计，旧 pending 会对错日志行
                 last_game_time = None
                 sink.write("game", note=f"重连 PID={pid} 基址=0x{base:X}")
                 continue

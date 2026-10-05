@@ -630,17 +630,27 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
     new_entry = None
     note = "未改写（解析失败）" if parsed is None else f"未改写（rewrite = {mode}）"
 
+    fallback = ""                       # 缩短没生效的原因 —— 写进 optimize.log，
+                                        # 否则日志只有「（等长）」，看不出为什么
     if parsed is not None and mode in ("short", "short_cse") and entry is None:
-        # 防呆：老转发层不传 --entry，short 会把游戏跳崩（见 docstring 入口协议）
-        print("⚠ 转发层没传入口偏移（老版本？）→ 退回等长改写", file=sys.stderr)
+        # 防呆：老转发层不传 --entry，缩短后 Result[2] 没人改 → 游戏拿到错锚点
+        fallback = "转发层没传 --entry"
+        print(f"⚠ {fallback} → 退回等长改写", file=sys.stderr)
         mode = "on"
 
     if parsed is not None and mode in ("short", "short_cse"):
         wins, skipped = find_windows(parsed)
-        cse = (find_cse(parsed, exclude={w[0] for w in wins})
-               if mode == "short_cse" else [])
+        exclude = {w[0] for w in wins}
+        # 入口锚点若正好是某条指令的起点，那条不能删（删了游戏拿到的是下一条）
+        if entry is not None:
+            for i, insn in enumerate(parsed):
+                if insn[0] == entry:
+                    exclude.add(i)
+                    break
+        cse = find_cse(parsed, exclude=exclude) if mode == "short_cse" else []
         r = rewrite_short(data0, parsed, wins, cse, skipped)
         if r is None:
+            fallback = "缩短防御未过（详见 opt_stderr.log）"
             print("❌ 缩短改写防御未过 → 退回等长改写（收益保底）", file=sys.stderr)
             mode = "on"
         else:
@@ -655,12 +665,14 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
                 print(f"    CSE 删 0x{off:X}: {parsed[i][2]} {parsed[i][3]}（{size} B）",
                       file=sys.stderr)
             map_off = _map_maker(wins, cse)
-            starts = ({parsed[i][0] for i in range(len(parsed))}
-                      | {w[1] + 5 for w in wins})
             cut_off = {c[1] for c in cse}
-            if (entry is None or entry not in starts or entry in cut_off
-                    or map_off(entry) is None):
-                print(f"❌ 入口偏移 0x{entry:X} 不在指令边界 → 退回等长改写", file=sys.stderr)
+            # Result[2]（`--entry`）是产物内的**锚点偏移**，不保证落在指令边界：
+            # 实测 RV32IM 0x215B 恰好是，MIPS 0x2142 却落在 "break point" 字符串
+            # **中间**。它随产物平移，所以只要「能映射」且「不是被删掉的那条指令」
+            # 就更新它（早期版本要求它在指令边界，把 MIPS 直接退回 on —— 2026-10-05）。
+            if entry is None or entry in cut_off or map_off(entry) is None:
+                fallback = f"入口锚点 0x{entry:X} 无法映射（落在窗口内或被删指令里）"
+                print(f"⚠ {fallback} → 退回等长改写", file=sys.stderr)
                 mode, data, wins, cse = "on", data0, [], []
             else:
                 new_entry = map_off(entry)
@@ -670,6 +682,8 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
     if parsed is not None and mode == "on" and not short_used:
         data, done, skipped = rewrite(data0, parsed)
         note = f"改写 {done} 处 / 模式 {done + sum(skipped.values())} 处（等长）"
+        if fallback:
+            note += f" ⚠ 缩短未生效：{fallback}"
         for k, v in skipped.most_common(4):
             print(f"    放弃 {v:>5} 处：{k}", file=sys.stderr)
 

@@ -375,19 +375,27 @@ def main() -> int:
     def report_compile(label: str, name: str, starter: bool = False) -> None:
         """打一条编译点（启动时补报的那条标为"起始"）。
 
-        rewrite 取转发层 hook.log 的配置值（编译时刻写的，立即可得）；指纹 /
-        改写处数此时多半还没有（改写子进程还在跑），摘要时才补全。"""
+        这一行在改写子进程还没写 optimize.log 时就要打，所以：
+        - 显示 **#编号**而不是 `hook_out_037.bin`（编号才是各区间的键）；
+        - 指纹/改写处数没就绪时显示 `…`（不是 `-`，免得被读成“没有指纹”）；
+        - rewrite 没就绪时用转发层 hook.log 的**配置值**并标上 `(配置)` ——
+          摘要里才是实际执行值（short 防御未过会退 on），两者不一致本身就是信息。"""
         m = re.search(r"(\d+)", name)
         num = m.group(1) if m else None
-        fp, rewritten, _rw = opt_info(num)
-        rewrite = mode_of(num)
+        fp, rewritten, actual = opt_info(num)
+        if actual != "?":
+            rewrite = actual
+        else:
+            rewrite = f"{mode_from_hook_log(num)}(配置)" if num else "?"
         tag = "起始编译" if starter else "编译点"
         when = datetime.now().strftime("[%H:%M:%S]")
+        who = f"#{num}" if num else name
         say(f"{term.paint(when, 'blue')}  {term.paint('▣ ' + tag, 'bold', 'magenta')} "
-            f"{term.paint(name, 'bold')}  {term.paint('指纹 ' + fp, 'blue')}"
+            f"{term.paint(who, 'bold')}  "
+            f"{term.paint('指纹 ' + (fp if fp != '-' else '…'), 'blue')}"
             + (f"  {term.paint(rewritten, 'green')}" if rewritten else "")
             + f"  {term.paint('rewrite=' + rewrite, 'cyan')}")
-        sink.write("compile", note=f"{tag} {name} 指纹={fp} {rewritten} rewrite={rewrite}")
+        sink.write("compile", note=f"{tag} {who} 指纹={fp} {rewritten} rewrite={rewrite}")
 
     def on_segment(samples: list[tuple[float, float]]) -> None:
         """段收尾时不打印，只记账：落一行日志 + 存进当前区间（退出时按区间归并）。"""

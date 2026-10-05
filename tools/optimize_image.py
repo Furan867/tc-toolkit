@@ -37,10 +37,14 @@ short 模式的重定位面（探查 work/tmp/probe_jmp.py，2026-10-05 实测�
 - 相对跳转/调用**全部 rel32**：E9（jmp）/ E8（call）disp 在 +1，0F 8x（jcc）disp
   在 +2。没有 rel8（无 ±127 越界问题）；
 - 寄存器间接 call（`41 ff d6` 一类，14 条）不是相对寻址，**不动**；
-- rip 相对只有一种形态：`48 8d 0d <rel32>`（lea rcx,[rip+disp]，有符号，disp 在 +3），
-  3 处全部指向产物内（函数指针，随代码平移）；
+- rip 相对是 `lea r64,[rip+disp32]`（REX.W 8D <modrm: mod=00,rm=101> disp32，
+  **reg 任意**，disp 在 +3），两电路实测各 1~3 处，全部指向产物内（函数指针）。
+  ⚠ 曾经把 modrm 写死成 `0d`（rcx）—— RV32IM 里恰好只有这一种，换成 MIPS 的
+  `lea rax`（`48 8d 05`）就整条 short **静默退回 on**（2026-10-05 实测踩到：
+  MIPS 三轮 short/short_cse 全是 on，主频白测）；
 - 跳转目标**没有任何一处落在改写窗口内**（5670 窗口全查过）；目标必须落在旧指令
-  边界上，否则视为解析有误、整体放弃。
+  边界上，否则视为解析有误、整体放弃；rip 目标还必须在**产物内**——跳转有
+  「是否指令边界」兜底，rip 没有，超界会让映射静默算出错值。
 
 **产物里混着数据段**（实测 0x213F 起是字符串表；objdump 连续反汇编会把数据
 误读成指令，零空洞自检发现不了；数据假跳转的特征是 target 不落任何指令边界，
@@ -431,12 +435,21 @@ def rewrite_short(data: bytes, insns, wins, cse, skipped):
                 return None
             reloc += 1
         elif "[rip" in ops:
-            # 探查（2026-10-05）：全部是 48 8d 0d <rel32>。只认这个形态，其余放弃。
-            if len(raw) != 7 or raw[0] != 0x48 or raw[1] != 0x8D or raw[2] != 0x0D:
+            # lea r64,[rip+disp32] = REX.W 8D <modrm: mod=00, rm=101> disp32，**reg 任意**
+            # （0d=rcx、05=rax、15=rdx…；
+            #  高 REX.R 位（0x4c 前缀）能括到 r8–r15）。
+            # ⚠ 曾经把 reg 写死成 rcx（0d）：RV32IM 里恰好只有这一种形态，换成 MIPS
+            # （lea rax）就整条 short 静默退回 on（2026-10-05 实测踩到）。
+            if (len(raw) != 7 or (raw[0] & 0xF8) != 0x48 or raw[1] != 0x8D
+                    or (raw[2] & 0xC7) != 0x05):
                 print(f"❌ 不认识的 rip 形态 0x{off:X}: {raw.hex(' ')}", file=sys.stderr)
                 return None
             d = int.from_bytes(raw[3:7], "little", signed=True)
-            nt = map_off(off + len(raw) + d)
+            t = off + len(raw) + d
+            if not 0 <= t < len(data):               # 目标跑出产物 → 平移映射没意义
+                print(f"❌ rip 目标 0x{t:X} 在产物外（0x{off:X} 处）", file=sys.stderr)
+                return None
+            nt = map_off(t)
             if nt is None:
                 print(f"❌ rip 目标落在窗口中段（0x{off:X} 处）", file=sys.stderr)
                 return None
@@ -496,6 +509,7 @@ def check_reloc(old, new, wins, cse) -> list[str]:
             return None
         return x - prefix[m]
 
+    hi = old[-1][0] + len(old[-1][1])
     bad: list[str] = []
     di = 0
     i = j = 0
@@ -539,9 +553,12 @@ def check_reloc(old, new, wins, cse) -> list[str]:
         elif "[rip" in ops:
             t = off + len(raw) + int.from_bytes(raw[3:7], "little", signed=True)
             nt = noff + len(nraw) + int.from_bytes(nraw[3:7], "little", signed=True)
-            if map_off(t) != nt:
+            # 目标必须在产物内（生产路径也是这么判的，这里独立重算一遍）
+            want = map_off(t) if 0 <= t < hi else None
+            if want != nt:
                 bad.append(f"0x{off:X}: rip 旧 target 0x{t:X} 应映到"
-                           f" 0x{map_off(t):X}，实际是 0x{nt:X}")
+                           f" {hex(want) if want is not None else '产物外/窗口中段'}，"
+                           f"实际是 0x{nt:X}")
         elif ops != nops:
             bad.append(f"0x{off:X}: {ops} → 0x{noff:X}: {nops}")
         i += 1

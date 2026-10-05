@@ -86,6 +86,49 @@ BRANCH_MN = ("jmp", "je", "jne", "jz", "jnz", "jl", "jg", "jle", "jge",
              "ja", "jb", "jae", "jbe", "call", "ret")
 #: objdump 解不出的字节（含义不明）—— 改写必须绕开，扫描遇到就当不安全
 UNDECODED = "(bad)"
+
+#: 寄存器别名族：同族任一处写都算「写了该寄存器」（CSE 判定的条件 1）
+FAMILY: dict[str, str] = {}
+for _name, _aliases in {
+    "rax": ("rax", "eax", "ax", "al", "ah"),
+    "rcx": ("rcx", "ecx", "cx", "cl", "ch"),
+    "rdx": ("rdx", "edx", "dx", "dl", "dh"),
+    "rbx": ("rbx", "ebx", "bx", "bl", "bh"),
+    "rsp": ("rsp", "esp", "sp", "spl"),
+    "rbp": ("rbp", "ebp", "bp", "bpl"),
+    "rsi": ("rsi", "esi", "si", "sil"),
+    "rdi": ("rdi", "edi", "di", "dil"),
+}.items():
+    for _a in _aliases:
+        FAMILY[_a] = _name
+for _k in range(8, 16):
+    for _suf in ("", "d", "w", "b"):
+        FAMILY[f"r{_k}{_suf}"] = f"r{_k}"
+
+#: 第一操作数不是写入目标的助记符（intel 语法）。call 单列 —— 它虽然也算流打断，
+#: 但隐式写 rax/rcx/rdx/rsi/rdi/r8-r11，不能当“不写”。
+NO_DST_MN = (frozenset(("cmp", "test", "push", "pop", "nop", "jmp", "ret"))
+             | (set(BRANCH_MN) - {"call"}))
+#: 顺序流会被打断的助记符（CSE 的条件 2）：跳转/调用/返回 + loop/jrcxz 族。
+#: 比 BRANCH_MN 多 loop 族（它也递减 rcx）。
+FLOW_BREAK_MN = frozenset(BRANCH_MN) | {"loop", "loope", "loopne", "jrcxz", "jecxz"}
+#: 隐式写（宁滥勿缺）。注意 mul/imul/div/idiv 的单操作数形态在这里，
+#: 双/三操作数形态的显式目标由操作数解析负责 —— 两者不能混。
+IMPLICIT_WRITES: dict[str, tuple[str, ...]] = {
+    "call": ("rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"),
+    "cdq": ("rdx",), "cqo": ("rdx",), "cwd": ("rdx",), "cdqe": ("rax",),
+    "cpuid": ("rax", "rbx", "rcx", "rdx"),
+}
+#: 单操作数形态隐含写 rax/rdx 的助记符
+IMPLICIT_MULDIV = ("mul", "imul", "div", "idiv")
+#: objdump 文本里的寄存器 token（`mov r10d,0x1` / `shl r12,cl`）
+REG_TOKEN = re.compile(r"\b(?:r(?:ax|bx|cx|dx|sp|bp|si|di)|e(?:ax|bx|cx|dx|sp|bp|si|di)|"
+                       r"[abcd][lhx]|[sd]il|[sb]pl|r(?:[89]|1[0-5]))[dwb]?\b")
+#: `mov <reg>,<立即数>` 的文本形态（已去掉空格）
+MOV_IMM_RE = re.compile(r"^(\w+),(0x[0-9a-f]+|\d+)$")
+#: CSE：两条同值装载之间最多隔几条指令。间隔越大越容易踩到别的路径（且收益越小），
+#: 实测 ≤5 与 ≤30 的安全子集几乎相同（484 vs 489），所以取小的。
+CSE_GAP = 5
 #: 配置文件：reversing/opt.ini 的 [opt] 段。**每次编译重新读**，
 #: 所以改完下次编译就生效，不用重启游戏。
 CONF = os.path.normpath(os.path.join(HERE, os.pardir, "opt.ini"))
@@ -140,6 +183,9 @@ def ecx_dead_after(insns, i: int) -> str:
             return "中间有无法解码的字节"
         if mn in BRANCH_MN:
             return "中间有跳转/调用"
+        if mn.startswith(("rep", "loop")) or mn in ("jrcxz", "jecxz"):
+            # rep 族与 loop 把 rcx 当**完整计数**消耗掉，高 24 位不允许是残留
+            return f"{mn} 要用完整 ecx"
         if "cl" in o or "ecx" in o:
             if o[:1] == ["ecx"] and mn not in ("cmp", "test"):
                 return ""            # 先被覆盖，旧值作废
@@ -182,6 +228,99 @@ def find_windows(insns):
     return wins, skipped
 
 
+def _mov_imm(insn):
+    """`mov <reg>,<立即数>` → (寄存器, 立即数)，否则 None。"""
+    if insn[2] != "mov":
+        return None
+    m = MOV_IMM_RE.match((insn[3] or "").replace(" ", ""))
+    if not m or m.group(1) not in FAMILY:
+        return None
+    return m.group(1), m.group(2)
+
+
+def written_families(insn) -> set[str]:
+    """该指令写到的寄存器族（显式目标 + 隐式写）。宁滥勿缺 —— CSE 的条件 1。
+
+    ⚠️ `rep` 前缀指令（`rep stos` 等）会**消耗 rcx**（计数递减到 0），objdump 把
+    前缀拼进助记符（`rep stos`），所以必须用 startswith 判，不能靠隐式写表查键 ——
+    漏了它就会把「rep 之后重装同一计数」误删（实测踩过 3 处）。
+    """
+    out: set[str] = set()
+    mn, ops = insn[2], (insn[3] or "").replace(" ", "")
+    if mn.startswith(("rep", "loop")):
+        out |= {"rcx", "rdi", "rsi"}                 # 计数 + 字符串指令的双指针
+    if mn in ("push", "pop"):
+        out.add("rsp")
+    if mn == "call":
+        return out | {FAMILY[r] for r in IMPLICIT_WRITES["call"] if r in FAMILY}
+    if mn in NO_DST_MN:
+        return out
+    if mn in IMPLICIT_MULDIV and "," not in ops:     # 单操作数：隐式 rax/rdx
+        return {"rax", "rdx"}
+    if mn in IMPLICIT_WRITES:
+        return {FAMILY[r] for r in IMPLICIT_WRITES[mn] if r in FAMILY}
+    dst = ops if mn == "xchg" else (ops.split(",", 1)[0] if "," in ops else ops)
+    for r in REG_TOKEN.findall(dst):
+        if r in FAMILY:
+            out.add(FAMILY[r])
+    return out
+
+
+def jump_targets(insns) -> set[int]:
+    """全部 rel32 跳转/调用的目标偏移（产物内边界过滤，挡掉数据段的假跳转）。"""
+    lo, hi = insns[0][0], insns[-1][0] + len(insns[-1][1])
+    tgts: set[int] = set()
+    for off, raw, _mn, _ops in insns:
+        disp = None
+        if len(raw) == 5 and raw[0] in (0xE9, 0xE8):
+            disp = int.from_bytes(raw[1:5], "little", signed=True)
+        elif len(raw) == 6 and raw[0] == 0x0F and 0x80 <= raw[1] <= 0x8F:
+            disp = int.from_bytes(raw[2:6], "little", signed=True)
+        if disp is not None:
+            t = off + len(raw) + disp
+            if lo <= t < hi:
+                tgts.add(t)
+    return tgts
+
+
+def find_cse(insns, exclude=()) -> list[tuple[int, int, int]]:
+    """找可安全删除的「重复装载」：`mov <reg>,<imm> ... mov <reg>,<imm>`（同 reg 同值）。
+
+    删第二条要六个条件全过（前五个与 `work/tmp/check_cse.py` 一致，第六条是本实现补的）：
+      1) 中间没写该寄存器族（写同族任一处都算）—— 写了就得重装；
+      2) 中间没有跳转/调用/返回 —— **顺序流必须连续**，否则区间可能来自别的路径，
+         那时寄存器值不保证还等于第一条装载的值（`check_cse.py` 漏了这条）；
+      3) 区间内没有跳转目标 —— 外部跳进区间要靠第二条装载；
+      4) 第二条自己不是跳转目标（实测块接缝处的 mov 往往正是入口）；
+      5) 第二条不是 `exclude`（移位窗口头）—— 那里交给窗口改写，收益更大；
+      6) 中间没有无法解码的字节。
+
+    返回 [(insns 下标, 偏移, 字节长), ...]，按偏移升序。
+    """
+    tgts = jump_targets(insns)
+    exclude = set(exclude)
+    out: list[tuple[int, int, int]] = []
+    last: dict[tuple[str, str], int] = {}
+    for idx, insn in enumerate(insns):
+        key = _mov_imm(insn)
+        if key is None:
+            continue
+        j = last.get(key)
+        if j is not None and idx - j <= CSE_GAP:
+            fam = FAMILY[key[0]]
+            ok = True
+            for k in range(j + 1, idx):
+                mn = insns[k][2]
+                if mn == UNDECODED or mn in FLOW_BREAK_MN or insns[k][0] in tgts \
+                        or fam in written_families(insns[k]):
+                    ok = False
+                    break
+            if ok and insns[idx][0] not in tgts and idx not in exclude:
+                out.append((idx, insn[0], len(insn[1])))
+        last[key] = idx
+    return out
+
+
 def rewrite(data: bytes, insns) -> tuple[bytes, int, Counter]:
     """就地等长改写（rewrite = on），返回 (新字节, 改写处数, 放弃原因)。"""
     wins, skipped = find_windows(insns)
@@ -195,36 +334,57 @@ def rewrite(data: bytes, insns) -> tuple[bytes, int, Counter]:
     return bytes(out), len(wins), skipped
 
 
-def _map_maker(wins):
-    """旧偏移 → 新偏移。窗口整体消失（新指令就放在窗口起点）：
-    窗口头与移位起点都映到新窗口起点；落在窗口中段视为错误（None）。"""
+def cuts_of(wins, cse) -> list[tuple[int, int]]:
+    """收缩点列表，升序：`(旧偏移, 收缩字节数)`。
+
+    窗口收缩恒 4 字节（旧 `mov ecx,imm32`+移位 = 7/8 B → 新移位 = 3/4 B）；
+    CSE 删的是**整条**装载（5 B 或 6 B）。两者相加就是总缩短量。
+    """
+    cuts = [(w[1], 4) for w in wins] + [(c[1], c[2]) for c in cse]
+    cuts.sort()
+    return cuts
+
+
+def _map_maker(wins, cse):
+    """旧偏移 → 新偏移：减去「位于它之前的所有收缩量」。
+
+    窗口头与移位起点都映到新窗口起点（窗口内两条并成一条）；落在窗口中段或
+    CSE 删除的指令内部（非起点）视为错误（None）——调用方据此放弃本轮缩短。
+    """
     starts = [w[1] for w in wins]
     ends = [w[1] + w[3] for w in wins]
+    cuts = cuts_of(wins, cse)
+    coffs = [c[0] for c in cuts]
+    csize = {c[1]: c[2] for c in cse}               # 键必须是**偏移**，不是 insns 下标
+    prefix = [0]
+    for _o, d in cuts:
+        prefix.append(prefix[-1] + d)
 
     def map_off(x: int) -> int | None:
         i = bisect.bisect_right(starts, x) - 1
-        if i >= 0 and x < ends[i]:                  # 落在窗口 i 里
-            if x in (starts[i], starts[i] + 5):     # 窗口头 / 移位起点（mov 恒 5 字节）
-                return starts[i] - 4 * i
-            return None
-        return x - 4 * (i + 1)                      # 前面 i+1 个窗口各缩 4 字节
+        if i >= 0 and x < ends[i] and x not in (starts[i], starts[i] + 5):
+            return None                             # 窗口中段（那条空隙不存在）
+        m = bisect.bisect_left(coffs, x)
+        if m > 0 and coffs[m - 1] < x < coffs[m - 1] + csize.get(coffs[m - 1], 0):
+            return None                             # CSE 删除的指令内部（非起点）
+        return x - prefix[m]
     return map_off
 
 
-def rewrite_short(data: bytes, insns):
-    """缩短改写 + 重定位（rewrite = short）。
+def rewrite_short(data: bytes, insns, wins, cse, skipped):
+    """缩短改写 + 重定位（rewrite = short）：移位窗口与 CSE 删除一次平移到位。
 
-    返回 (新字节, 改写处数, 重定位条数, wins, 放弃原因)；
-    任一防御检查不过 → 打印原因并返回 None（调用方退回等长改写，收益保底）。
+    返回 (新字节, 重定位条数)；任一防御检查不过 → 打印原因并返回 None
+    （调用方退回等长改写，收益保底）。
     数据假跳转（target 不落指令边界）单点跳过：不改、原样平移。
     """
-    wins, skipped = find_windows(insns)
-    if not wins:
+    if not wins and not cse:
         return None
-    map_off = _map_maker(wins)
+    map_off = _map_maker(wins, cse)
     starts = {insns[i][0] for i in range(len(insns))} | {w[1] + 5 for w in wins}
     win_head = {w[0]: k for k, w in enumerate(wins)}
     win_tail = {w[0] + 1 for w in wins}
+    cut_idx = {c[0] for c in cse}
 
     out = bytearray(data[:8])                       # 长度头原样（总长不变，值也不用动）
     di = 0                                          # 已缩短的字节数
@@ -236,6 +396,9 @@ def rewrite_short(data: bytes, insns):
             di += window - len(new)                 # 恒 4
             continue
         if idx in win_tail:                         # 旧移位指令不拷贝
+            continue
+        if idx in cut_idx:                          # CSE：整条重复装载消失
+            di += len(raw)
             continue
         b = bytearray(raw)
         new_off = off - di
@@ -278,13 +441,15 @@ def rewrite_short(data: bytes, insns):
         out += b
     if len(out) < len(data):                         # 尾部补 nop：总长不变（不在执行路径上）
         out += nops(len(data) - len(out))
-    return bytes(out), len(wins), reloc, wins, skipped
+    return bytes(out), reloc
 
 
-def check_reloc(old, new, wins) -> list[str]:
+def check_reloc(old, new, wins, cse) -> list[str]:
     """独立通道对照：新旧两份反汇编逐指令比对，验证重定位语义。
 
-    不依赖拼装过程的任何内部状态 —— 从两份反汇编直接读：
+    不依赖拼装过程的任何内部状态（连 map_off 都在这里重写一遍，与生产路径互为对照）
+    —— 从两份反汇编直接读：
+    - CSE 删除的指令：旧序列有、新序列无，且不得是跳转目标（否则那里就少了一次装载）；
     - 窗口头：旧 (mov,移位) 两条 → 新一条移位，起点必须等于旧起点减累计缩短量；
     - 其余指令 mn/ops 逐字相同 —— **这条同时是完备的数据防御**：改坏任何数据
       字节（假窗口/假跳转被误动）都会让该处反汇编文本变化而暴露；
@@ -296,14 +461,35 @@ def check_reloc(old, new, wins) -> list[str]:
     """
     istarts = {ins[0] for ins in old} | {w[1] + 5 for w in wins}
     win_no = {w[0]: k for k, w in enumerate(wins)}
+    cut_idx = {c[0] for c in cse}
+    # 独立重算跳转目标（不复用 jump_targets，好让两套实现对照着抓错）：
+    # CSE 删掉的指令绝不能是任何跳转的目标 —— 否则那条路径来了就少一次装载。
+    tgts: set[int] = set()
+    for _off, _raw, _mn, _ops in old:
+        _disp = None
+        if len(_raw) == 5 and _raw[0] in (0xE9, 0xE8):
+            _disp = int.from_bytes(_raw[1:5], "little", signed=True)
+        elif len(_raw) == 6 and _raw[0] == 0x0F and 0x80 <= _raw[1] <= 0x8F:
+            _disp = int.from_bytes(_raw[2:6], "little", signed=True)
+        if _disp is not None:
+            tgts.add(_off + len(_raw) + _disp)
     starts = [w[1] for w in wins]
     ends = [w[1] + w[3] for w in wins]
+    cuts = sorted([(w[1], 4) for w in wins] + [(c[1], c[2]) for c in cse])
+    coffs = [c[0] for c in cuts]
+    csize = {c[1]: c[2] for c in cse}               # 键必须是**偏移**，不是 insns 下标
+    prefix = [0]
+    for _o, d in cuts:
+        prefix.append(prefix[-1] + d)
 
     def map_off(x):
         i = bisect.bisect_right(starts, x) - 1
-        if i >= 0 and x < ends[i]:
-            return starts[i] - 4 * i if x in (starts[i], starts[i] + 5) else None
-        return x - 4 * (i + 1)
+        if i >= 0 and x < ends[i] and x not in (starts[i], starts[i] + 5):
+            return None
+        m = bisect.bisect_left(coffs, x)
+        if m > 0 and coffs[m - 1] < x < coffs[m - 1] + csize.get(coffs[m - 1], 0):
+            return None
+        return x - prefix[m]
 
     bad: list[str] = []
     di = 0
@@ -314,6 +500,12 @@ def check_reloc(old, new, wins) -> list[str]:
             break
         off, raw, mn, ops = old[i]
         noff, nraw, nmn, nops = new[j]
+        if i in cut_idx:                        # 旧序列这条被 CSE 删：新序列无对应
+            if off in tgts:
+                bad.append(f"CSE 删掉的 0x{off:X} 是跳转目标（那条路径会少一次装载）")
+            di += len(raw)
+            i += 1
+            continue
         if i in win_no:
             k = win_no[i]
             _ii, _soff, newb, window = wins[k]
@@ -356,7 +548,14 @@ def check_reloc(old, new, wins) -> list[str]:
 
 
 def rewrite_mode() -> str:
-    """三态：'on'（等长）/ 'short'（缩短+重定位）/ 'off'。读不到配置默认 'on'。"""
+    """三态：'on'（等长）/ 'short'（缩短+重定位）/ 'off'。读不到配置默认 'on'。
+
+    环境变量 `OPT_REWRITE` 优先于 opt.ini —— 离线验证用（opt.ini 归游戏内实验用，
+    验证时不应该去动它）：`OPT_REWRITE=short py tools/optimize_image.py --in ...  `
+    """
+    v = os.environ.get("OPT_REWRITE", "").strip().lower()
+    if v in ("on", "short", "off"):
+        return v
     cp = configparser.ConfigParser()
     try:
         if not cp.read(CONF, encoding="utf-8"):
@@ -381,7 +580,8 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
     parsed = A.load_insns(src)
     mode = rewrite_mode()
     short_used = False
-    wins = None
+    wins: list[tuple[int, int, bytes, int]] = []
+    cse: list[tuple[int, int, int]] = []
     new_entry = None
     note = "未改写（解析失败）" if parsed is None else f"未改写（rewrite = {mode}）"
 
@@ -391,21 +591,30 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
         mode = "on"
 
     if parsed is not None and mode == "short":
-        r = rewrite_short(data0, parsed)
+        wins, skipped = find_windows(parsed)
+        cse = find_cse(parsed, exclude={w[0] for w in wins})
+        r = rewrite_short(data0, parsed, wins, cse, skipped)
         if r is None:
             print("❌ 缩短改写防御未过 → 退回等长改写（收益保底）", file=sys.stderr)
             mode = "on"
         else:
-            data, done, reloc, wins, skipped = r
-            note = f"缩短改写 {done} 处 / 重定位 {reloc} 条"
+            data, reloc = r
+            cut_b = sum(c[2] for c in cse)
+            note = (f"缩短改写 {len(wins)} 处 / CSE 删 {len(cse)} 处（{cut_b} B）"
+                    f" / 重定位 {reloc} 条")
             for k, v in skipped.most_common(4):
                 print(f"    放弃 {v:>5} 处：{k}", file=sys.stderr)
-            map_off = _map_maker(wins)
+            for i, off, size in cse[:3]:                 # 留几处明细供人工抽查
+                print(f"    CSE 删 0x{off:X}: {parsed[i][2]} {parsed[i][3]}（{size} B）",
+                      file=sys.stderr)
+            map_off = _map_maker(wins, cse)
             starts = ({parsed[i][0] for i in range(len(parsed))}
                       | {w[1] + 5 for w in wins})
-            if entry is None or entry not in starts or map_off(entry) is None:
+            cut_off = {c[1] for c in cse}
+            if (entry is None or entry not in starts or entry in cut_off
+                    or map_off(entry) is None):
                 print(f"❌ 入口偏移 0x{entry:X} 不在指令边界 → 退回等长改写", file=sys.stderr)
-                mode, data, wins = "on", data0, None
+                mode, data, wins, cse = "on", data0, [], []
             else:
                 new_entry = map_off(entry)
                 note += f" / 入口 0x{entry:X}→0x{new_entry:X}"
@@ -440,7 +649,7 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
             print("❌ 缩短产物反汇编不自洽", file=sys.stderr)
             write_out(data0)
             return 4
-        bad = check_reloc(parsed, ins2, wins)
+        bad = check_reloc(parsed, ins2, wins, cse)
         if bad:
             for line in bad[:6]:
                 print(f"❌ {line}", file=sys.stderr)

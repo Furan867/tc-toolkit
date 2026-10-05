@@ -331,10 +331,6 @@ static void purge_workdir(void) {
  * eqdup → 搬进 request）；u3021 的参数布局没验证过，只当备用。重放优先 u3000。
  *
  * 安全：prologue 不符就放弃，任何一步失败都不影响游戏 —— 与优化器同一原则。 */
-#define CTL_DIR  OPT_PROJ "\\work\\ctl"
-#define CTL_GO   CTL_DIR "\\go"
-#define CTL_STAT CTL_DIR "\\state.txt"
-
 #define CSEND_U3000_RVA 0x261790
 #define CSEND_U3021_RVA 0x261930
 static const unsigned char PROL_U3000[17] = {
@@ -398,52 +394,12 @@ static int install_csend_hook(void* target, const unsigned char* prol, int plen,
     return 1;
 }
 
-static int file_exists(const char* p) {
-    return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
-}
-
-static void write_state(void) {
-    char buf[128];
-    int n = sprintf(buf, "hook0=%d hook1=%d hit0=%ld hit1=%ld replays=%ld\r\n",
-                    (int)g_installed[0], (int)g_installed[1],
-                    (long)g_hit[0], (long)g_hit[1], (long)g_replays);
-    write_file(CTL_STAT, buf, n);
-}
-
-static DWORD WINAPI ctl_thread(LPVOID param) {
-    (void)param;
-    Sleep(2000);                                   /* 等游戏把自己装好 */
-    CreateDirectoryA(CTL_DIR, NULL);
-    for (int i = 0; i < 2; i++)
-        g_copy[i] = VirtualAlloc(NULL, CSEND_COPY_LEN, MEM_COMMIT | MEM_RESERVE,
-                                 PAGE_READWRITE);
-    unsigned char* base = (unsigned char*)GetModuleHandleA(NULL);   /* 宿主 exe 基址 */
-    if (!base) return 1;
-    g_csend_fn[0] = base + CSEND_U3000_RVA;
-    g_csend_fn[1] = base + CSEND_U3021_RVA;
-    /* 2026-10-06：转发层里这个 hook 先停用 —— 拷 preorder 的 rep movsb 有跨页
-     * 越界风险（preorder 在堆上，紧邻页尾就炸），实测崩过一次游戏。捕获验证改为
-     * 外部探针（work/tmp/probe_csend.py）做，它只读寄存器、零风险。
-     * 将来要用这里的重放能力，得先把“拷贝”换成先查页边界或深拷贝。 */
-    if (0) {
-        g_installed[0] = install_csend_hook(base + CSEND_U3000_RVA, PROL_U3000, 17, 0, 0);  /* rdx */
-        g_installed[1] = install_csend_hook(base + CSEND_U3021_RVA, PROL_U3021, 16, 1, 1);  /* rcx */
-    }
-    write_state();
-    for (;;) {
-        Sleep(200);
-        if (!file_exists(CTL_GO)) continue;
-        DeleteFileA(CTL_GO);
-        int slot = g_hit[0] ? 0 : (g_hit[1] ? 1 : -1);      /* 优先 u3000 */
-        if (slot < 0) { write_state(); continue; }          /* 还没捕到 preorder */
-        typedef void (*csend_fn)(void*, void*);
-        InterlockedIncrement(&g_replays);
-        if (slot == 0) ((csend_fn)g_csend_fn[0])(NULL, g_copy[0]);      /* u3000: rdx */
-        else           ((csend_fn)g_csend_fn[1])(g_copy[1], NULL);      /* u3021: rcx */
-        write_state();
-    }
-    return 0;
-}
+/* 这里曾有 ctl_thread：由 DllMain 启动的线程，检查 work/ctl/go 并重放 compile_thread_send。
+ * 2026-10-06 移除 —— 它持有「会调用游戏函数」的能力，而所有重放路线都已证明不可行
+ * （详见 docs/2026-10-06-recompile-trigger-investigation.md），并且游戏一旦加载电路就崩。
+ *
+ * 下面保留 build_stub / install_csend_hook 作为重编译入口：它们只在被调用时才使用，
+ * 本身不会主动做任何事。 */
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     (void)hinst;
@@ -451,7 +407,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         purge_captures();
         purge_workdir();
-        CreateThread(NULL, 0, ctl_thread, NULL, 0, NULL);   /* 重编译触发器 */
     }
     return TRUE;
 }

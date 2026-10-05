@@ -320,12 +320,138 @@ static void purge_workdir(void) {
     FindClose(h);
 }
 
+/* ===== 重编译触发器（MVP，2026-10-05） =====
+ *
+ * 目标：让外部脚本能「再编译一次当前电路」（换了 opt.ini 的改写模式后要生效）。
+ * 编译是纯事件驱动的，没有任何数据开关；唯一抓手是 compile_thread_send ——
+ * 编译请求的唯一出口。这里给它装 inline hook：在调用瞬间把 rdx（preorder）拷进
+ * 本层缓冲（那一刻数据必然有效），之后外部创建 work/ctl/go 就重放一次。
+ *
+ * 两个版本各自拷一份：u3000 的 rdx 已由反汇编确认是 preorder（mov r8,rdx →
+ * eqdup → 搬进 request）；u3021 的参数布局没验证过，只当备用。重放优先 u3000。
+ *
+ * 安全：prologue 不符就放弃，任何一步失败都不影响游戏 —— 与优化器同一原则。 */
+#define CTL_DIR  OPT_PROJ "\\work\\ctl"
+#define CTL_GO   CTL_DIR "\\go"
+#define CTL_STAT CTL_DIR "\\state.txt"
+
+#define CSEND_U3000_RVA 0x261790
+#define CSEND_U3021_RVA 0x261930
+static const unsigned char PROL_U3000[17] = {
+    0x57,0x56,0x53,0x48,0x81,0xEC,0xC0,0x05,0x00,0x00,0x31,0xC0,0xB9,0x5A,0x00,0x00,0x00};
+static const unsigned char PROL_U3021[16] = {
+    0x41,0x54,0x55,0x57,0x48,0x81,0xEC,0x00,0x03,0x00,0x00,0x31,0xC0,0x49,0x89,0xCC};
+#define CSEND_COPY_LEN 1024
+
+static void*          g_csend_fn[2]  = {NULL, NULL};   /* [0]=u3000(rdx), [1]=u3021(rcx) */
+static void*          g_copy[2]     = {NULL, NULL};
+static volatile LONG  g_hit[2]      = {0, 0};
+static volatile LONG  g_replays     = 0;
+static volatile LONG  g_installed[2] = {0, 0};
+
+/* 蹦床：拷 preorder → 置 hit → 执行原 prologue → 跳回原函数
+ *
+ * rdx 可能为 nil（实测：无条件 rep movsb 会从地址 0 读 → 游戏报 storage 错误），
+ * 所以拷贝前先 test/jz。跳转偏移 0x27 是算好的：jz 结束于 [9]，目标 [48]。
+ * 改动前面的指令长度必须重算这个偏移。 */
+static unsigned char* build_stub(void* dst, int len, volatile LONG* hit, void* flagbase,
+                                 const unsigned char* prol, int plen, void* cont, int use_rcx) {
+    (void)flagbase;
+    unsigned char* base = (unsigned char*)VirtualAlloc(NULL, 256, MEM_COMMIT | MEM_RESERVE,
+                                                       PAGE_EXECUTE_READWRITE);
+    if (!base) return NULL;
+    unsigned char* q = base;
+    *q++=0x51; *q++=0x52; *q++=0x56; *q++=0x57;              /* push rcx/rdx/rsi/rdi */
+    *q++=0x48; *q++=0x85; *q++= use_rcx ? 0xC9 : 0xD2;       /* test %rcx/%rdx,%rcx/%rdx */
+    *q++=0x74; *q++=0x27;                                    /* jz [48] —— 跳过拷贝 */
+    *q++=0x48; *q++=0xB8; *(void**)q = dst;       q += 8;    /* movabs dst,%rax */
+    *q++=0x48; *q++=0x89; *q++= use_rcx ? 0xCE : 0xD6;       /* mov %rsi,%rcx/%rdx */
+    *q++=0x48; *q++=0x89; *q++=0xC7;                         /* mov %rax,%rdi */
+    *q++=0xB9; *(int*)q = len;                    q += 4;    /* mov $len,%ecx */
+    *q++=0xF3; *q++=0xA4;                                    /* rep movsb */
+    *q++=0x48; *q++=0xB8; *(void**)q = (void*)hit; q += 8;   /* movabs hit,%rax */
+    *q++=0xC7; *q++=0x00; *(int*)q = 1;           q += 4;    /* movl $1,(%rax) */
+    *q++=0x5F; *q++=0x5E; *q++=0x5A; *q++=0x59;              /* pop rdi/rsi/rdx/rcx */
+    memcpy(q, prol, plen);                        q += plen; /* 原 prologue */
+    *q++=0x48; *q++=0xB8; *(void**)q = cont;      q += 8;    /* movabs cont,%rax */
+    *q++=0xFF; *q++=0xE0;                                    /* jmp *%rax */
+    return base;
+}
+
+static int install_csend_hook(void* target, const unsigned char* prol, int plen,
+                              int slot, int use_rcx) {
+    if (!target || plen < 14 || !g_copy[slot]) return 0;
+    if (memcmp(target, prol, plen) != 0) return 0;           /* 版本不符 → 放弃 */
+    unsigned char* stub = build_stub(g_copy[slot], CSEND_COPY_LEN, &g_hit[slot], NULL,
+                                     prol, plen, (char*)target + plen, use_rcx);
+    if (!stub) return 0;
+    unsigned char patch[32];
+    DWORD old;
+    patch[0] = 0xFF; patch[1] = 0x25;
+    patch[2] = patch[3] = patch[4] = patch[5] = 0;
+    *(void**)(patch + 6) = stub;                             /* jmp [rip+0] → stub */
+    memset(patch + 14, 0x90, plen - 14);
+    if (!VirtualProtect(target, plen, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    memcpy(target, patch, plen);
+    VirtualProtect(target, plen, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), target, plen);
+    return 1;
+}
+
+static int file_exists(const char* p) {
+    return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
+}
+
+static void write_state(void) {
+    char buf[128];
+    int n = sprintf(buf, "hook0=%d hook1=%d hit0=%ld hit1=%ld replays=%ld\r\n",
+                    (int)g_installed[0], (int)g_installed[1],
+                    (long)g_hit[0], (long)g_hit[1], (long)g_replays);
+    write_file(CTL_STAT, buf, n);
+}
+
+static DWORD WINAPI ctl_thread(LPVOID param) {
+    (void)param;
+    Sleep(2000);                                   /* 等游戏把自己装好 */
+    CreateDirectoryA(CTL_DIR, NULL);
+    for (int i = 0; i < 2; i++)
+        g_copy[i] = VirtualAlloc(NULL, CSEND_COPY_LEN, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
+    unsigned char* base = (unsigned char*)GetModuleHandleA(NULL);   /* 宿主 exe 基址 */
+    if (!base) return 1;
+    g_csend_fn[0] = base + CSEND_U3000_RVA;
+    g_csend_fn[1] = base + CSEND_U3021_RVA;
+    /* 2026-10-06：转发层里这个 hook 先停用 —— 拷 preorder 的 rep movsb 有跨页
+     * 越界风险（preorder 在堆上，紧邻页尾就炸），实测崩过一次游戏。捕获验证改为
+     * 外部探针（work/tmp/probe_csend.py）做，它只读寄存器、零风险。
+     * 将来要用这里的重放能力，得先把“拷贝”换成先查页边界或深拷贝。 */
+    if (0) {
+        g_installed[0] = install_csend_hook(base + CSEND_U3000_RVA, PROL_U3000, 17, 0, 0);  /* rdx */
+        g_installed[1] = install_csend_hook(base + CSEND_U3021_RVA, PROL_U3021, 16, 1, 1);  /* rcx */
+    }
+    write_state();
+    for (;;) {
+        Sleep(200);
+        if (!file_exists(CTL_GO)) continue;
+        DeleteFileA(CTL_GO);
+        int slot = g_hit[0] ? 0 : (g_hit[1] ? 1 : -1);      /* 优先 u3000 */
+        if (slot < 0) { write_state(); continue; }          /* 还没捕到 preorder */
+        typedef void (*csend_fn)(void*, void*);
+        InterlockedIncrement(&g_replays);
+        if (slot == 0) ((csend_fn)g_csend_fn[0])(NULL, g_copy[0]);      /* u3000: rdx */
+        else           ((csend_fn)g_csend_fn[1])(g_copy[1], NULL);      /* u3021: rcx */
+        write_state();
+    }
+    return 0;
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     (void)hinst;
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         purge_captures();
         purge_workdir();
+        CreateThread(NULL, 0, ctl_thread, NULL, 0, NULL);   /* 重编译触发器 */
     }
     return TRUE;
 }

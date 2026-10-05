@@ -236,6 +236,22 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
     return fp, rewritten, rewrite
 
 
+def configured_mode() -> str:
+    """当前 opt.ini 的 rewrite 取值 —— 直接读文件，复用改写器的同一份逻辑。
+
+    为什么要这个：编译点行打印时改写子进程还没写完 optimize.log，拿不到
+    「实际执行值」；又不能用转发层 hook.log 的（GetPrivateProfileString 有
+    进程内缓存，刚保存完可能返回旧值）。自己读文件就没这两个问题。
+    它表示「你配的是什么」；摘要里的才是「实际跑了什么」，两者不同 = 缩短
+    被防御退回（optimize.log 的等长行会带 `⚠ 缩短未生效：原因`）。
+    """
+    try:
+        import optimize_image as optmod
+        return optmod.rewrite_mode()
+    except Exception:                      # 配置读不了也不能让监听器倒下
+        return "?"
+
+
 def product_fingerprint(num: str | None) -> str:
     """电路指纹：该次编译**原始产物**（`hook_out_NNN.bin`）的 sha256 前 8 位。
 
@@ -302,6 +318,8 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
     title = f"{nth} 个编译区间 · 共 {total} 个样本 · 约 {total}s"
     if lines:
         lines.insert(0, "   #      主频 样本   波动 指纹      改写  rewrite")
+        lines.insert(1, "   （指纹 = 该次编译**原始产物** sha256 前 8 位，与 rewrite 模式无关："
+                        "同一电路切模式应当同指纹）")
     return title, lines, " ".join(digest) or "无运行区间"
 
 
@@ -382,15 +400,14 @@ def main() -> int:
         这一行在改写子进程还没写 optimize.log 时就要打，所以：
         - 显示 **#编号**而不是 `hook_out_037.bin`（编号才是各区间的键）；
         - 指纹自己算（product_fingerprint，即时可得）；
-        - rewrite 只认 optimize.log 的**实际执行值**，没就绪就显示 `…` ——
-          不用转发层 hook.log 的配置值：它是 `GetPrivateProfileString` 读的，
-          Windows 对 INI 有进程内缓存，编辑器刚保存时可能返回旧值（实测 #043
-          hook.log 写 on、实际跑的是 short_cse），拿它当显示值只会误导。"""
+        - rewrite：实际执行值还没就绪，就取**当前 opt.ini 的配置值**
+          （configured_mode，自己读文件）—— 不是转发层 hook.log 那个
+          （GetPrivateProfileString 有缓存，实测 #043 写出 on 而实际跑 short_cse）。"""
         m = re.search(r"(\d+)", name)
         num = m.group(1) if m else None
         fp = product_fingerprint(num)
         _f, rewritten, actual = opt_info(num)
-        rewrite = actual if actual != "?" else "…"
+        rewrite = actual if actual != "?" else configured_mode()
         tag = "起始编译" if starter else "编译点"
         when = datetime.now().strftime("[%H:%M:%S]")
         who = f"#{num}" if num else name

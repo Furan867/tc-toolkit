@@ -55,7 +55,6 @@ OPT_DIR = ROOT / "work" / "opt"        # 转发层工作区（每次游戏会话
 FREQ_DIR = ROOT / "work" / "freq"      # 本工具的输出（跨会话保留，不会被人清掉）
 LOG_PATH = FREQ_DIR / "freq_log.tsv"
 SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"     # 给人读的总结（每次运行覆盖）
-OPT_INI = ROOT / "opt.ini"
 OPT_LOG = OPT_DIR / "optimize.log"
 
 EXE = "Turing Complete.exe"
@@ -200,15 +199,14 @@ def latest_product() -> str | None:
 
 
 def opt_info(num: str | None) -> tuple[str, str, str]:
-    """取该产物的（指纹, 改写处数, rewrite 开关），读不到就退化成占位符。"""
-    rewrite = "?"
-    try:
-        for line in OPT_INI.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("rewrite"):
-                rewrite = line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    fp, rewritten = "-", ""
+    """取该产物的（指纹, 改写处数, rewrite 模式），读不到就退化成占位符。
+
+    模式从 optimize.log 的 note 行提取 —— 那是编译时刻的权威记录。
+    早先读 opt.ini 的当前值，但那是「检测时刻」的配置：用户在编译间隙
+    切开关时必然错位（实测 #005 编译时是 on、标注成了 off，而 005 与 006
+    的产物 sha 完全相同，铁证是同模式）。判定产物模式**只认 optimize.log**。
+    """
+    fp, rewritten, rewrite = "-", "", "?"
     if num:
         try:
             for line in OPT_LOG.read_text(encoding="utf-8").splitlines():
@@ -219,6 +217,12 @@ def opt_info(num: str | None) -> tuple[str, str, str]:
                     m = re.search(r"改写 (\d+) 处", line)
                     if m:
                         rewritten = f"改写 {m.group(1)} 处"
+                    if "缩短改写" in line:
+                        rewrite = "short"
+                    elif "（等长）" in line:
+                        rewrite = "on"
+                    elif "未改写" in line:
+                        rewrite = "off"
         except OSError:
             pass
     return fp, rewritten, rewrite

@@ -17,21 +17,30 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
 ----------
     删掉我们的 compile.dll，把 compile_real.dll 改名回 compile.dll
 
+编译做的事（--build）
+------------------
+    调 w64devkit 的 gcc 把 tools/compile_hook.c 编译成 build/compile_hook.dll
+    （gcc 路径可用环境变量 W64DEVKIT_GCC 覆盖）—— 免去手敲那条长命令。
+
+典型流程：`--build` → `--deploy` → 启动游戏。
+
 ⚠️ 游戏运行时 DLL 文件被锁、无法改名 —— 脚本检测到游戏在跑会直接拒绝执行。
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shutil
+import subprocess
 import sys
 
 # Windows 下 stdout 走管道时默认 GBK，输出里的 ✅/❌ 会抛 UnicodeEncodeError
 for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    _rec = getattr(_stream, "reconfigure", None)
+    if _rec is not None:
+        with contextlib.suppress(Exception):
+            _rec(encoding="utf-8", errors="replace")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -71,20 +80,62 @@ def guard():
     return True
 
 
+def build():
+    """编译转发层到 build/compile_hook.dll。"""
+    src = os.path.join(ROOT, "tools", "compile_hook.c")
+    dst = os.path.join(ROOT, "build", "compile_hook.dll")
+    gcc = os.environ.get("W64DEVKIT_GCC", r"D:\bin\w64devkit\bin\gcc.exe")
+    if not os.path.exists(gcc):
+        print(f"❌ 找不到 gcc：{gcc}\n   （可用环境变量 W64DEVKIT_GCC 指定）",
+              file=sys.stderr)
+        return 1
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+    except OSError as exc:
+        print(f"❌ 建不出 build 目录：{exc}", file=sys.stderr)
+        return 1
+    cmd = [gcc, "-shared", "-O2", "-static", "-o", dst, src]
+    print("$ " + " ".join(cmd))
+    r = subprocess.run(cmd)
+    if r.returncode != 0:
+        print(f"❌ 编译失败（返回 {r.returncode}）", file=sys.stderr)
+        return r.returncode
+    print(f"✅ 已编译 {dst}（{os.path.getsize(dst)} B）")
+    return 0
+
+
 def deploy():
     if not guard():
         return 1
     if not os.path.exists(HOOK):
-        print(f"❌ 转发层不存在：{HOOK}\n   先编译：gcc -shared -O2 -static "
-              f"-o build/compile_hook.dll tools/compile_hook.c", file=sys.stderr)
-        return 1
-    if os.path.exists(REAL):
-        print("⚠️ compile_real.dll 已存在，看起来已经部署过了。要用 --restore 先还原。",
+        print(f"❌ 转发层不存在：{HOOK}\n   先编译：py tools/deploy_compile_hook.py --build",
               file=sys.stderr)
         return 1
-    shutil.move(TARGET, REAL)
+    if os.path.exists(REAL):
+        # 已处于部署状态：只把新的转发层 DLL 盖上去（原 DLL 在 compile_real.dll，
+        # 千万不要动它）。这样更新流程就是 --build → --deploy 两下，不必先还原。
+        print("ℹ️ 已处于部署状态，只更新转发层 DLL")
+        try:
+            shutil.copy2(HOOK, TARGET)
+        except OSError as exc:
+            print(f"❌ 复制失败：{exc}", file=sys.stderr)
+            return 1
+        print(f"✅ 已更新 {TARGET}（{os.path.getsize(TARGET)} B）")
+        return 0
+    try:
+        shutil.move(TARGET, REAL)
+    except OSError as exc:
+        print(f"❌ 改名失败（原 DLL 未被改动）：{exc}", file=sys.stderr)
+        return 1
     print("✅ compile.dll → compile_real.dll")
-    shutil.copy2(HOOK, TARGET)
+    try:
+        shutil.copy2(HOOK, TARGET)
+    except OSError as exc:
+        # 复制失败就把原件改回去，不要留下半部署状态（游戏会干脆加载不了编译器）
+        with contextlib.suppress(OSError):
+            shutil.move(REAL, TARGET)
+        print(f"❌ 复制失败（已还原原 DLL）：{exc}", file=sys.stderr)
+        return 1
     print("✅ work/compile_hook.dll → compile.dll")
     print("\n部署完成。现在启动游戏、切换或编辑一次电路，")
     print("源码会写到 work/hook/hook_src_NNN.si，产物写到 work/hook/hook_out_NNN.bin。")
@@ -97,10 +148,14 @@ def restore():
     if not os.path.exists(REAL):
         print("⚠️ compile_real.dll 不存在 —— 看起来没部署过，无需还原。", file=sys.stderr)
         return 1
-    if os.path.exists(TARGET):
-        os.remove(TARGET)
-        print("✅ 已删除转发层 compile.dll")
-    shutil.move(REAL, TARGET)
+    try:
+        if os.path.exists(TARGET):
+            os.remove(TARGET)
+            print("✅ 已删除转发层 compile.dll")
+        shutil.move(REAL, TARGET)
+    except OSError as exc:
+        print(f"❌ 还原失败：{exc}", file=sys.stderr)
+        return 1
     print("✅ compile_real.dll → compile.dll（已还原为原始文件）")
     return 0
 
@@ -111,9 +166,13 @@ def main():
     g.add_argument("--deploy", action="store_true", help="部署转发层")
     g.add_argument("--restore", action="store_true", help="还原为原始 compile.dll")
     g.add_argument("--status", action="store_true", help="查看当前状态")
+    g.add_argument("--build", action="store_true",
+                   help="编译 tools/compile_hook.c → build/compile_hook.dll")
     a = ap.parse_args()
     if a.status:
         return status()
+    if a.build:
+        return build()
     return deploy() if a.deploy else restore()
 
 

@@ -571,6 +571,27 @@ def check_reloc(old, new, wins, cse) -> list[str]:
 VALID_MODES = ("on", "short", "short_cse", "off")
 
 
+def resolve_mode(cli: str | None) -> str:
+    """模式来源优先级：**命令行 --mode > OPT_REWRITE > opt.ini**。
+
+    命令行这个通道是给转发层用的：它读完 opt.ini 后把值传进来，配置就只被读
+    一次、只被判定一次，不会出现「hook.log 标一个值、改写器实跑另一个值」——
+    2026-10-05 的 short_cse 就是这样错位的：C 侧自己维护了一份白名单且没跟上
+    四态，把 short_cse 当非法值改写成 on 才写进 hook.log。因此合法值集合只在本
+    模块定义一次，C 侧不做白名单（它只检查能否安全放进命令行）。
+
+    显式传来的值非法 → 警告 + 按 on（不再回落到配置文件：两个来源混用会再次
+    制造「标注 vs 实际」的分叉）。
+    """
+    if not cli:
+        return rewrite_mode()
+    if cli not in VALID_MODES:
+        print(f"⚠ 转发层传来的模式非法（{cli!r}，不在 {VALID_MODES}）→ 按 on 处理",
+              file=sys.stderr)
+        return "on"
+    return cli
+
+
 def rewrite_mode() -> str:
     """四态：'on'（等长）/ 'short'（缩短+重定位）/ 'short_cse'（缩短 + 删重复装载）
     / 'off'。读不到配置默认 'on'。
@@ -612,7 +633,8 @@ def rewrite_mode() -> str:
     return "on"                                  # 没有配置文件 / 没这行：默认等长改写
 
 
-def run(src: str, dst: str, entry: int | None = None) -> int:
+def run(src: str, dst: str, entry: int | None = None,
+        mode_cli: str | None = None) -> int:
     try:
         with open(src, "rb") as f:
             data0 = f.read()                        # 原样，自校验失败时回写它
@@ -623,7 +645,7 @@ def run(src: str, dst: str, entry: int | None = None) -> int:
     data = data0
 
     parsed = A.load_insns(src)
-    mode = rewrite_mode()
+    mode = resolve_mode(mode_cli)
     short_used = False
     wins: list[tuple[int, int, bytes, int]] = []
     cse: list[tuple[int, int, int]] = []
@@ -758,11 +780,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="产物改写器（等长 / 缩短两模式）")
     ap.add_argument("--in", dest="src", required=True, help="转发层落盘的原始产物")
     ap.add_argument("--out", dest="dst", required=True, help="要写回游戏的产物")
-    ap.add_argument("--entry", help="产物入口偏移（转发层从 Result[2] 取来，十六进制）——"
-                    "缩短模式必须同步更新它，否则游戏跳进指令中间（见模块 docstring）")
+    ap.add_argument("--entry", help="产物锚点偏移（转发层从 Result[2] 取来，十六进制）——"
+                    "缩短模式必须同步更新它，否则游戏拿到错位置（见模块 docstring）")
+    ap.add_argument("--mode", help="改写模式，由转发层从 opt.ini 读来后传进来；"
+                    "不传则自己读 opt.ini。优先级：--mode > OPT_REWRITE > opt.ini")
     args = ap.parse_args()
     entry = int(args.entry, 16) if args.entry else None
-    return run(args.src, args.dst, entry)
+    return run(args.src, args.dst, entry, args.mode)
 
 
 if __name__ == "__main__":

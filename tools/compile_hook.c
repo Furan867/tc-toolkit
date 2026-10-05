@@ -32,10 +32,11 @@
  *   NimStr = {long long len; void* ptr}      字符数据在 ptr + 8（不是内联！）
  *   Result = {long long out_len; void* out_ptr; ...}   共 40 字节
  *   注意 out_len 的值等于**整个缓冲的长度**（含 8 字节头），不是机器码长度。
- *   qword[2]（out+16）= **入口偏移**（2026-10-05 实测：空源码 0x212F、RV32IM
- *   0x215B，落在固定前缀末尾、组件区之前）—— 游戏每 tick 从产物的这个偏移
- *   进入。缩短改写会平移它，必须同步更新，否则游戏跳进指令中间（实测必崩）。
- *   改写器把新偏移写在 NNN.entry.txt，由本层读回改 qword[2]。
+ *   qword[2]（out+16）= 产物内的**锚点偏移**（空源码 0x212F、RV32IM 0x215B、
+ *   MIPS 0x2142）。它随产物平移，但**不保证落在指令边界上**（MIPS 那个就在
+ *   "break point" 字符串中间），所以按「能映射」处理即可，别要求它在指令起点。
+ *   缩短改写会平移它，必须同步更新，否则游戏拿到错位置（实测主频掉到 0.566
+ *   后越界崩溃）。改写器把新偏移写在 NNN.entry.txt，由本层读回改 qword[2]。
  *
  * 编译
  * ----
@@ -173,23 +174,30 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     sprintf(entry, "%s%c%03ld.entry.txt", OPT_DIR, SEP, seq);
     DeleteFileA(entry);   /* 防残留：上一轮同号的入口文件不能影响本轮 */
 
-    /* 把 rewrite 配置写进 hook.log（起子进程前）：监听主频的程序要拿
-       「编译时刻」的配置值，等改写子进程写 optimize.log 要几百毫秒起。
-       读法与 Python 侧 rewrite_mode() 一致：读不到/非法都按 on。 */
-    char mode[32] = "on";
-    GetPrivateProfileStringA("opt", "rewrite", "on", mode, sizeof(mode),
+    /* 读 rewrite 配置：**这里不判断合法性，连字符集也不查** —— 合法值集合只在
+       改写器的 VALID_MODES 定义一次。这边要是也维护一份，漏一个值就会像
+       2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
+       short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
+    char mode[32] = "";
+    GetPrivateProfileStringA("opt", "rewrite", "", mode, sizeof(mode),
                               OPT_PROJ "\\opt.ini");
-    if (strcmp(mode, "on") && strcmp(mode, "short") && strcmp(mode, "off"))
-        lstrcpyA(mode, "on");
-    char tag[40];
-    sprintf(tag, "rewrite=%s", mode);
+    /* 写进 hook.log（起子进程前）：监听主频的程序要拿「编译时刻」的值 ——
+       这一行与下面传给改写器的值同源，必然一致。 */
+    char tag[64];
+    sprintf(tag, "rewrite=%s", mode[0] ? mode : "(空)");
     opt_log(seq, tag);
     if (!write_file(raw, buf, len)) { opt_log(seq, "写 raw 失败，放弃"); return; }
 
-    /* 把 Result[2]（旧入口偏移）传给改写器 —— 缩短模式必须同步更新它 */
-    sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX",
-            PY_EXE, OPT_SCRIPT, raw, opt,
-            out ? *(long long*)((char*)out + 16) : 0LL);
+    /* 把 Result[2]（旧锚点偏移）与模式一起传给改写器 —— 缩短模式必须同步更新
+       锚点；模式由转发层传过去，是为了让配置**只被读一次、只被判定一次**。 */
+    if (mode[0])
+        sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX --mode %s",
+                PY_EXE, OPT_SCRIPT, raw, opt,
+                out ? *(long long*)((char*)out + 16) : 0LL, mode);
+    else
+        sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX",
+                PY_EXE, OPT_SCRIPT, raw, opt,
+                out ? *(long long*)((char*)out + 16) : 0LL);
 
     /* 把子进程的输出/错误引到文件：游戏是 GUI 进程，标准句柄未必可用，
        直接继承会让 Python 在写 stderr 时出怪事，且现场也留不下来。 */

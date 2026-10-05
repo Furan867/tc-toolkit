@@ -123,13 +123,21 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `optimize_image.py` | **改写器**。当前规则：`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8` + 单条 4 字节 nop（等长，零重定位）。实测该规则把 219088 字节的电路从 **5.4 提到 6.9 MHz** | ✅ |
+| `optimize_image.py` | **改写器**，三态 `rewrite = on/short/off`。规则：`mov ecx,imm32` + `移位 r,cl` → `移位 r,imm8`。`on`（等长填充，零重定位）把 219088 字节的电路从 **5.4 提到 6.9 MHz**；`short`（缩短 + 全量重定位 950 条跳转）实测 **6.84 → 8.05 MHz（+17.7%）**，防御不过自动退回 `on` | ✅ |
 | `check_shift_equiv.py` | 把改写前后的两段字节各拷进一块 RWX 内存**真的跑一遍**对比结果，验证规则语义等价（当前 5280 组） | ✅ |
 | `try_compile_dll.py --hook` | 强制加载转发层调 `compile()`，用于**离线**验证这条管路（注意转发层加载时会清空 `work/hook/`） | ✅ |
 
-运行痕迹都在 `work/opt/`（**每次游戏启动清空**）：`hook.log`（每次编译是「已就地写回」
-还是「放弃」）、`optimize.log`（改写处数 / 是否被配置关掉 / 产物 sha256）、
-`opt_stderr.log`（自检与抽查明细）。
+**入口偏移机制（short 的关键安全机制）**：compile() 输出的 `Result[2]` 是游戏每 tick
+调用产物的入口偏移，short 平移后必须同步更新 —— 转发层经 `--entry` 传旧值，改写器
+算出新值写 `NNN.entry.txt`，转发层读回改 `Result[2]`。该文件**只在全部自校验通过
+后**才写：任何失败路径都没写过 → 转发层读不到就不动 → 游戏拿到原样（详见 STATUS
+的「入口协议」小节，short 首版漏了它、实测必崩）。
+
+运行痕迹都在 `work/opt/`（**每次游戏启动清空**）：`hook.log`（每次编译三行：
+`rewrite=配置值`〔起子进程前写，编译时刻的配置〕→ 已就地写回 / 放弃 → 入口偏移
+已更新〔仅 short〕）、`optimize.log`（改写处数 / **实际执行的模式** / 产物 sha256）、
+`opt_stderr.log`（自检与抽查明细）。判定一次编译「配置了什么」看 `hook.log` 的
+rewrite 行，「实际改成了什么」看 `optimize.log` —— 两者不一致就是 short 退回了 on。
 
 **`opt.ini` 不在 git 里**（★ 2026-10-05）：它每做一次「开 / 关」对照实验都要改，
 留着会让工作区长期显示为脏。模板是 `opt.ini.example`，首次
@@ -138,11 +146,13 @@ python tools/profile_by_image.py --watch          # 监听新出现的捕获
 
 ```ini
 rewrite = on
+; rewrite = short
 ; rewrite = off
 ```
 
 同一时刻**只能有一行生效** —— 两行都放开时 configparser 会因重复 key 报错，
-`rewrite_on()` 便按「开启」兜底。
+`rewrite_mode()` 按「on」兜底；非法值也按「on」处理（转发层写 `hook.log` 的
+`GetPrivateProfileString` 读取逻辑与它一致）。
 
 ---
 

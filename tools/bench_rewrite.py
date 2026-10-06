@@ -4,14 +4,15 @@
 前提
 ----
 - 游戏在跑；
-- 电路**有一次可撤销的编辑历史**（撤销栈非空）—— 重编译就是靠 simctl 交替发
-  Ctrl+Z / Ctrl+Shift+Z 触发的（见 tools/simctl.py），栈空了会直接报错提示。
+- **不需要**撤销栈非空：实测 **Ctrl+Z 每次都会让游戏重建场景并编译** —— 19:24
+  那六次连续 undo 的产物 sha256 完全相同（内容只回退了 1 次），编号却每次都涨。
+  所以本工具**只发 undo，不碰 redo**（redo 侧不可靠，只会白白来回拉扯电路）。
 - 测的过程中会**抢游戏窗口前台**（SendInput 有前台校验，不抢就不发键），
   期间别切走窗口。
 
 每个模式一遍
 ------------
-    写 opt.ini  →  stop() 保底  →  simctl.recompile()  →  等 NNN.opt.bin 出现
+    写 opt.ini  →  stop() 保底  →  recompile("undo")  →  等 NNN.opt.bin 出现
     →  stop() 保底  →  simctl.run()  →  采样 N 秒  →  simctl.stop()
 
 ⚠ simctl 的 run() 是注入 **F6（运行/暂停切换）**，不是幂等的「确保在运行」：
@@ -95,14 +96,14 @@ def set_rewrite_ini(mode: str) -> str | None:
 
 # ---------------------------------------------------------------- 产物 / 主频
 
-def latest_product() -> str | None:
-    """work/opt 里编号最大的产物编号（如 "043"）。"""
-    best = None
+def latest_product() -> tuple[str | None, float]:
+    """work/opt 里编号最大的产物：返回 (编号, 它的 mtime)。"""
+    best, bt = None, 0.0
     for p in OPT_DIR.glob("*.opt.bin"):
         m = PRODUCT_RE.match(p.name)
         if m and (best is None or int(m.group(1)) > int(best)):
-            best = m.group(1)
-    return best
+            best, bt = m.group(1), p.stat().st_mtime
+    return best, bt
 
 
 def hook_lines() -> list[str]:
@@ -119,30 +120,34 @@ def hook_lines() -> list[str]:
 
 
 def wait_new_product(prev: str | None, timeout: float, hook_before: int,
-                    tag: str, dead_after: float = 10.0) -> tuple[str | None, str]:
-    """等新产物出现，返回 (编号, 失败原因)。
+                     tag: str, since: float,
+                     dead_after: float = 6.0) -> tuple[str | None, str]:
+    """等**本次发键之后**产生的新产物，返回 (编号, 失败原因)。
 
-    一路盯 hook.log：发键后 `dead_after` 秒内一条新编译行都没有，就断定按键没
-    生效（焦点不在电路编辑区 / 撤销栈空），立刻失败 —— 不用干等到 timeout。
+    必须同时满足「编号更大」与「mtime >= since」：只比编号会误判 —— 上一次运行
+    遗留的产物编号就比 prev 大，会被 0.0s 认领（实测 #031 就这样被认成 off 那轮的
+    产物，其实那轮根本没编译，游戏没重新加载电路，采样全 0）。
+    另外一路盯 hook.log：发键后 dead_after 秒内一条新编译行都没有，就断定按键没
+    生效（焦点不在电路编辑区 / 抢前台后第一次发键丢掉），立刻失败。
     """
     t0 = time.time()
     last = 0.0
     while True:
-        cur = latest_product()
-        if cur and (prev is None or int(cur) > int(prev)):
+        cur, mt = latest_product()
+        if cur and (prev is None or int(cur) > int(prev)) and mt >= since:
             print(f"  [{tag}] 产物 #{cur} 已就绪（{time.time() - t0:.1f}s）", flush=True)
             return cur, ""
         t = time.time() - t0
         if t >= timeout:
-            return None, f"等了 {timeout:.0f}s 没等到新产物（编译卡住或失败）"
+            return None, f"等了 {timeout:.0f}s 没等到本次编译的产物"
         new_lines = len(hook_lines()) - hook_before
         if new_lines <= 0 and t >= dead_after:
             return None, (f"发键后 {dead_after:.0f}s 内 hook.log 没有新编译行 —— "
-                          "Ctrl+Z 没生效（游戏焦点不在电路编辑区？撤销栈空？）")
+                          "Ctrl+Z 没生效（抢前台后第一次发键常丢，会重试）")
         if t - last >= 3.0:
             last = t
-            what = f"编译已触发（hook.log +{new_lines} 行），等改写子进程" \
-                if new_lines > 0 else "还没看到编译行"
+            what = (f"编译已触发（hook.log +{new_lines} 行），等改写子进程"
+                    if new_lines > 0 else "还没看到编译行")
             print(f"  [{tag}] 等产物 {t:4.0f}s … {what}", flush=True)
         time.sleep(0.3)
 
@@ -174,7 +179,7 @@ def sample_freq(h: int, base: int, seconds: float, warmup: float) -> list[float]
 def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     """走一遍：换配置 → 重编译 → 运行 → 采样 → 停止。"""
     rec: dict = {"mode": mode, "num": None, "hz": [], "note": ""}
-    prev = latest_product()
+    prev, _mt = latest_product()
     old = set_rewrite_ini(mode)
     print(f"  [{tag}] opt.ini: {old} → {mode}", flush=True)
 
@@ -188,17 +193,31 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     print(f"  [{tag}] stop(F4) 保底，把状态摁到「停止」", flush=True)
     simctl.stop()
 
-    hook_before = len(hook_lines())
-    print(f"  [{tag}] recompile() 触发重编译", flush=True)
-    r = simctl.recompile()
-    if not r.ok:
-        rec["note"] = f"重编译失败：{r.detail}"
-        print(f"  [{tag}] ✗ {rec['note']}", flush=True)
-        return rec
-    num, why = wait_new_product(prev, args.compile_timeout, hook_before, tag)
+    # 显式只发 undo：实测 Ctrl+Z 每次都会触发编译（撤销栈空了也一样，只是内容不变），
+    # 所以不需要靠 undo/redo 交替，也不会反复拉扯电路内容。显式传 key 时 simctl
+    # 不记状态、退出时也不会去“恢复撤销栈”（redo 侧本来就不可靠）。
+    # 实测第一次发键常常没反应（刚抢到前台那一瞬）—— 重试几次。
+    num, why = None, ""
+    for attempt in range(1, 4):
+        hook_before = len(hook_lines())
+        since = time.time()
+        note = "" if attempt == 1 else f"（第 {attempt} 次尝试）"
+        print(f"  [{tag}] recompile(undo) 触发重编译{note}", flush=True)
+        r = simctl.recompile("undo")
+        if not r.ok:
+            why = f"重编译失败：{r.detail}"
+            print(f"  [{tag}] ✗ {why}", flush=True)
+            time.sleep(1.0)
+            continue
+        num, why = wait_new_product(prev, args.compile_timeout, hook_before, tag,
+                                    since=since)
+        if num:
+            break
+        print(f"  [{tag}] 这次没触发编译（{why}），重试", flush=True)
+        time.sleep(1.0)
     if num is None:
         rec["note"] = why
-        print(f"  [{tag}] ✗ {why}", flush=True)
+        print(f"  [{tag}] ✗ 试了 3 次都没能触发编译：{why}", flush=True)
         return rec
     rec["num"] = num
     print(f"  [{tag}] 新产物 #{num}", flush=True)
@@ -206,6 +225,7 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     # recompile 靠撤销电路触发，游戏自己会停；但状态别假设，再按一次 F4 保底。
     print(f"  [{tag}] stop(F4) 保底 → run(F6) 开跑", flush=True)
     simctl.stop()
+    time.sleep(0.6)                     # 让游戏把 F4 处理完，免得 F6 撞上旧状态
     r = simctl.run()
     if not r.ok:
         rec["note"] = f"启动失败：{r.detail}"
@@ -230,10 +250,10 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
 def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
     """把每个模式的多轮采样合成一行；相对基线的百分比按中位数算。"""
     base_hz = None
-    for r in rows:
-        if r["hz"]:
-            base_hz = statistics.median(r["hz"])
-            break                       # 第一行（默认是 off）当基线
+    if rows and rows[0]["hz"] and statistics.median(rows[0]["hz"]) >= 1e5:
+        base_hz = statistics.median(rows[0]["hz"])   # 基线只认**第一个模式**（默认 off）
+    # 它失败、或读到的是停机附近的噪声（<0.1MHz）时百分比留空，不拿别的顶上、
+    # 也不拿接近 0 的值当分母。
     out: list[str] = []
     head = (f"{'模式':<10}{'主频(中位)':>12}{'最大':>10}{'样本':>6}"
             f"{'指纹':>11}{'改写':>8}  相对基线")

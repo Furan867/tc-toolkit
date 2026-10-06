@@ -77,6 +77,7 @@ INPUT_KEYBOARD, KEYEVENTF_KEYUP = 1, 0x0002
 VK_CONTROL, VK_SHIFT, VK_Z, VK_MENU = 0x11, 0x10, 0x5A, 0x12
 VK_F4, VK_F6 = 0x73, 0x75        # F4 停止（复位）/ F6 运行-暂停切换
 GW_OWNER = 4
+SW_RESTORE = 9      # ShowWindow：还原最小化的窗口
 
 
 @dataclass
@@ -279,11 +280,22 @@ def force_foreground(hwnd: int) -> bool:
       1. 先发一次 Alt —— 系统放宽前台限制
       2. AttachThreadInput 把自己的输入队列接到前台线程，再抢
 
-    刻意不调 ShowWindow / BringWindowToTop —— 它们会改变窗口的显示状态
-    （SW_RESTORE 会让 ImGui 重算视口与 font scale），实测疑似触发了
-    game_engine.dll 里的 ImGui 断言 `scale > 0.0f`。抢前台只做「把已有窗口
-    提到最前」，不动它的尺寸与可见性。
+    **最小化的窗口先还原**（SW_RESTORE）：窗口最小化时，前台就算已经是他，按键
+    也到不了 —— 实测 IsIconic=True 时发 Ctrl+Z，游戏毫无反应；还原后立刻生效。
+
+    只在**真的最小化**时调 ShowWindow —— 窗口正常时调它会让 ImGui 多走一遍
+    还原/重绘路径：2026-10-06 那次游戏崩溃（game_engine.dll 的 ImGui 断言
+    `scale > 0.0f`）就是窗口本来正常、却多余地调了它。在真最小化的场景下实测
+    安全（游戏毫发无损），因为那正是它该凎的活。
+
+    刻意不调 BringWindowToTop —— 抢前台不需要它，而它同样会改窗口显示状态。
     """
+    # 最小化 → 先还原。这一步要放在「已经是前台就直接返回」之前：最小化窗口
+    # 完全可能“前台已经是它”而按键仍然无效。
+    if _u32.IsIconic(hwnd):
+        _u32.ShowWindow(hwnd, SW_RESTORE)
+        time.sleep(0.4)
+
     if _u32.GetForegroundWindow() == hwnd:
         return True
     _send_input(VK_MENU, False)

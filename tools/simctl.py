@@ -4,9 +4,17 @@
 设计见 docs/specs/2026-10-05-sim-ctl-design.md。
 
 三个动作：
-    run()        写内存启动仿真（commands[0]=0 run）
-    stop()       写内存停止仿真（commands[0]=3 quit_simulation）
+    run()        注入 F6 —— 游戏的「运行 / 暂停」**切换**键
+    stop()       注入 F4 —— 游戏「停止」（复位）
     recompile()  注入按键触发重编译（SendInput 发 Ctrl+Z / Ctrl+Shift+Z）
+
+run/stop 原本是写内存（commands[0] = 0 / 3），2026-10-06 改成注入按键：让游戏走
+自己那条 UI 路径，UI 状态与复位副作用都由游戏处理。代价是**必须先抢游戏窗口到
+前台**，见「抢前台」一节。
+
+⚠️ F6 是**切换**键，不是「确保在运行」：连发两次等于没发。写内存那版是幂等的
+（commands[0] 直接置成 0/3），两版语义不同 —— 调用者若要旧的幂等语义，得自己
+记住状态。
 
 recompile 走 UI 注入：让游戏自己走「电路变化 → 重建场景 → 编译」那条路。
 不开自动检测（不监听 opt.ini），不判断编译是否成功（编译必经 compile.dll，
@@ -20,6 +28,11 @@ recompile 走 UI 注入：让游戏自己走「电路变化 → 重建场景 →
 
 CLI 每次都是新进程，记不住「上次发的哪个键」，所以由调用者指定；
 脚本内循环请 import 本模块，recompile() 会自动交替并在进程退出时恢复撤销栈。
+
+CLI 还会在退出前**把焦点还给调用前那个窗口**（只在焦点确实被本工具改过、且此刻
+仍停在游戏上时才还；用户中途自己切走了就不打扰）。模块调用不做这件事 —— 模块的
+生命周期长，中途用户可能自己切焦点。代价是 CLI 一次调用可能要抢两次前台
+（一次去、一次回），比模块调用慢约 0.3~0.5 秒。
 """
 from __future__ import annotations
 
@@ -58,6 +71,7 @@ PROCESS_VM_OPERATION = 0x0008
 WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
 INPUT_KEYBOARD, KEYEVENTF_KEYUP = 1, 0x0002
 VK_CONTROL, VK_SHIFT, VK_Z, VK_MENU = 0x11, 0x10, 0x5A, 0x12
+VK_F4, VK_F6 = 0x73, 0x75        # F4 停止（复位）/ F6 运行-暂停切换
 GW_OWNER = 4
 
 
@@ -77,6 +91,9 @@ class Result:
 
 
 # ---------------------------------------------------------------- 进程与内存
+# ⚠ run/stop 已改走按键注入（见「运行 / 停止（注入按键）」），本节这套写内存
+# 通道保留作逆向记录与备用手段：_publish 是「直接按游戏命令协议置位」的完整
+# 实现（幂等，不抢前台），在需要无窗口交互的场合仍然有用。
 
 def _target() -> tuple[int, int] | None:
     """(pid, base)。游戏没运行返回 None。"""
@@ -133,34 +150,14 @@ def _publish(h: int, base: int, cmd: int, *, set_target: bool = False) -> int:
     return new_id
 
 
-# ------------------------------------------------------------------- 两个动作
+# ------------------------------------------------- 运行 / 停止（注入按键）
 
-def run() -> Result:
-    """启动仿真运行。"""
-    t = _target()
-    if not t:
-        return Result(False, "run", "游戏未运行")
-    pid, base = t
-    try:
-        h = _open_rw(pid)
-        new_id = _publish(h, base, SIM_RUN, set_target=True)
-    except OSError as e:
-        return Result(False, "run", str(e))
-    return Result(True, "run", f"command_id={new_id} target=INT64_MAX pid={pid}")
-
-
-def stop() -> Result:
-    """停止仿真（quit_simulation）。"""
-    t = _target()
-    if not t:
-        return Result(False, "stop", "游戏未运行")
-    pid, base = t
-    try:
-        h = _open_rw(pid)
-        new_id = _publish(h, base, SIM_QUIT)
-    except OSError as e:
-        return Result(False, "stop", str(e))
-    return Result(True, "stop", f"command_id={new_id} pid={pid}")
+# 早先这两个动作是**写内存**：settings[1]=INT64_MAX、commands[0]=0(run)/3(quit)、
+# commands[1]=新 id、simulation_next_command_id=新 id+1（实现见下面的 _publish，
+# 保留作逆向记录）。改走按键后，游戏用自己的 UI 路径处理这两个动作。
+# 语义差别要知道：写内存是**幂等置位**，F6 是**切换**（连发两次等于没发）。
+# 具体实现放在下面「窗口 / 抢前台 / 按键」一节之后（与 recompile 共用同一套
+# 找窗口 + 抢前台 + 校验流程）。
 
 
 # ------------------------------------------------------- 窗口 / 抢前台 / 按键
@@ -178,6 +175,8 @@ _u32.GetWindowThreadProcessId.restype = wintypes.DWORD
 _u32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 _u32.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
 _u32.IsWindowVisible.argtypes = [wintypes.HWND]
+_u32.IsWindow.argtypes = [wintypes.HWND]
+_u32.IsWindow.restype = wintypes.BOOL
 _u32.GetForegroundWindow.restype = wintypes.HWND
 _u32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _u32.BringWindowToTop.argtypes = [wintypes.HWND]
@@ -342,6 +341,59 @@ def _aim(pid: int) -> tuple[int | None, str | None]:
     return hwnd, None
 
 
+def _tap(vk: int) -> None:
+    """发一次「按下 → 抬起」（单键，无修饰键）。
+
+    调用前必须已确认前台是游戏窗口 —— SendInput 只认当前前台。
+    """
+    _send_input(vk, False)
+    time.sleep(0.06)
+    _send_input(vk, True)
+    time.sleep(0.06)
+
+
+def _send_game_key(action: str, vk: int, label: str) -> Result:
+    """共用的发键流程：找窗口 → 抢前台 → 校验前台 → 发键。
+
+    与 recompile 同一条铁律：SendInput 发给**当前前台窗口**，抢不到前台就绝不
+    发键，否则按键会落到别人的程序上（实测误发过 VS Code）。
+    按键是异步的，发完即返回，**不判断游戏那边做了什么**（沿用设计原则）。
+    """
+    t = _target()
+    if not t:
+        return Result(False, action, "游戏未运行")
+    pid, _base = t
+    hwnd, err = _aim(pid)
+    if err or hwnd is None:
+        return Result(False, action, err or "找不到游戏主窗口")
+    if not force_foreground(hwnd):
+        fg = _u32.GetForegroundWindow()
+        return Result(False, action,
+                      f"抢前台失败，已拒绝发键（前台是 {_window_owner(fg)}）")
+    if _u32.GetForegroundWindow() != hwnd:
+        fg_now = _window_owner(_u32.GetForegroundWindow())
+        return Result(False, action,
+                      f"前台校验未通过，已拒绝发键（前台是 {fg_now}）")
+    try:
+        _tap(vk)
+    except OSError as e:
+        return Result(False, action, str(e))
+    return Result(True, action, f"已发送 {label}（pid={pid}）")
+
+
+def run() -> Result:
+    """运行 / 暂停 —— 注入 F6。
+
+    注意是**切换**：正在跑的时候调用它会暂停（写内存那版是幂等置位）。
+    """
+    return _send_game_key("run", VK_F6, "F6（运行/暂停切换）")
+
+
+def stop() -> Result:
+    """停止（复位）—— 注入 F4。"""
+    return _send_game_key("stop", VK_F4, "F4（停止/复位）")
+
+
 def recompile(key: str | None = None) -> Result:
     """触发一次重编译。
 
@@ -427,18 +479,43 @@ if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _on_sigterm)
 
 
+def _restore_focus(before: int) -> None:
+    """CLI 收尾：把焦点还给调用前那个窗口（best-effort，失败静默）。
+
+    三个条件全满足才动手，否则宁可什么都不做：
+    1. `before` 是个真实存在的窗口（不是 0 / 桌面）；
+    2. 焦点确实变了（没变就无需归还）；
+    3. **此刻焦点仍停在游戏窗口上** —— 若这期间用户自己切走了，再抢回来
+       等于抢用户的焦点，比不还更糟。
+
+    模块调用不经这里（模块生命周期长，中途用户可能自己切焦点）。
+    """
+    if not before or before == _u32.GetForegroundWindow():
+        return
+    if not _u32.IsWindow(before):
+        return
+    t = _target()
+    if not t:
+        return
+    game = find_game_window(t[0])
+    if not game or _u32.GetForegroundWindow() != game:
+        return
+    force_foreground(before)
+
+
 # ---------------------------------------------------------------------- CLI
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="仿真控制：run / stop / recompile")
     sub = ap.add_subparsers(dest="action", required=True)
-    sub.add_parser("run", help="启动仿真运行")
-    sub.add_parser("stop", help="停止仿真")
+    sub.add_parser("run", help="运行 / 暂停（注入 F6，是切换键）")
+    sub.add_parser("stop", help="停止 / 复位（注入 F4）")
     p_rec = sub.add_parser("recompile", help="触发一次重编译（注入按键）")
     p_rec.add_argument("--redo", action="store_true",
                        help="改发 Ctrl+Shift+Z 重做（默认发 Ctrl+Z 撤销）")
     args = ap.parse_args(argv)
 
+    before = _u32.GetForegroundWindow()   # 收尾要把焦点还给它（只对 CLI 这么做）
     if args.action == "run":
         r = run()
     elif args.action == "stop":
@@ -446,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         r = recompile("redo" if args.redo else "undo")
     print(r)
+    _restore_focus(before)
     return 0 if r.ok else 1
 
 

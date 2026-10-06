@@ -148,8 +148,10 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
         new_lines = len(hook_lines()) - hook_before
         if new_lines <= 0 and t >= dead_after:
             return None, (f"发键后 {dead_after:.0f}s 内 hook.log 没有新编译行 —— "
-                          "Ctrl+Z 没生效：撤销栈空了（在游戏里做一次编辑就能继续），"
-                          "或抢前台后第一次发键丢了（会自动重试）")
+                          "三种可能：① 该（电路内容 × opt.ini 模式）组合已经编译过，"
+                          "游戏有编译缓存、同一组合第二次不再编译（换模式，或先在游戏里"
+                          "做一次编辑来产生新内容）；② 撤销栈空了；"
+                          "③ 抢前台后第一次发键丢了（会自动重试）")
         if t - last >= 3.0:
             last = t
             what = (f"编译已触发（hook.log +{new_lines} 行），等改写子进程"
@@ -209,7 +211,7 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         since = time.time()
         note = "" if attempt == 1 else f"（第 {attempt} 次尝试）"
         print(f"  [{tag}] recompile() 触发重编译{note}", flush=True)
-        r = simctl.recompile("undo")
+        r = simctl.recompile()      # auto 交替：由 simctl 按净消耗决定发 undo 还是 redo
         if not r.ok:
             why = f"重编译失败：{r.detail}"
             print(f"  [{tag}] ✗ {why}", flush=True)
@@ -224,8 +226,9 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     if num is None:
         rec["note"] = why
         print(f"  [{tag}] ✗ 试了 3 次都没能触发编译：{why}", flush=True)
-        print("     （撤销栈是一次性资源：每测一次消耗一步 undo；"
-              "在游戏里做几次编辑就能继续——建议一次多做几步）", flush=True)
+        print("     提醒：每次测试都需要一个『没编译过』的（电路内容 × opt.ini 模式）组合。"
+              "auto 交替只在 A/B 两个内容间摆动，所以同一模式最多测 2 次；"
+              "要接着测就得先在游戏里做一次编辑（产生新内容）。", flush=True)
         return rec
     rec["num"] = num
     print(f"  [{tag}] 新产物 #{num}", flush=True)

@@ -143,7 +143,8 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
         new_lines = len(hook_lines()) - hook_before
         if new_lines <= 0 and t >= dead_after:
             return None, (f"发键后 {dead_after:.0f}s 内 hook.log 没有新编译行 —— "
-                          "Ctrl+Z 没生效（抢前台后第一次发键常丢，会重试）")
+                          "Ctrl+Z 没生效：撤销栈空了（在游戏里做一次编辑就能继续），"
+                          "或抢前台后第一次发键丢了（会自动重试）")
         if t - last >= 3.0:
             last = t
             what = (f"编译已触发（hook.log +{new_lines} 行），等改写子进程"
@@ -218,6 +219,8 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     if num is None:
         rec["note"] = why
         print(f"  [{tag}] ✗ 试了 3 次都没能触发编译：{why}", flush=True)
+        print("     （撤销栈是一次性资源：每测一次消耗一步 undo；"
+              "在游戏里做几次编辑就能继续——建议一次多做几步）", flush=True)
         return rec
     rec["num"] = num
     print(f"  [{tag}] 新产物 #{num}", flush=True)
@@ -333,8 +336,10 @@ def main() -> int:
 
     rows: list[dict] = []
     t_start = time.time()
-    for m in modes:
-        for i in range(args.repeat):
+    # **交错**顺序（轮次在外、模式在内）：主频会随时间漂移（实测同一产物两次跑出
+    # 4.49 / 4.29 MHz，疑似 CPU 升温降频），块状重复会让漂移全落在后测的模式上。
+    for i in range(args.repeat):
+        for m in modes:
             tag = f"{m} {i + 1}/{args.repeat}" if args.repeat > 1 else m
             if winmem.find_pid(EXE) != pid:
                 print("⚠ 游戏进程变了（重启过？）—— 内存偏移全部失效，中止",

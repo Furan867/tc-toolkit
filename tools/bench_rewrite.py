@@ -159,14 +159,18 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
 
 
 def sample_freq(h: int, base: int, seconds: float, warmup: float) -> list[float]:
-    """采样 N 秒，丢掉开头 warmup 秒（主频每秒重算一次，切换点读到的是混合值）。"""
+    """采样 N 秒，丢掉开头 warmup 秒。
+
+    **1 秒一个点**：这个数就是 UI 上显示的那个，游戏自己每秒重算一次 —— 采得
+    更密只是把同一个值重复读几遍，没有意义（watch_freq 也是这个口径）。
+    """
     out: list[float] = []
     t0 = time.time()
     while True:
         t = time.time() - t0
         if t >= seconds:
             break
-        time.sleep(0.4)
+        time.sleep(1.0)
         hz = W.read_hz(h, base)          # 与 watch_freq 共用同一套主频读取
         if hz is None:
             break
@@ -259,29 +263,33 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
     # 它失败、或读到的是停机附近的噪声（<0.1MHz）时百分比留空，不拿别的顶上、
     # 也不拿接近 0 的值当分母。
 
-    # 列宽按**显示宽度**算（中文占 2 列，len() 会把表格弄歪）；频率串用
-    # watch_freq 的 fmt_hz（固定 13 显示列宽），主频读取也用它的 read_hz。
-    # “改写”列要放下 `改写 1590 处`（显示宽 12），所以给 13。
-    W10, W13, W11, W6, WRW = 10, 13, 11, 6, 13
-    out: list[str] = [(W.pad("模式", W10) + W.pad("主频(中位)", W13)
-                       + W.pad("最大", W11) + W.pad("样本", W6)
-                       + W.pad("指纹", W11) + W.pad("改写", WRW) + "相对基线")]
+    # 列宽按**显示宽度**算（中文占 2 列）；数值列不带单位 —— 单位是 MHz，与
+    # watch_freq 的总结保持同一口径，不在每列重复。
+    W10, W7, W8, W6, W7B, W11, W7C = 10, 7, 8, 6, 7, 11, 7
+    out: list[str] = [(W.pad("模式", W10) + W.pad("产物", W7) + W.pad("中位", W8)
+                       + W.pad("最大", W8) + W.pad("样本", W6) + W.pad("波动", W7B)
+                       + W.pad("指纹", W11) + W.pad("改写", W7C) + "相对基线")]
     for r in rows:
+        fp, n_rw = "—", "-"
+        if r["num"]:
+            fp = W.product_fp(r["num"])
+            _f, rewritten, _rw = W.opt_info(r["num"])
+            m = re.search(r"(\d+)", rewritten)      # `改写 1590 处` → 1590（同 watch）
+            n_rw = m.group(1) if m else "-"
+        prod = f"#{r['num']}" if r["num"] else "—"
         if not r["hz"]:
-            out.append(W.pad(r["mode"], W10) + W.pad("—", W13) + W.pad("—", W11)
-                       + W.pad("0", W6) + W.pad("—", W11) + W.pad("—", WRW)
-                       + (r["note"] or "无数据"))
+            out.append(W.pad(r["mode"], W10) + W.pad(prod, W7) + W.pad("—", W8)
+                       + W.pad("—", W8) + W.pad("0", W6) + W.pad("—", W7B)
+                       + W.pad(fp, W11) + W.pad("—", W7C) + (r["note"] or "无数据"))
             continue
         med = statistics.median(r["hz"])
         mx = max(r["hz"])
+        spread = (mx - min(r["hz"])) / med * 100
         rel = "" if base_hz in (None, 0) else f"{(med / base_hz - 1) * 100:+.1f}%"
-        fp, rewritten = "—", "—"
-        if r["num"]:
-            fp = W.product_fp(r["num"])
-            _f, rewritten, _w = W.opt_info(r["num"])
-        out.append(W.pad(r["mode"], W10) + W.fmt_hz(med)
-                   + W.pad(f"{mx / 1e6:.3f}MHz", W11) + W.pad(str(len(r["hz"])), W6)
-                   + W.pad(fp, W11) + W.pad(rewritten, WRW) + rel)
+        out.append(W.pad(r["mode"], W10) + W.pad(prod, W7)
+                   + W.pad(f"{med / 1e6:.3f}", W8) + W.pad(f"{mx / 1e6:.3f}", W8)
+                   + W.pad(str(len(r["hz"])), W6) + W.pad(f"{spread:.2f}", W7B)
+                   + W.pad(fp, W11) + W.pad(n_rw, W7C) + rel)
         if r["note"]:
             out.append(W.pad("", W10) + r["note"])
     return out, base_hz
@@ -296,8 +304,8 @@ def main() -> int:
                     help=f"要测的模式与顺序，逗号分隔（默认 {','.join(ALL_MODES)}）")
     ap.add_argument("--seconds", type=float, default=8.0,
                     help="每个模式采样几秒（默认 8）")
-    ap.add_argument("--warmup", type=float, default=1.5,
-                    help="丢掉开头几秒的过渡值（默认 1.5）")
+    ap.add_argument("--warmup", type=float, default=2.0,
+                    help="丢掉开头几秒的过渡值（默认 2；采样间隔是 1 秒）")
     ap.add_argument("--repeat", type=int, default=1,
                     help="每个模式重复几轮（默认 1）")
     ap.add_argument("--compile-timeout", type=float, default=60.0,

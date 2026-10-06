@@ -243,12 +243,12 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         rec["note"] = "没有有效采样（仿真没跑起来？F6 状态不对 / 编译失败）"
         print(f"  [{tag}] ✗ {rec['note']}", flush=True)
     else:
-        med = statistics.median(rec["hz"])
+        avg = statistics.mean(rec["hz"])
         n = len(rec["hz"])
-        print(f"  {term.paint(W.pad(f'[{tag}]', 12), 'bold')}"
-              f"{term.paint(W.pad(f'#{num}', 6), 'bold')}"
-              f"{term.paint(W.pad(f'{n}x', 4), 'bold', 'cyan')}"
-              f"{term.paint(f'{med / 1e6:.3f}', 'bold')}", flush=True)
+        print(f"  {W.pad(f'[{tag}]', 12)}"
+              f"{term.paint(W.pad(f'#{num}', 6), 'bold', 'magenta')}"
+              f"{W.pad(f'{n}x', 4)}"
+              f"{term.paint(f'{avg / 1e6:.3f}', *W.hz_style(avg))}", flush=True)
     return rec
 
 
@@ -257,20 +257,21 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
 def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
     """把每个模式的多轮采样合成一行；相对基线的百分比按中位数算。"""
     base_hz = None
-    if rows and rows[0]["hz"] and statistics.median(rows[0]["hz"]) >= 1e5:
-        base_hz = statistics.median(rows[0]["hz"])   # 基线只认**第一个模式**（默认 off）
+    if rows and rows[0]["hz"] and statistics.mean(rows[0]["hz"]) >= 1e5:
+        base_hz = statistics.mean(rows[0]["hz"])   # 基线只认**第一个模式**（默认 off）
     # 它失败、或读到的是停机附近的噪声（<0.1MHz）时百分比留空，不拿别的顶上、
     # 也不拿接近 0 的值当分母。
 
     # 列宽按**显示宽度**算（中文占 2 列）；数值列不带单位 —— 单位是 MHz，与
     # watch_freq 的总结保持同一口径，不在每列重复。
     W10, W7, W8, W6, W7B, W11, W7C = 10, 7, 8, 6, 7, 11, 7
-    head = (W.pad("模式", W10) + W.pad("产物", W7) + W.pad("中位", W8)
-            + W.pad("最大", W8) + W.pad("样本", W6) + W.pad("波动", W7B)
+    head = (W.pad("模式", W10) + W.pad("产物", W7) + W.pad("平均", W8)
+            + W.pad("样本", W6) + W.pad("波动", W7B)
             + W.pad("指纹", W11) + W.pad("改写", W7C) + W.pad_left("相对基线", 8))
-    # 着色一律在 pad 之后（ANSI 不占显示宽度，但会被宽度函数算进去）——
-    # 数字加粗；不用灰色，终端上不好辨认。
-    out: list[str] = [term.paint(head, "bold")]
+    # 着色一律在 pad 之后（ANSI 不占显示宽度，但会被宽度函数算进去）；**加粗只
+    # 跟在颜色后面**，没上色的地方不加粗。主频用 watch_freq 的 hz_style：
+    # 低保真频率（多半是电路自带限速）黄、正常绿。
+    out: list[str] = [head]
     for r in rows:
         fp, n_rw = "—", "-"
         if r["num"]:
@@ -281,22 +282,21 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
         prod = f"#{r['num']}" if r["num"] else "—"
         if not r["hz"]:
             out.append(W.pad(r["mode"], W10) + W.pad(prod, W7) + W.pad("—", W8)
-                       + W.pad("—", W8) + W.pad("0", W6) + W.pad("—", W7B)
+                       + W.pad("0", W6) + W.pad("—", W7B)
                        + W.pad(fp, W11) + W.pad("—", W7C) + (r["note"] or "无数据"))
             continue
-        med = statistics.median(r["hz"])
-        mx = max(r["hz"])
-        spread = (mx - min(r["hz"])) / med * 100
-        rel = "" if base_hz in (None, 0) else f"{(med / base_hz - 1) * 100:+.1f}%"
+        vals = r["hz"]
+        avg = statistics.mean(vals)
+        spread = (max(vals) - min(vals)) / avg * 100
+        rel = "" if base_hz in (None, 0) else f"{(avg / base_hz - 1) * 100:+.1f}%"
         color = ("bold", "green") if rel.startswith("+") else ("bold", "red")
         out.append(W.pad(r["mode"], W10)
-                   + term.paint(W.pad(prod, W7), "bold")
-                   + term.paint(W.pad(f"{med / 1e6:.3f}", W8), "bold")
-                   + term.paint(W.pad(f"{mx / 1e6:.3f}", W8), "bold")
-                   + term.paint(W.pad(str(len(r["hz"])), W6), "bold", "cyan")
-                   + term.paint(W.pad(f"{spread:.2f}", W7B), "bold")
-                   + term.paint(W.pad(fp, W11), "bold")
-                   + term.paint(W.pad(n_rw, W7C), "bold")
+                   + term.paint(W.pad(prod, W7), "bold", "magenta")
+                   + term.paint(W.pad(f"{avg / 1e6:.3f}", W8), *W.hz_style(avg))
+                   + W.pad(str(len(vals)), W6)
+                   + W.pad(f"{spread:.2f}", W7B)
+                   + W.pad(fp, W11)
+                   + term.paint(W.pad(n_rw, W7C), "bold", "cyan")
                    + (term.paint(W.pad_left(rel, 8), *color) if rel else ""))
         if r["note"]:
             out.append(W.pad("", W10) + r["note"])
@@ -389,13 +389,12 @@ def main() -> int:
     try:
         with open(out, "w", encoding="utf-8") as f:
             f.write("# bench_rewrite.py —— 每个模式一次编译 → 一次采样\n")
-            f.write("mode\tnum\tfp\tmedian_hz\tmax_hz\tsample_n\tnote\tsamples\n")
+            f.write("mode\tnum\tfp\tmean_hz\tsample_n\tnote\tsamples\n")
             for r in rows:
                 fp = W.product_fp(r["num"]) if r["num"] else ""
-                med = statistics.median(r["hz"]) if r["hz"] else 0
-                mx = max(r["hz"]) if r["hz"] else 0
+                avg = statistics.mean(r["hz"]) if r["hz"] else 0
                 samples = ";".join(f"{v:.0f}" for v in r["hz"])
-                f.write(f"{r['mode']}\t{r['num'] or ''}\t{fp}\t{med:.0f}\t{mx:.0f}\t"
+                f.write(f"{r['mode']}\t{r['num'] or ''}\t{fp}\t{avg:.0f}\t"
                         f"{len(r['hz'])}\t{r['note']}\t{samples}\n")
     except OSError as e:
         print(f"写结果失败：{e}", file=sys.stderr)

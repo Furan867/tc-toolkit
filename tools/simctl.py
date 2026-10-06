@@ -26,8 +26,12 @@ recompile 走 UI 注入：让游戏自己走「电路变化 → 重建场景 →
     python tools/simctl.py recompile            # 发撤销
     python tools/simctl.py recompile --redo     # 发重做
 
-CLI 每次都是新进程，记不住「上次发的哪个键」，所以由调用者指定；
-脚本内循环请 import 本模块，recompile() 会自动交替并在进程退出时恢复撤销栈。
+CLI 每次都是新进程。脚本内循环请 import 本模块，recompile() 会按净消耗交替，
+并在进程退出时把撤销栈恢复原状。
+
+**记账**：撤销是消耗性操作（每发一次就少一步历史），所以记的是「净消耗步数」，
+退出时按它补发等量反向键 —— 自动交替与显式 key 一视同仁。CLI 是一次性进程，
+收尾时会主动放弃补偿（否则一次调用变成「撤销+重做」成对发送，多一次编译）。
 
 CLI 还会在退出前**把焦点还给调用前那个窗口**（只在焦点确实被本工具改过、且此刻
 仍停在游戏上时才还；用户中途自己切走了就不打扰）。模块调用不做这件事 —— 模块的
@@ -319,7 +323,8 @@ def _press(key: str) -> None:
 
 # ------------------------------------------------------------------ 重编译
 
-_last_key: str | None = None     # 本进程上次发的是哪个键（None = 还没发过）
+_undo_balance: int = 0           # 本进程净发出的 undo 次数（每次 undo +1，redo −1）
+                                 # >0 = 欠着 undo，退出时按它补发等量 redo
 _MISSING_STACK_HINT = ("电路没有可撤销的编辑历史？先手动加一根线，"
                        "之后就能无限次交替调用")
 
@@ -397,13 +402,13 @@ def stop() -> Result:
 def recompile(key: str | None = None) -> Result:
     """触发一次重编译。
 
-    key=None（模块调用的默认）—— 自动交替：上次发了撤销，这次就发重做。
-    记下的状态会在进程退出时用来把撤销栈恢复原样（见 restore_stack）。
+    key=None（模块调用的默认）—— 按净消耗交替：欠着撤销就发重做，否则发撤销。
 
-    key="undo"/"redo"（CLI 用）—— 显式指定，不记状态、退出时不恢复；
-    CLI 每次都是新进程，本来也记不住，交替由调用者负责。
+    key="undo"/"redo" —— 显式指定。**同样记账**：模块连续发 5 次撤销，退出时
+    会补发 5 次重做（见 restore_stack）。CLI 是例外，它退出前主动放弃补偿
+    （forget_restore）。
     """
-    global _last_key
+    global _undo_balance
     t = _target()
     if not t:
         return Result(False, "recompile", "游戏未运行")
@@ -412,9 +417,9 @@ def recompile(key: str | None = None) -> Result:
     if err or hwnd is None:
         return Result(False, "recompile", err or "找不到游戏主窗口")
 
-    explicit = key is not None
     if key is None:
-        key = "redo" if _last_key == "undo" else "undo"
+        # 净消耗为正 = 欠着 undo，这次该发 redo 抵掉
+        key = "redo" if _undo_balance > 0 else "undo"
     if key not in ("undo", "redo"):
         return Result(False, "recompile", f"key 只能是 undo/redo，收到 {key!r}")
 
@@ -432,23 +437,26 @@ def recompile(key: str | None = None) -> Result:
         _press(key)
     except OSError as e:
         return Result(False, "recompile", str(e))
-    if not explicit:
-        _last_key = key
+    _undo_balance += 1 if key == "undo" else -1
     label = "Ctrl+Z 撤销" if key == "undo" else "Ctrl+Shift+Z 重做"
-    return Result(True, "recompile", f"已发送 {label}（pid={pid}）")
+    owed = "" if _undo_balance == 0 else f"，净欠 {_undo_balance} 步"
+    return Result(True, "recompile", f"已发送 {label}（pid={pid}{owed}）")
 
 
 def restore_stack() -> Result:
-    """把撤销栈恢复原状：上次发的若是撤销，就补一次重做（反之亦然）。
+    """把撤销栈恢复原状：按本次的**净消耗步数**补发等量反向键。
+
+    撤销是消耗性操作，所以记的是「净发了几次 undo」而不是「最后发了哪个键」
+    —— 后者在显式 key 连着发 N 次时表达不了 N（只能补 1 次）。
 
     幂等 —— 恢复过就不会再恢复。由 atexit / SIGTERM 自动调用，
     也可手工调用（在长驻程序中途收尾）。
     """
-    global _last_key
-    if _last_key is None:
-        return Result(True, "restore", "无需恢复（本进程没发过键）")
-    key = "redo" if _last_key == "undo" else "undo"
-    _last_key = None                       # 先清空：保证幂等，失败也不再重试
+    global _undo_balance
+    n = _undo_balance
+    _undo_balance = 0                      # 先清零：保证幂等，失败也不再重试
+    if n == 0:
+        return Result(True, "restore", "无需恢复（净消耗为 0）")
     t = _target()
     if not t:
         return Result(False, "restore", "游戏已退出，栈状态留在游戏里（本次未恢复）")
@@ -459,12 +467,25 @@ def restore_stack() -> Result:
                       (err or "找不到游戏主窗口") + "（栈留在游戏里）")
     if not force_foreground(hwnd) or _u32.GetForegroundWindow() != hwnd:
         return Result(False, "restore", "抢前台失败，未恢复（栈留在游戏里）")
+    key = "redo" if n > 0 else "undo"
+    label = "Ctrl+Shift+Z 重做" if n > 0 else "Ctrl+Z 撤销"
     try:
-        _press(key)
+        for _ in range(abs(n)):
+            _press(key)
     except OSError as e:
         return Result(False, "restore", str(e))
-    label = "Ctrl+Z" if key == "undo" else "Ctrl+Shift+Z"
-    return Result(True, "restore", f"已补发 {label}，撤销栈恢复原状")
+    return Result(True, "restore", f"已补发 {abs(n)} 次 {label}，撤销栈恢复原状")
+
+
+def forget_restore() -> None:
+    """放弃退出时的补偿 —— 本进程的动作由调用者自己负责。
+
+    CLI 用。它是一次性进程，一次调用只做一个动作；不放弃的话 atexit 会补发
+    反向键，把动作变成「撤销+重做」成对发送（平白多一次编译 —— 编译近 1 秒，
+    调用方明确不要）。
+    """
+    global _undo_balance
+    _undo_balance = 0
 
 
 def _on_sigterm(signum, _frame):
@@ -522,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
         r = stop()
     else:
         r = recompile("redo" if args.redo else "undo")
+        forget_restore()   # 一次性进程：动作已由调用者掌控，别让 atexit 再补发
     print(r)
     _restore_focus(before)
     return 0 if r.ok else 1

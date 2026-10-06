@@ -4,16 +4,19 @@
 前提
 ----
 - 游戏在跑；
-- **不需要**撤销栈非空：实测 **Ctrl+Z 每次都会让游戏重建场景并编译** —— 19:24
-  那六次连续 undo 的产物 sha256 完全相同（内容只回退了 1 次），编号却每次都涨。
-  所以本工具**只发 undo，不碰 redo**（redo 侧不可靠，只会白白来回拉扯电路）。
+- **撤销栈**：本工具每次发 **undo**（只有它会触发重编译），**随即补一次 redo** 把账还回去
+  —— redo 不触发重编译（游戏对已编译过的内容走缓存，所以它没有新产物），
+  不等产物，只负责让长测试不把撤销栈一路推到底（这样也能一直跑下去）。
+  simctl 侧另有退出时的净消耗补偿（restore_stack），两道保险。
+- 但栈仍需**非空**：实测 Ctrl+Z 在栈空后就不再触发编译（此前“栈空也能触发”的判断是
+  错的，那时栈里还有货）。栈空了先去游戏里做几次编辑。
 - 测的过程中会**抢游戏窗口前台**（SendInput 有前台校验，不抢就不发键），
   期间别切走窗口。
 
 每个模式一遍
 ------------
     写 opt.ini  →  stop() 保底  →  recompile("undo")  →  等 NNN.opt.bin 出现
-    →  stop() 保底  →  simctl.run()  →  采样 N 秒  →  simctl.stop()
+    →  recompile("redo") 还账  →  stop() 保底  →  simctl.run()  →  采样  →  simctl.stop()
 
 ⚠ simctl 的 run() 是注入 **F6（运行/暂停切换）**，不是幂等的「确保在运行」：
 所以每次开跑前先按 F4（stop，幂等）把状态摁到「停止」，再发 F6 才等于「运行」。
@@ -212,6 +215,12 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
             continue
         num, why = wait_new_product(prev, args.compile_timeout, hook_before, tag,
                                     since=since)
+        # undo 已经发出去了（账面上欠一步），无论有没等到产物都用 redo 抵掉：
+        # redo 不触发重编译（游戏对已编译过的内容走缓存），所以不等产物 ——
+        # 它只负责把撤销栈还回去，让长测试不会把栈一路推到底。
+        bal = simctl.recompile("redo")
+        if bal.ok:
+            print(f"  [{tag}] 补一次 redo 还账（不等产物）", flush=True)
         if num:
             break
         print(f"  [{tag}] 这次没触发编译（{why}），重试", flush=True)

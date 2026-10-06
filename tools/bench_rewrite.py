@@ -105,15 +105,46 @@ def latest_product() -> str | None:
     return best
 
 
-def wait_new_product(prev: str | None, timeout: float) -> str | None:
-    """等一个比 prev 更大的产物编号出现（= 这次重编译走完了编译 + 改写）。"""
+def hook_lines() -> list[str]:
+    """转发层日志（每发生一次编译多 3 行：rewrite= / 已就地写回 / 入口偏移已更新）。
+
+    用它判断「发出去的按键到底有没有触发编译」—— 光看 simctl.recompile() 的 ok
+    不行，它只表示「键发出去了」（SendInput 是异步的，游戏那边不反馈）。
+    """
+    try:
+        return (OPT_DIR / "hook.log").read_text(
+            encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+
+def wait_new_product(prev: str | None, timeout: float, hook_before: int,
+                    tag: str, dead_after: float = 10.0) -> tuple[str | None, str]:
+    """等新产物出现，返回 (编号, 失败原因)。
+
+    一路盯 hook.log：发键后 `dead_after` 秒内一条新编译行都没有，就断定按键没
+    生效（焦点不在电路编辑区 / 撤销栈空），立刻失败 —— 不用干等到 timeout。
+    """
     t0 = time.time()
-    while time.time() - t0 < timeout:
+    last = 0.0
+    while True:
         cur = latest_product()
         if cur and (prev is None or int(cur) > int(prev)):
-            return cur
-        time.sleep(0.2)
-    return None
+            print(f"  [{tag}] 产物 #{cur} 已就绪（{time.time() - t0:.1f}s）", flush=True)
+            return cur, ""
+        t = time.time() - t0
+        if t >= timeout:
+            return None, f"等了 {timeout:.0f}s 没等到新产物（编译卡住或失败）"
+        new_lines = len(hook_lines()) - hook_before
+        if new_lines <= 0 and t >= dead_after:
+            return None, (f"发键后 {dead_after:.0f}s 内 hook.log 没有新编译行 —— "
+                          "Ctrl+Z 没生效（游戏焦点不在电路编辑区？撤销栈空？）")
+        if t - last >= 3.0:
+            last = t
+            what = f"编译已触发（hook.log +{new_lines} 行），等改写子进程" \
+                if new_lines > 0 else "还没看到编译行"
+            print(f"  [{tag}] 等产物 {t:4.0f}s … {what}", flush=True)
+        time.sleep(0.3)
 
 
 def read_hz(h: int, base: int) -> float | None:
@@ -154,24 +185,31 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
 
     # run() 是 F6 切换键，只有从「停止」状态出发才等于「运行」；
     # stop() 是 F4（幂等），多按无副作用。
+    print(f"  [{tag}] stop(F4) 保底，把状态摁到「停止」", flush=True)
     simctl.stop()
 
+    hook_before = len(hook_lines())
+    print(f"  [{tag}] recompile() 触发重编译", flush=True)
     r = simctl.recompile()
     if not r.ok:
         rec["note"] = f"重编译失败：{r.detail}"
+        print(f"  [{tag}] ✗ {rec['note']}", flush=True)
         return rec
-    num = wait_new_product(prev, args.compile_timeout)
+    num, why = wait_new_product(prev, args.compile_timeout, hook_before, tag)
     if num is None:
-        rec["note"] = f"等了 {args.compile_timeout:.0f}s 没等到新产物（编译失败？）"
+        rec["note"] = why
+        print(f"  [{tag}] ✗ {why}", flush=True)
         return rec
     rec["num"] = num
     print(f"  [{tag}] 新产物 #{num}", flush=True)
 
     # recompile 靠撤销电路触发，游戏自己会停；但状态别假设，再按一次 F4 保底。
+    print(f"  [{tag}] stop(F4) 保底 → run(F6) 开跑", flush=True)
     simctl.stop()
     r = simctl.run()
     if not r.ok:
         rec["note"] = f"启动失败：{r.detail}"
+        print(f"  [{tag}] ✗ {rec['note']}", flush=True)
         return rec
     try:
         rec["hz"] = sample_freq(h, base, args.seconds, args.warmup)
@@ -179,6 +217,11 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         simctl.stop()
     if not rec["hz"]:
         rec["note"] = "没有有效采样（仿真没跑起来？F6 状态不对 / 编译失败）"
+        print(f"  [{tag}] ✗ {rec['note']}", flush=True)
+    else:
+        med = statistics.median(rec["hz"])
+        print(f"  [{tag}] 采样 {len(rec['hz'])} 点，中位数 {med / 1e6:.3f} MHz",
+              flush=True)
     return rec
 
 

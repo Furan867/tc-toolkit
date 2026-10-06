@@ -17,8 +17,9 @@
     写 opt.ini  →  stop() 保底  →  recompile()  →  等 NNN.opt.bin 出现
     →  stop() 保底  →  simctl.run()  →  采样  →  simctl.stop()
 
-⚠ 每次 opt.ini 都改过，所以 auto 交替的 undo / redo **两个方向都会真的重编译**
-（游戏的编译缓存是按电路内容存的，内容没变才命中）—— 一次切换一次编译。
+⚠ 电路只要**有修改**（撤销/重做都算）游戏就会重新编译，所以 auto 交替的 undo / redo
+两个方向都会产出新产物。拿不到新产物基本是按键没送到游戏（游戏最小化 / 前台被别的
+窗口抢走），或撤销栈空了 —— 不是编译缓存。
 
 ⚠ simctl 的 run() 是注入 **F6（运行/暂停切换）**，不是幂等的「确保在运行」：
 所以每次开跑前先按 F4（stop，幂等）把状态摁到「停止」，再发 F6 才等于「运行」。
@@ -148,10 +149,9 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
         new_lines = len(hook_lines()) - hook_before
         if new_lines <= 0 and t >= dead_after:
             return None, (f"发键后 {dead_after:.0f}s 内 hook.log 没有新编译行 —— "
-                          "三种可能：① 该（电路内容 × opt.ini 模式）组合已经编译过，"
-                          "游戏有编译缓存、同一组合第二次不再编译（换模式，或先在游戏里"
-                          "做一次编辑来产生新内容）；② 撤销栈空了；"
-                          "③ 抢前台后第一次发键丢了（会自动重试）")
+                          "两种可能：① 撤销栈空了（在游戏里做几次编辑就能继续）；"
+                          "② 按键没送到游戏：游戏被最小化、前台被别的窗口占着抢不过来"
+                          "（自动重试 3 次）")
         if t - last >= 3.0:
             last = t
             what = (f"编译已触发（hook.log +{new_lines} 行），等改写子进程"
@@ -202,8 +202,8 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     simctl.stop()
 
     # 用 simctl 的 auto 交替（不传 key）：它按净消耗在 undo/redo 间交替，退出时
-    # restore_stack 补平，栈守恒。这两个方向都会触发编译 —— 因为每次 opt.ini 都
-    # 改过，游戏的编译缓存（按电路内容存）都失效了。
+    # restore_stack 补平，栈守恒。两个方向都会触发编译 —— 电路只要有修改，游戏就
+    # 重新编译，与「是否曾经编译过同样的内容」无关。
     # 发键后第一次常常没反应（刚抢到前台那一瞬）—— 重试几次。
     num, why = None, ""
     for attempt in range(1, 4):
@@ -226,9 +226,9 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     if num is None:
         rec["note"] = why
         print(f"  [{tag}] ✗ 试了 3 次都没能触发编译：{why}", flush=True)
-        print("     提醒：每次测试都需要一个『没编译过』的（电路内容 × opt.ini 模式）组合。"
-              "auto 交替只在 A/B 两个内容间摆动，所以同一模式最多测 2 次；"
-              "要接着测就得先在游戏里做一次编辑（产生新内容）。", flush=True)
+        print("     提醒：撤销/重做只要有变化，游戏就会重新编译 —— 拿不到新产物通常"
+              "是按键没送到游戏（别让游戏最小化、别把前台抢走），或撤销栈已空。",
+              flush=True)
         return rec
     rec["num"] = num
     print(f"  [{tag}] 新产物 #{num}", flush=True)

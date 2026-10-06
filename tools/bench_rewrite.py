@@ -4,10 +4,9 @@
 前提
 ----
 - 游戏在跑；
-- **撤销栈**：本工具每次发 **undo**（只有它会触发重编译），**随即补一次 redo** 把账还回去
-  —— redo 不触发重编译（游戏对已编译过的内容走缓存，所以它没有新产物），
-  不等产物，只负责让长测试不把撤销栈一路推到底（这样也能一直跑下去）。
-  simctl 侧另有退出时的净消耗补偿（restore_stack），两道保险。
+- **撤销栈**：直接用 simctl 的 auto 交替 `recompile()`（不传 key）—— 它按净消耗
+  在 undo/redo 之间交替，退出时 restore_stack 把账补平，栈守恒（长测试中途也
+  不会一路推到底）。不需要调用方自己做配平。
 - 但栈仍需**非空**：实测 Ctrl+Z 在栈空后就不再触发编译（此前“栈空也能触发”的判断是
   错的，那时栈里还有货）。栈空了先去游戏里做几次编辑。
 - 测的过程中会**抢游戏窗口前台**（SendInput 有前台校验，不抢就不发键），
@@ -15,8 +14,11 @@
 
 每个模式一遍
 ------------
-    写 opt.ini  →  stop() 保底  →  recompile("undo")  →  等 NNN.opt.bin 出现
-    →  recompile("redo") 还账  →  stop() 保底  →  simctl.run()  →  采样  →  simctl.stop()
+    写 opt.ini  →  stop() 保底  →  recompile()  →  等 NNN.opt.bin 出现
+    →  stop() 保底  →  simctl.run()  →  采样  →  simctl.stop()
+
+⚠ 每次 opt.ini 都改过，所以 auto 交替的 undo / redo **两个方向都会真的重编译**
+（游戏的编译缓存是按电路内容存的，内容没变才命中）—— 一次切换一次编译。
 
 ⚠ simctl 的 run() 是注入 **F6（运行/暂停切换）**，不是幂等的「确保在运行」：
 所以每次开跑前先按 F4（stop，幂等）把状态摁到「停止」，再发 F6 才等于「运行」。
@@ -197,16 +199,16 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     print(f"  [{tag}] stop(F4) 保底，把状态摁到「停止」", flush=True)
     simctl.stop()
 
-    # 显式只发 undo：实测 Ctrl+Z 每次都会触发编译（撤销栈空了也一样，只是内容不变），
-    # 所以不需要靠 undo/redo 交替，也不会反复拉扯电路内容。显式传 key 时 simctl
-    # 不记状态、退出时也不会去“恢复撤销栈”（redo 侧本来就不可靠）。
-    # 实测第一次发键常常没反应（刚抢到前台那一瞬）—— 重试几次。
+    # 用 simctl 的 auto 交替（不传 key）：它按净消耗在 undo/redo 间交替，退出时
+    # restore_stack 补平，栈守恒。这两个方向都会触发编译 —— 因为每次 opt.ini 都
+    # 改过，游戏的编译缓存（按电路内容存）都失效了。
+    # 发键后第一次常常没反应（刚抢到前台那一瞬）—— 重试几次。
     num, why = None, ""
     for attempt in range(1, 4):
         hook_before = len(hook_lines())
         since = time.time()
         note = "" if attempt == 1 else f"（第 {attempt} 次尝试）"
-        print(f"  [{tag}] recompile(undo) 触发重编译{note}", flush=True)
+        print(f"  [{tag}] recompile() 触发重编译{note}", flush=True)
         r = simctl.recompile("undo")
         if not r.ok:
             why = f"重编译失败：{r.detail}"
@@ -215,12 +217,6 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
             continue
         num, why = wait_new_product(prev, args.compile_timeout, hook_before, tag,
                                     since=since)
-        # undo 已经发出去了（账面上欠一步），无论有没等到产物都用 redo 抵掉：
-        # redo 不触发重编译（游戏对已编译过的内容走缓存），所以不等产物 ——
-        # 它只负责把撤销栈还回去，让长测试不会把栈一路推到底。
-        bal = simctl.recompile("redo")
-        if bal.ok:
-            print(f"  [{tag}] 补一次 redo 还账（不等产物）", flush=True)
         if num:
             break
         print(f"  [{tag}] 这次没触发编译（{why}），重试", flush=True)

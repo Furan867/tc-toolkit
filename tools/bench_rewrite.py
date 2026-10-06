@@ -138,11 +138,10 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
     生效（焦点不在电路编辑区 / 抢前台后第一次发键丢掉），立刻失败。
     """
     t0 = time.time()
-    last = 0.0
+    warned = False
     while True:
         cur, mt = latest_product()
         if cur and (prev is None or int(cur) > int(prev)) and mt >= since:
-            print(f"  [{tag}] 产物 #{cur} 已就绪（{time.time() - t0:.1f}s）", flush=True)
             return cur, ""
         t = time.time() - t0
         if t >= timeout:
@@ -153,11 +152,11 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
                           "两种可能：① 撤销栈空了（在游戏里做几次编辑就能继续）；"
                           "② 按键没送到游戏：游戏被最小化、前台被别的窗口占着抢不过来"
                           "（自动重试 3 次）")
-        if t - last >= 3.0:
-            last = t
+        if t >= 5.0 and not warned:           # 只提醒一次，别刷屏
+            warned = True
             what = (f"编译已触发（hook.log +{new_lines} 行），等改写子进程"
                     if new_lines > 0 else "还没看到编译行")
-            print(f"  [{tag}] 等产物 {t:4.0f}s … {what}", flush=True)
+            print(f"  [{tag}] 等编译产物 {t:.0f}s …（{what}）", flush=True)
         time.sleep(0.3)
 
 
@@ -185,8 +184,7 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     """走一遍：换配置 → 重编译 → 运行 → 采样 → 停止。"""
     rec: dict = {"mode": mode, "num": None, "hz": [], "note": ""}
     prev, _mt = latest_product()
-    old = set_rewrite_ini(mode)
-    print(f"  [{tag}] opt.ini: {old} → {mode}", flush=True)
+    set_rewrite_ini(mode)
 
     dlg = simctl.blocking_dialog(pid)
     if dlg:
@@ -195,7 +193,6 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
 
     # run() 是 F6 切换键，只有从「停止」状态出发才等于「运行」；
     # stop() 是 F4（幂等），多按无副作用。
-    print(f"  [{tag}] stop(F4) 保底，把状态摁到「停止」", flush=True)
     simctl.stop()
 
     # 用 simctl 的 auto 交替（不传 key）：它按净消耗在 undo/redo 间交替，退出时
@@ -206,8 +203,8 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     for attempt in range(1, 4):
         hook_before = len(hook_lines())
         since = time.time()
-        note = "" if attempt == 1 else f"（第 {attempt} 次尝试）"
-        print(f"  [{tag}] recompile() 触发重编译{note}", flush=True)
+        if attempt > 1:
+            print(f"  [{tag}] 重试第 {attempt} 次", flush=True)
         r = simctl.recompile()      # auto 交替：由 simctl 按净消耗决定发 undo 还是 redo
         if not r.ok:
             why = f"重编译失败：{r.detail}"
@@ -218,7 +215,6 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
                                     since=since)
         if num:
             break
-        print(f"  [{tag}] 这次没触发编译（{why}），重试", flush=True)
         time.sleep(1.0)
     if num is None:
         rec["note"] = why
@@ -228,10 +224,8 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
               flush=True)
         return rec
     rec["num"] = num
-    print(f"  [{tag}] 新产物 #{num}", flush=True)
 
     # recompile 靠撤销电路触发，游戏自己会停；但状态别假设，再按一次 F4 保底。
-    print(f"  [{tag}] stop(F4) 保底 → run(F6) 开跑", flush=True)
     simctl.stop()
     time.sleep(0.6)                     # 让游戏把 F4 处理完，免得 F6 撞上旧状态
     r = simctl.run()
@@ -248,8 +242,7 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         print(f"  [{tag}] ✗ {rec['note']}", flush=True)
     else:
         med = statistics.median(rec["hz"])
-        print(f"  [{tag}] 采样 {len(rec['hz'])} 点，中位数 {med / 1e6:.3f} MHz",
-              flush=True)
+        print(f"  [{tag}] #{num}  {len(rec['hz'])} 点  {med / 1e6:.3f}", flush=True)
     return rec
 
 

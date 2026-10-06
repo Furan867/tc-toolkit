@@ -28,6 +28,11 @@ recompile 走 UI 注入：让游戏自己走「电路变化 → 重建场景 →
 
 CLI 每次都是新进程，记不住「上次发的哪个键」，所以由调用者指定；
 脚本内循环请 import 本模块，recompile() 会自动交替并在进程退出时恢复撤销栈。
+
+CLI 还会在退出前**把焦点还给调用前那个窗口**（只在焦点确实被本工具改过、且此刻
+仍停在游戏上时才还；用户中途自己切走了就不打扰）。模块调用不做这件事 —— 模块的
+生命周期长，中途用户可能自己切焦点。代价是 CLI 一次调用可能要抢两次前台
+（一次去、一次回），比模块调用慢约 0.3~0.5 秒。
 """
 from __future__ import annotations
 
@@ -170,6 +175,8 @@ _u32.GetWindowThreadProcessId.restype = wintypes.DWORD
 _u32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 _u32.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
 _u32.IsWindowVisible.argtypes = [wintypes.HWND]
+_u32.IsWindow.argtypes = [wintypes.HWND]
+_u32.IsWindow.restype = wintypes.BOOL
 _u32.GetForegroundWindow.restype = wintypes.HWND
 _u32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _u32.BringWindowToTop.argtypes = [wintypes.HWND]
@@ -472,6 +479,30 @@ if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _on_sigterm)
 
 
+def _restore_focus(before: int) -> None:
+    """CLI 收尾：把焦点还给调用前那个窗口（best-effort，失败静默）。
+
+    三个条件全满足才动手，否则宁可什么都不做：
+    1. `before` 是个真实存在的窗口（不是 0 / 桌面）；
+    2. 焦点确实变了（没变就无需归还）；
+    3. **此刻焦点仍停在游戏窗口上** —— 若这期间用户自己切走了，再抢回来
+       等于抢用户的焦点，比不还更糟。
+
+    模块调用不经这里（模块生命周期长，中途用户可能自己切焦点）。
+    """
+    if not before or before == _u32.GetForegroundWindow():
+        return
+    if not _u32.IsWindow(before):
+        return
+    t = _target()
+    if not t:
+        return
+    game = find_game_window(t[0])
+    if not game or _u32.GetForegroundWindow() != game:
+        return
+    force_foreground(before)
+
+
 # ---------------------------------------------------------------------- CLI
 
 def main(argv: list[str] | None = None) -> int:
@@ -484,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
                        help="改发 Ctrl+Shift+Z 重做（默认发 Ctrl+Z 撤销）")
     args = ap.parse_args(argv)
 
+    before = _u32.GetForegroundWindow()   # 收尾要把焦点还给它（只对 CLI 这么做）
     if args.action == "run":
         r = run()
     elif args.action == "stop":
@@ -491,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         r = recompile("redo" if args.redo else "undo")
     print(r)
+    _restore_focus(before)
     return 0 if r.ok else 1
 
 

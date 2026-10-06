@@ -563,8 +563,12 @@ def check_reloc(old, new, wins, cse) -> list[str]:
         i += 1
         j += 1
     for noff, _nraw, nmn, _nops in new[j:]:
-        if nmn != "nop":
-            bad.append(f"尾部 0x{noff:X} 不是 nop：{nmn}")
+        # 填充是 NOPS 表里的多字节 nop，其中 2 字节的 `66 90` 反汇编成
+        # `xchg ax,ax` —— 只认 "nop" 会把合法填充误判成“尾部有异物”
+        # （实测 short_cse 在 0x21AE9 因此整体退回原样；short 那次只是恰好没落在
+        # 66 90 上）。真正的数据防御在上面逐条 mn/ops 对照，这里只确认尾部是填充。
+        if nmn not in ("nop", "xchg"):
+            bad.append(f"尾部 0x{noff:X} 不是填充（nop/xchg）：{nmn}")
     return bad
 
 

@@ -44,6 +44,7 @@ opt.ini 会停在**最后一个模式**，原文件备份在 `work/tmp/opt.ini.b
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import re
 import shutil
@@ -56,7 +57,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import simctl  # noqa: E402
-import watch_freq as W  # noqa: E402（复用它的产物指纹 / 日志解析）
+import term  # noqa: E402
+import watch_freq as W  # noqa: E402（复用它的产物指纹 / 日志解析 / 宽度工具）
 import winmem  # noqa: E402
 
 ROOT = HERE.parent
@@ -242,7 +244,11 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         print(f"  [{tag}] ✗ {rec['note']}", flush=True)
     else:
         med = statistics.median(rec["hz"])
-        print(f"  [{tag}] #{num}  {len(rec['hz'])} 点  {med / 1e6:.3f}", flush=True)
+        n = len(rec["hz"])
+        print(f"  {term.paint(W.pad(f'[{tag}]', 12), 'bold')}"
+              f"{term.paint(W.pad(f'#{num}', 6), 'bold')}"
+              f"{term.paint(W.pad(f'{n}x', 4), 'bold', 'cyan')}"
+              f"{term.paint(f'{med / 1e6:.3f}', 'bold')}", flush=True)
     return rec
 
 
@@ -259,10 +265,12 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
     # 列宽按**显示宽度**算（中文占 2 列）；数值列不带单位 —— 单位是 MHz，与
     # watch_freq 的总结保持同一口径，不在每列重复。
     W10, W7, W8, W6, W7B, W11, W7C = 10, 7, 8, 6, 7, 11, 7
-    out: list[str] = [(W.pad("模式", W10) + W.pad("产物", W7) + W.pad("中位", W8)
-                       + W.pad("最大", W8) + W.pad("样本", W6) + W.pad("波动", W7B)
-                       + W.pad("指纹", W11) + W.pad("改写", W7C)
-                       + W.pad_left("相对基线", 8))]
+    head = (W.pad("模式", W10) + W.pad("产物", W7) + W.pad("中位", W8)
+            + W.pad("最大", W8) + W.pad("样本", W6) + W.pad("波动", W7B)
+            + W.pad("指纹", W11) + W.pad("改写", W7C) + W.pad_left("相对基线", 8))
+    # 着色一律在 pad 之后（ANSI 不占显示宽度，但会被宽度函数算进去）——
+    # 数字加粗；不用灰色，终端上不好辨认。
+    out: list[str] = [term.paint(head, "bold")]
     for r in rows:
         fp, n_rw = "—", "-"
         if r["num"]:
@@ -280,10 +288,16 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
         mx = max(r["hz"])
         spread = (mx - min(r["hz"])) / med * 100
         rel = "" if base_hz in (None, 0) else f"{(med / base_hz - 1) * 100:+.1f}%"
-        out.append(W.pad(r["mode"], W10) + W.pad(prod, W7)
-                   + W.pad(f"{med / 1e6:.3f}", W8) + W.pad(f"{mx / 1e6:.3f}", W8)
-                   + W.pad(str(len(r["hz"])), W6) + W.pad(f"{spread:.2f}", W7B)
-                   + W.pad(fp, W11) + W.pad(n_rw, W7C) + W.pad_left(rel, 8))
+        color = ("bold", "green") if rel.startswith("+") else ("bold", "red")
+        out.append(W.pad(r["mode"], W10)
+                   + term.paint(W.pad(prod, W7), "bold")
+                   + term.paint(W.pad(f"{med / 1e6:.3f}", W8), "bold")
+                   + term.paint(W.pad(f"{mx / 1e6:.3f}", W8), "bold")
+                   + term.paint(W.pad(str(len(r["hz"])), W6), "bold", "cyan")
+                   + term.paint(W.pad(f"{spread:.2f}", W7B), "bold")
+                   + term.paint(W.pad(fp, W11), "bold")
+                   + term.paint(W.pad(n_rw, W7C), "bold")
+                   + (term.paint(W.pad_left(rel, 8), *color) if rel else ""))
         if r["note"]:
             out.append(W.pad("", W10) + r["note"])
     return out, base_hz
@@ -343,6 +357,8 @@ def main() -> int:
     OPT_INI.parent.mkdir(parents=True, exist_ok=True)
     BACKUP.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(OPT_INI, BACKUP)
+    # 退出时（正常 / 异常 / Ctrl-C）都把 opt.ini 恢复成开始时的样子
+    atexit.register(lambda: shutil.copyfile(BACKUP, OPT_INI))
     print(f"opt.ini 已备份到 {BACKUP}")
 
     rows: list[dict] = []
@@ -385,7 +401,6 @@ def main() -> int:
         print(f"写结果失败：{e}", file=sys.stderr)
         return 1
     print(f"\n结果已写入 {out}")
-    print(f"opt.ini 现为最后一个模式（原文件备份在 {BACKUP}）")
     return 0
 
 

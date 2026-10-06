@@ -549,6 +549,66 @@ hook.log 出现「入口偏移已更新」。**收益待游戏内测**：预期 
 
 ---
 
+## 仿真控制工具 simctl（run / stop / recompile）　✅ **已验证（2026-10-06）**
+
+**为什么有它**：`opt.ini` 改写实验的循环是「改 opt.ini → 让游戏重编译 → 运行 → 掐表 →
+停止 → 再改」，其中**重编译最费时**（要手动编辑电路、点一遍）。本工具把三个动作脚本化，
+供实验脚本 import。它**不管**计时、**不改** `opt.ini`、recompile 后**不自动** run。
+
+**接口**：`tools/simctl.py` —— `run()` / `stop()` / `recompile()` 三个 Python 函数
+（供脚本 import，省掉每次起解释器的开销）+ 同名 CLI 薄壳（手工调试用）。
+设计见 [`docs/specs/2026-10-05-sim-ctl-design.md`](docs/specs/2026-10-05-sim-ctl-design.md)。
+
+| 动作 | 机制 | 状态 |
+|---|---|---|
+| `run()` | 写内存：`settings[1]=INT64_MAX` + `commands[0]=0 (run)` + `commands[1]=新 id`，并推进 `simulation_next_command_id` | ✅ 1 秒后电路跑起来，`read_freq.py` 读到 10.75 MHz |
+| `stop()` | 写内存：`commands[0]=3 (quit_simulation)` + 新 id | ✅ cycle 归哨兵、`set[14]=0` |
+| `recompile()` | **UI 事件注入**：抢前台后用 `SendInput` 发 Ctrl+Z / Ctrl+Shift+Z | ✅ 见下 |
+
+### recompile 为什么走 UI 注入
+
+进程内调用那条路 **8 条全败**（hook `compile_thread_send`、重放 preorder、远程线程调
+`await_build_result` 等），根因是触发链依赖活的游戏状态、且只能在主线程执行 ——
+详见 [`docs/2026-10-06-recompile-trigger-investigation.md`](docs/2026-10-06-recompile-trigger-investigation.md)。
+改为**注入按键，让游戏自己走**「电路变化 → 重建场景 → 编译」那条路。
+
+### 实测（2026-10-06）
+
+| 方式 | 结果 |
+|---|---|
+| `PostMessage` 投递 `WM_KEYDOWN`（不需要前台） | ❌ **不通** —— 窗口是 GLFW 的，投递的按键（连 scan code 修正后）不响应 |
+| `SendInput` + 抢前台 | ✅ **可用** |
+
+- **判据**：`next_sim_version`（`.data 0x14049c300`）每次编译请求 +3（游戏内部一次撤销
+  固定发 3 次请求），纯读内存，不需要转发层。
+- **抢前台**：从后台进程直接 `SetForegroundWindow` 会被前台锁拒绝（只让任务栏闪一下）。
+  有效手段 = 先 `SendInput` 发一次 Alt 解锁，再 `AttachThreadInput` 拼接输入队列。
+- **自动交替**：模块内记住上次发的是撤销还是重做，下次发另一个；进程退出时（`atexit`）
+  **补发反向键**把撤销栈恢复原状 —— 脚本跑完游戏里不会少一根线。CLI 每次新进程记不住
+  状态，用 `--redo` 由调用者交替。
+
+### ⚠️ 踩过的坑（代价很大，别再犯）
+
+1. **`ShowWindow(hwnd, SW_RESTORE)` / `BringWindowToTop` 会搞崩游戏。**
+   抢前台时图省事加了这两个调用，实测触发 `game_engine.dll` 的 ImGui 断言
+   `scale > 0.0f`（`imgui.cpp:9306`）—— 它们会改变窗口显示状态，迫使 ImGui 重算视口与
+   font scale。**已从实现里彻底去掉**；去掉后抢前台依然成功。
+2. **识别「游戏主窗口」必须排除对话框。** 崩溃后弹出的 CRT assert 框（类名 `#32770`）
+   同属游戏进程、也是「可见且有标题」，曾被当成主窗口，脚本又给它发了两次按键。
+   现在按「可见 + 有标题 + 非 `#32770` + 无 owner」筛选。
+3. **`SendInput` 发给当前前台窗口。** 抢前台失败时若仍发键，会把 Ctrl+Z 打到别人的
+   程序上（实测误发给了 VS Code）。**铁律：发键前校验前台就是游戏窗口，不是就拒绝。**
+4. **有错误框时一律不操作**：`blocking_dialog()` 发现可见 `#32770` 对话框就直接拒绝，
+   不去碰已经处于异常状态的游戏。
+
+### 三条设计原则
+
+- **不做自动检测** —— 不监听 `opt.ini` 的 mtime；重编译一律由外部**主动调用**。
+- **不判断编译是否成功** —— 编译成功必经 `compile.dll`；调试看转发层日志或主频工具。
+- **每次调用只发一个键** —— 不做「撤销+重做成对」，免得平白多一条编译记录（编译近 1 s）。
+
+---
+
 ## 待办（按优先级）
 
 1. ~~让抓源码可靠~~ ✅ 已完成（hook `compile()`，2026-09-17）

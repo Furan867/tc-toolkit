@@ -11,8 +11,12 @@
 
 每个模式一遍
 ------------
-    写 opt.ini  →  simctl.recompile()  →  等 NNN.opt.bin 出现
-    →  simctl.run()  →  采样 N 秒  →  simctl.stop()
+    写 opt.ini  →  stop() 保底  →  simctl.recompile()  →  等 NNN.opt.bin 出现
+    →  stop() 保底  →  simctl.run()  →  采样 N 秒  →  simctl.stop()
+
+⚠ simctl 的 run() 是注入 **F6（运行/暂停切换）**，不是幂等的「确保在运行」：
+所以每次开跑前先按 F4（stop，幂等）把状态摁到「停止」，再发 F6 才等于「运行」。
+连发两次 F6 等于没发 —— 这是写内存那版（commands[0]=0/3）与按键版的语义差别。
 
 主频取自游戏自己每秒重算的 `sim_speed`（float32 Hz，偏移 0x624D618），
 丢掉开头 warmup 秒的过渡值，记中位数与最大值。
@@ -148,6 +152,10 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         rec["note"] = f"游戏有弹窗：{dlg[1]}"
         return rec
 
+    # run() 是 F6 切换键，只有从「停止」状态出发才等于「运行」；
+    # stop() 是 F4（幂等），多按无副作用。
+    simctl.stop()
+
     r = simctl.recompile()
     if not r.ok:
         rec["note"] = f"重编译失败：{r.detail}"
@@ -159,6 +167,8 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     rec["num"] = num
     print(f"  [{tag}] 新产物 #{num}", flush=True)
 
+    # recompile 靠撤销电路触发，游戏自己会停；但状态别假设，再按一次 F4 保底。
+    simctl.stop()
     r = simctl.run()
     if not r.ok:
         rec["note"] = f"启动失败：{r.detail}"
@@ -168,7 +178,7 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
     finally:
         simctl.stop()
     if not rec["hz"]:
-        rec["note"] = "没有有效采样（仿真没跑起来？）"
+        rec["note"] = "没有有效采样（仿真没跑起来？F6 状态不对 / 编译失败）"
     return rec
 
 

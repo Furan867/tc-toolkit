@@ -30,10 +30,13 @@
 
 用法
 ----
-    py tools/bench_rewrite.py                      # off,on,short,short_cse 各 8s
-    py tools/bench_rewrite.py --modes on,short
-    py tools/bench_rewrite.py --seconds 12 --repeat 2
-    py tools/bench_rewrite.py --dry-run            # 只打印计划
+    py tools/bench_rewrite.py                        # off,on,short,short_cse 各 8s
+    py tools/bench_rewrite.py -m on,short            # 选模式与顺序
+    py tools/bench_rewrite.py -s 12 -r 2             # 每个模式 12s、重复 2 轮
+    py tools/bench_rewrite.py -n                     # 只打印计划，不动游戏与配置
+
+    参数：-m/--modes  -s/--seconds  -w/--warmup  -r/--repeat
+          -t/--compile-timeout  -n/--dry-run
 
 结果同时写到 `work/freq/bench_<时间戳>.tsv`（含每个采样点原始值）。
 opt.ini 会停在**最后一个模式**，原文件备份在 `work/tmp/opt.ini.bak`。
@@ -268,7 +271,8 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
     W10, W7, W8, W6, W7B, W11, W7C = 10, 7, 8, 6, 7, 11, 7
     out: list[str] = [(W.pad("模式", W10) + W.pad("产物", W7) + W.pad("中位", W8)
                        + W.pad("最大", W8) + W.pad("样本", W6) + W.pad("波动", W7B)
-                       + W.pad("指纹", W11) + W.pad("改写", W7C) + "相对基线")]
+                       + W.pad("指纹", W11) + W.pad("改写", W7C)
+                       + W.pad_left("相对基线", 8))]
     for r in rows:
         fp, n_rw = "—", "-"
         if r["num"]:
@@ -289,7 +293,7 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
         out.append(W.pad(r["mode"], W10) + W.pad(prod, W7)
                    + W.pad(f"{med / 1e6:.3f}", W8) + W.pad(f"{mx / 1e6:.3f}", W8)
                    + W.pad(str(len(r["hz"])), W6) + W.pad(f"{spread:.2f}", W7B)
-                   + W.pad(fp, W11) + W.pad(n_rw, W7C) + rel)
+                   + W.pad(fp, W11) + W.pad(n_rw, W7C) + W.pad_left(rel, 8))
         if r["note"]:
             out.append(W.pad("", W10) + r["note"])
     return out, base_hz
@@ -300,17 +304,18 @@ def main() -> int:
         description="自动测当前电路在各 rewrite 配置下的主频",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(__doc__ or "").split("用法\n----\n")[-1])
-    ap.add_argument("--modes", default=",".join(ALL_MODES),
+    ap.add_argument("-m", "--modes", default=",".join(ALL_MODES),
                     help=f"要测的模式与顺序，逗号分隔（默认 {','.join(ALL_MODES)}）")
-    ap.add_argument("--seconds", type=float, default=8.0,
+    ap.add_argument("-s", "--seconds", type=float, default=8.0,
                     help="每个模式采样几秒（默认 8）")
-    ap.add_argument("--warmup", type=float, default=2.0,
+    ap.add_argument("-w", "--warmup", type=float, default=2.0,
                     help="丢掉开头几秒的过渡值（默认 2；采样间隔是 1 秒）")
-    ap.add_argument("--repeat", type=int, default=1,
+    ap.add_argument("-r", "--repeat", type=int, default=1,
                     help="每个模式重复几轮（默认 1）")
-    ap.add_argument("--compile-timeout", type=float, default=60.0,
+    ap.add_argument("-t", "--compile-timeout", type=float, default=60.0,
                     help="等一次重编译完成的超时秒数（默认 60）")
-    ap.add_argument("--dry-run", action="store_true", help="只打印计划，不动游戏/配置")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="只打印计划，不动游戏/配置")
     args = ap.parse_args()
 
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]

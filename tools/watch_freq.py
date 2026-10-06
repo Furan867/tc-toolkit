@@ -84,8 +84,13 @@ def disp_width(text: str) -> int:
 
 
 def pad(text: str, width: int) -> str:
-    """按**显示宽度**补齐（对齐必须在着色之前完成）。"""
+    """按**显示宽度**左对齐补齐（对齐必须在着色之前完成）。"""
     return text + " " * max(0, width - disp_width(text))
+
+
+def pad_left(text: str, width: int) -> str:
+    """按**显示宽度**右对齐补齐 —— str.rjust 按字符数算，中文（占 2 列）会多补。"""
+    return " " * max(0, width - disp_width(text)) + text
 
 
 def fmt_hz(hz: float) -> str:

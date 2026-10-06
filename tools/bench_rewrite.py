@@ -45,7 +45,6 @@ import os
 import re
 import shutil
 import statistics
-import struct
 import sys
 import time
 from datetime import datetime
@@ -65,7 +64,6 @@ BACKUP = ROOT / "work" / "tmp" / "opt.ini.bak"
 
 EXE = "Turing Complete.exe"
 BASE_VA = 0x140000000
-OFF_SIM_SPEED = 0x14624D618 - BASE_VA
 
 ALL_MODES = ("off", "on", "short", "short_cse")
 REWRITE_RE = re.compile(r"^(\s*)rewrite\s*=\s*(\S+)\s*$", re.IGNORECASE)
@@ -160,11 +158,6 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
         time.sleep(0.3)
 
 
-def read_hz(h: int, base: int) -> float | None:
-    raw = winmem.rpm(h, base + OFF_SIM_SPEED, 4)
-    return None if raw is None else struct.unpack_from("<f", raw)[0]
-
-
 def sample_freq(h: int, base: int, seconds: float, warmup: float) -> list[float]:
     """采样 N 秒，丢掉开头 warmup 秒（主频每秒重算一次，切换点读到的是混合值）。"""
     out: list[float] = []
@@ -174,7 +167,7 @@ def sample_freq(h: int, base: int, seconds: float, warmup: float) -> list[float]
         if t >= seconds:
             break
         time.sleep(0.4)
-        hz = read_hz(h, base)
+        hz = W.read_hz(h, base)          # 与 watch_freq 共用同一套主频读取
         if hz is None:
             break
         if t >= warmup and hz > 0:      # 0 = 仿真没在跑（游戏的哨兵值）
@@ -265,14 +258,19 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
         base_hz = statistics.median(rows[0]["hz"])   # 基线只认**第一个模式**（默认 off）
     # 它失败、或读到的是停机附近的噪声（<0.1MHz）时百分比留空，不拿别的顶上、
     # 也不拿接近 0 的值当分母。
-    out: list[str] = []
-    head = (f"{'模式':<10}{'主频(中位)':>12}{'最大':>10}{'样本':>6}"
-            f"{'指纹':>11}{'改写':>8}  相对基线")
-    out.append(head)
+
+    # 列宽按**显示宽度**算（中文占 2 列，len() 会把表格弄歪）；频率串用
+    # watch_freq 的 fmt_hz（固定 13 显示列宽），主频读取也用它的 read_hz。
+    # “改写”列要放下 `改写 1590 处`（显示宽 12），所以给 13。
+    W10, W13, W11, W6, WRW = 10, 13, 11, 6, 13
+    out: list[str] = [(W.pad("模式", W10) + W.pad("主频(中位)", W13)
+                       + W.pad("最大", W11) + W.pad("样本", W6)
+                       + W.pad("指纹", W11) + W.pad("改写", WRW) + "相对基线")]
     for r in rows:
         if not r["hz"]:
-            out.append(f"{r['mode']:<10}{'—':>12}{'—':>10}{0:>6}"
-                       f"{'—':>11}{'—':>8}  {r['note'] or '无数据'}")
+            out.append(W.pad(r["mode"], W10) + W.pad("—", W13) + W.pad("—", W11)
+                       + W.pad("0", W6) + W.pad("—", W11) + W.pad("—", WRW)
+                       + (r["note"] or "无数据"))
             continue
         med = statistics.median(r["hz"])
         mx = max(r["hz"])
@@ -281,10 +279,11 @@ def summarize(rows: list[dict]) -> tuple[list[str], float | None]:
         if r["num"]:
             fp = W.product_fp(r["num"])
             _f, rewritten, _w = W.opt_info(r["num"])
-        out.append(f"{r['mode']:<10}{med / 1e6:>9.3f}MHz{mx / 1e6:>7.3f}MHz"
-                   f"{len(r['hz']):>6}{fp:>11}{rewritten:>8}  {rel}")
+        out.append(W.pad(r["mode"], W10) + W.fmt_hz(med)
+                   + W.pad(f"{mx / 1e6:.3f}MHz", W11) + W.pad(str(len(r["hz"])), W6)
+                   + W.pad(fp, W11) + W.pad(rewritten, WRW) + rel)
         if r["note"]:
-            out.append(f"{'':<10}{r['note']}")
+            out.append(W.pad("", W10) + r["note"])
     return out, base_hz
 
 
@@ -333,7 +332,7 @@ def main() -> int:
     h = winmem.open_process(pid)
     print(f"游戏 PID {pid}   模块基址 0x{base:X}")
 
-    if read_hz(h, base) is None:
+    if W.read_hz(h, base) is None:
         print("读不到 sim_speed（权限或偏移过时）", file=sys.stderr)
         return 1
 

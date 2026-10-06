@@ -360,6 +360,21 @@ def print_summary(regions: list[dict], sink: Sink, verbose: bool = False) -> Non
     sink.write("summary", note=f"{title} | {digest}")
 
 
+def read_hz(h: int, base: int) -> float | None:
+    """读游戏自己算的仿真主频（float32 Hz，偏移 OFF_SIM_SPEED）。读不到返回 None。"""
+    raw = winmem.rpm(h, base + OFF_SIM_SPEED, 4)
+    return None if raw is None else struct.unpack_from("<f", raw)[0]
+
+
+def read_speed_time(h: int, base: int) -> tuple[float, float] | None:
+    """(主频, 游戏自算主频用的那个时间戳) —— 后者拿来独立核对 cycle/时间。"""
+    hz = read_hz(h, base)
+    raw_time = winmem.rpm(h, base + OFF_TIME, 8)
+    if hz is None or raw_time is None:
+        return None
+    return hz, struct.unpack_from("<d", raw_time)[0]
+
+
 def wait_for_game() -> tuple[int, int]:
     """等游戏出现，返回 (pid, 模块基址)。只读内存，不碰游戏。"""
     hinted = False
@@ -449,11 +464,7 @@ def main() -> int:
     seg = Segmenter(on_segment)
 
     def read_all():
-        raw_speed = winmem.rpm(h, base + OFF_SIM_SPEED, 4)
-        raw_time = winmem.rpm(h, base + OFF_TIME, 8)
-        if raw_speed is None or raw_time is None:
-            return None
-        return struct.unpack("<f", raw_speed)[0], struct.unpack("<d", raw_time)[0]
+        return read_speed_time(h, base)
 
     seen_hook: set[str] = set()       # hook_out_*.bin —— 只用来发现“编译发生了”
     seen_opt: set[str] = set()        # NNN.opt.bin   —— 改写走完，用它报编译点

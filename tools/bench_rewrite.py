@@ -32,10 +32,10 @@
 ----
     py tools/bench_rewrite.py                        # off,on,short,short_cse 各 8s
     py tools/bench_rewrite.py -m on,short            # 选模式与顺序
-    py tools/bench_rewrite.py -s 12 -r 2             # 每个模式 12s、重复 2 轮
+    py tools/bench_rewrite.py -s 12 -r 2             # 每个模式 12 个点、重复 2 轮
     py tools/bench_rewrite.py -n                     # 只打印计划，不动游戏与配置
 
-    参数：-m/--modes  -s/--seconds  -w/--warmup  -r/--repeat
+    参数：-m/--modes  -s/--seconds  -d/--drop  -r/--repeat
           -t/--compile-timeout  -n/--dry-run
 
 结果同时写到 `work/freq/bench_<时间戳>.tsv`（含每个采样点原始值）。
@@ -161,25 +161,22 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
         time.sleep(0.3)
 
 
-def sample_freq(h: int, base: int, seconds: float, warmup: float) -> list[float]:
-    """采样 N 秒，丢掉开头 warmup 秒。
+def sample_freq(h: int, base: int, seconds: float, drop: int = 1) -> list[float]:
+    """每秒采一个点，共采 `seconds` 个，丢弃开头 `drop` 个 —— 与 watch_freq 同口径。
 
-    **1 秒一个点**：这个数就是 UI 上显示的那个，游戏自己每秒重算一次 —— 采得
-    更密只是把同一个值重复读几遍，没有意义（watch_freq 也是这个口径）。
+    - **每秒一个**：这个数就是 UI 上显示的那个，游戏自己每秒重算一次，采得
+      更密只是把同一个值重复读几遍（watch 也是这个口径）。
+    - **丢开头 1 个**：第一个点落在「刚启动」的切换窗口里，读到的是混合值。
+      watch 的总结也是这么做的（原始样本数比表里显示的多 1）。
     """
     out: list[float] = []
-    t0 = time.time()
-    while True:
-        t = time.time() - t0
-        if t >= seconds:
-            break
+    for _ in range(int(seconds)):
         time.sleep(1.0)
-        hz = W.read_hz(h, base)          # 与 watch_freq 共用同一套主频读取
+        hz = W.read_hz(h, base)
         if hz is None:
             break
-        if t >= warmup and hz > 0:      # 0 = 仿真没在跑（游戏的哨兵值）
-            out.append(hz)
-    return out
+        out.append(hz)
+    return out[drop:]
 
 
 # ---------------------------------------------------------------- 单模式
@@ -243,7 +240,7 @@ def bench_one(mode: str, args, pid: int, base: int, h: int, tag: str) -> dict:
         print(f"  [{tag}] ✗ {rec['note']}", flush=True)
         return rec
     try:
-        rec["hz"] = sample_freq(h, base, args.seconds, args.warmup)
+        rec["hz"] = sample_freq(h, base, args.seconds, args.drop)
     finally:
         simctl.stop()
     if not rec["hz"]:
@@ -307,9 +304,9 @@ def main() -> int:
     ap.add_argument("-m", "--modes", default=",".join(ALL_MODES),
                     help=f"要测的模式与顺序，逗号分隔（默认 {','.join(ALL_MODES)}）")
     ap.add_argument("-s", "--seconds", type=float, default=8.0,
-                    help="每个模式采样几秒（默认 8）")
-    ap.add_argument("-w", "--warmup", type=float, default=2.0,
-                    help="丢掉开头几秒的过渡值（默认 2；采样间隔是 1 秒）")
+                    help="每个模式采几个点、也就是几秒（默认 8；游戏每秒重算一次）")
+    ap.add_argument("-d", "--drop", type=int, default=1,
+                    help="丢弃开头的几个采样点（默认 1；第一个点落在启动切换窗口里）")
     ap.add_argument("-r", "--repeat", type=int, default=1,
                     help="每个模式重复几轮（默认 1）")
     ap.add_argument("-t", "--compile-timeout", type=float, default=60.0,
@@ -325,12 +322,13 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    print(f"计划：{' → '.join(modes)}，每个 {args.seconds:g}s（丢掉前 {args.warmup:g}s）"
-          f"，重复 {args.repeat} 轮")
+    print(f"计划：{' → '.join(modes)}，每个 {int(args.seconds)} 个点"
+          f"（丢开头 {args.drop} 个），重复 {args.repeat} 轮")
     if args.dry_run:
-        for m in modes:
-            for i in range(args.repeat):
-                print(f"  [第{i + 1}轮] rewrite={m} → 重编译 → 运行 {args.seconds:g}s → 停止")
+        for i in range(args.repeat):          # 与实际运行的次序保持一致（轮次在外）
+            for m in modes:
+                print(f"  [第{i + 1}轮] rewrite={m} → 重编译 → 运行 "
+                      f"{int(args.seconds)} 个点 → 停止")
         print("（--dry-run，未执行）")
         return 0
 

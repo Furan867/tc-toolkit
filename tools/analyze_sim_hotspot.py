@@ -117,7 +117,7 @@ def main():
         if len(p) >= 8:
             # 列：seg / comp_index / comp_id / type / src_line / jit_start / jit_end / size
             # 丢掉 seg：**一行是一段机器码**，同一个组件的多段共享 comp_index，
-            # 聚合靠 comp_index（否则组件数会翻倍，见 STATUS.md ⑥-A）。
+            # 聚合靠 comp_index（否则组件数会翻倍，见 docs/facts.md）。
             rows.append((int(p[1]), int(p[2]), p[3], int(p[4]), int(p[5]), int(p[6])))
     if not rows:
         print("映射表为空", file=sys.stderr)

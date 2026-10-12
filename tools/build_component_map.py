@@ -20,7 +20,7 @@ sample_threads.py 采到的 RIP 落到具体组件上。
 
 ⚠️ **一行是一个「注释段」，不是一行一个组件**：同一个组件（comp_id 相同）在源码里
 有两条注释（组件代码 + 绑定）、各生成一段机器码，它们共享同一个 comp_index。
-按行数数会把组件数翻倍（实测 1234 段 = 617 个组件 × 2，见 STATUS.md ⑥-A）；
+按行数数会把组件数翻倍（实测 1234 段 = 617 个组件 × 2，见 docs/facts.md）；
 要组件级的数字，必须按 comp_index 聚合。
 
 注意 jit_* 是相对「JIT 代码起点」的偏移（产物开头那 8 字节 NimStringDesc
@@ -118,7 +118,7 @@ def main():
         print("源码里没找到组件注释（// <编号> com_xxx）", file=sys.stderr)
         return 1
     # ⚠️ 同一个组件在源码里有**两条**注释（组件代码 + 绑定），**两条各生成一段机器码**。
-    # 按注释段建表会让组件数翻倍 —— 实测 1234 段 = 617 个组件 × 2（STATUS.md ⑥-A）。
+    # 按注释段建表会让组件数翻倍 —— 实测 1234 段 = 617 个组件 × 2（docs/facts.md）。
     # 所以按 comp_id 首次出现的顺序分配组件序号，多段归到同一个组件；
     # 段仍是段（各有自己的机器码区间），聚合留给 analyze 侧按 comp_index 做。
     comp_of = {}
@@ -136,7 +136,7 @@ def main():
     # end="" + flush=True：让"正在编译"立刻可见，结果接着打在同一行。
     # 不 flush 的话中途那 0.8 秒没有任何输出，看起来像卡住（踩过）。
     # 耗时按标尺上色：正常约 0.8s（淡灰）；十几秒多半是解释器选错了，
-    # 见 TOOLS.md 坑 5 —— 那时它是唯一能一眼看出异常的地方
+    # 见 docs/pitfalls.md 的「py 启动器按 shebang 选解释器」—— 那时它是唯一能一眼看出异常的地方
     print("  编译无标记版本 ...", end="", flush=True)
     t = time.time()
     plain = compile_to_bytes(dll, text.encode("utf-8"))

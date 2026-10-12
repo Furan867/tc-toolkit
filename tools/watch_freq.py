@@ -539,9 +539,9 @@ def main() -> int:
                 continue
             hz, game_time = cur
 
-            # 停机时游戏的统计会**整体冻结**（连 last_speed_check 都不再更新），
-            # 所以不能只靠"游戏换了值"出样本 —— 那样停机期间一行记录也不会有。
-            # 两条腿：游戏一重算就立刻记（相位对齐），否则到点兜底记一次。
+            # 停机时 last_cycle_count 会冻结，但 last_speed_check 仍每秒刷新
+            # （2026-10-11 实测：停机后逐秒 +1.000~1.006 s；旧注释说“整体冻结”是错的）。
+            # 两条腿：游戏一重算就立刻记（相位对齐），否则到点兜底记一次
             fresh = game_time != last_game_time
             due = time.time() - sampled_at >= args.interval
             if not fresh and not due:

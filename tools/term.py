@@ -78,7 +78,7 @@ def duration(sec, text):
     """按耗时上色 —— 正常淡出，异常才醒目。
 
     这个是给编译打的：正常约 0.8s；若看到十几秒，多半是解释器选错了
-    （TOOLS.md 坑 5：py 启动器按 shebang 选到 MSYS2 的 Python，慢 16 倍）。
+    （docs/pitfalls.md 的「py 启动器按 shebang 选解释器」）。
     """
     if sec >= 10:
         return paint(text, "bold", "red")

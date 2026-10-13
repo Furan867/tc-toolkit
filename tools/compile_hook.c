@@ -18,11 +18,17 @@
  * -------------------------
  *   hook_src_NNN.si   —— compile() 收到的 Simplex 源码（.si = Simplex）
  *   hook_out_NNN.bin  —— compile() 产出的机器码
+ *   manifest.tsv      —— 一次 compile() 一行：seq / 时间 / flags / src 与产物的
+ *                        文件名·长度·sha256 / Result 全 5 字段（十六进制）。
+ *                        为什么另开一份而不写进 hook.log：hook.log 只记事件与
+ *                        rewrite 配置，且它的行格式已被 bench_rewrite（数新行）
+ *                        和 watch_freq（提 rewrite= 行）解析；flags 与 Result
+ *                        全字段是「每次调用的结构化事实」，塞进去会搅混语义。
  *
  * 编号：**一次 compile() 调用取一个号，src 与 out 共用同一个号** ——
  *       hook_src_005.si 与 hook_out_005.bin 就是一对。
  *       计数器是本 DLL 的全局变量，**每次加载（游戏启动）都从 1 重新编号**，
- *       因此加载时会清空目录里的 .si/.bin（不含子目录），并把 OPT_DIR 里的
+ *       因此加载时会清空目录里的 .si/.bin/.tsv（不含子目录），并把 OPT_DIR 里的
  *       中间产物（NNN.raw.bin / NNN.opt.bin / *.log）一并清掉 —— 两边的编号
  *       是同一套，只清一边就会新旧同号混在一起。
  *
@@ -40,9 +46,12 @@
  *
  * 编译
  * ----
- *   D:\bin\w64devkit\bin\gcc.exe -shared -O2 -static -o compile.dll compile_hook.c
+ *   D:\bin\w64devkit\bin\gcc.exe -shared -O2 -static -o compile.dll compile_hook.c -lbcrypt
+ *
+ *   -lbcrypt 只给 manifest.tsv 的 sha256 用（走系统 BCrypt，见 sha256_hex）。
  */
 #include <windows.h>
+#include <bcrypt.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -97,16 +106,94 @@ static void ensure_real(void) {
     if (g_real) g_compile = (compile_fn)GetProcAddress(g_real, "compile");
 }
 
-static void dump(const char* tag, const char* ext, const void* p, long long n, LONG seq) {
-    if (!p || n <= 0 || n > (64LL << 20)) return;
+/* 返回是否真的写出了文件 —— manifest 要按它决定写文件名还是 "-"，
+   免得记录里指着一个因超限/失败而根本没落盘的捕获。 */
+static int dump(const char* tag, const char* ext, const void* p, long long n, LONG seq) {
+    if (!p || n <= 0 || n > (64LL << 20)) return 0;
     CreateDirectoryA(OUT_DIR, NULL);       /* 已存在会失败，无所谓 */
     char path[MAX_PATH];
     sprintf(path, "%s%chook_%s_%03ld%s", OUT_DIR, SEP, tag, seq, ext);
     HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) return 0;
     DWORD written = 0;
-    WriteFile(h, p, (DWORD)n, &written, NULL);
+    BOOL ok = WriteFile(h, p, (DWORD)n, &written, NULL);
+    CloseHandle(h);
+    return ok && written == (DWORD)n;
+}
+
+/* SHA-256 十六进制串（小写，64 字符 + 终止符）。
+ *
+ * 走系统 BCrypt 而不是自带实现：仓库里没有比它更权威的 sha256，而
+ * optimize.log 的指纹是 Python hashlib 算的 —— 两边必须逐字符一致才谈得上
+ * 交叉核对，所以宁可用同一个标准库。
+ *
+ * **失败时不碰 out**（保留调用方给的 "-"）—— 记录失败要静默，不能因为
+ * 指纹算不出来就影响编译或写出一条看似有效的错指纹。
+ */
+static void sha256_hex(const void* p, long long n, char* out) {
+    if (!p || n <= 0 || n > (64LL << 20)) return;
+    BCRYPT_ALG_HANDLE alg = NULL;
+    BCRYPT_HASH_HANDLE h = NULL;
+    PUCHAR obj = NULL;
+    DWORD objlen = 0, got = 0;
+    UCHAR digest[32];
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0) return;
+    if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objlen,
+                          sizeof(objlen), &got, 0) != 0) goto done;
+    obj = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, objlen);
+    if (!obj) goto done;
+    if (BCryptCreateHash(alg, &h, obj, objlen, NULL, 0, 0) != 0) goto done;
+    if (BCryptHashData(h, (PUCHAR)p, (ULONG)n, 0) != 0) goto done;
+    if (BCryptFinishHash(h, digest, (ULONG)sizeof(digest), 0) != 0) goto done;
+    for (int i = 0; i < 32; i++) sprintf(out + i * 2, "%02x", digest[i]);
+done:
+    if (h) BCryptDestroyHash(h);
+    if (obj) HeapFree(GetProcessHeap(), 0, obj);
+    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+}
+
+/* 追加一行 manifest.tsv：把一次 compile() 的四样东西串起来 ——
+ * flags（游戏传入的真值，之前从未落盘）、src 与产物的指纹、Result 全 5 字段。
+ *
+ * 列（制表符分隔，首行表头）：
+ *   seq time flags src src_len src_sha256 out out_len out_sha256 r0 r1 r2 r3 r4
+ * r0..r4 是 Result 的 qword[0..4]（40 字节），r0 = 缓冲总长、r1 = 缓冲指针、
+ * r2 = 锚点偏移；r3/r4 到 2026-10 为止没人读过，正是要记下来看的东西。
+ *
+ * 必须在 optimize_inplace 之后调用：那时 r2 才是交给游戏的**最终**锚点。
+ * 任何一步失败都静默跳过（与 dump / opt_log 同一风格）。
+ */
+static void manifest_line(LONG seq, int flags,
+                          const char* src_name, long long src_len, const char* src_sha,
+                          const char* out_name, long long out_len, const char* out_sha,
+                          const void* out) {
+    if (!out) return;                      /* 没有 out 缓冲就没什么可记 */
+    CreateDirectoryA(OUT_DIR, NULL);
+    char path[MAX_PATH];
+    sprintf(path, "%s%cmanifest.tsv", OUT_DIR, SEP);
+    int fresh = GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES;
+    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    const long long* r = (const long long*)out;
+    char line[512];
+    int n = 0;
+    if (fresh)
+        n += sprintf(line + n, "seq\ttime\tflags\tsrc\tsrc_len\tsrc_sha256"
+                               "\tout\tout_len\tout_sha256\tr0\tr1\tr2\tr3\tr4\r\n");
+    n += sprintf(line + n,
+                 "%03ld\t%04d-%02d-%02d %02d:%02d:%02d\t0x%X\t%s\t%lld\t%s\t%s\t%lld\t%s"
+                 "\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\r\n",
+                 seq, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                 (unsigned)flags, src_name, src_len, src_sha, out_name, out_len, out_sha,
+                 (unsigned long long)r[0], (unsigned long long)r[1],
+                 (unsigned long long)r[2], (unsigned long long)r[3],
+                 (unsigned long long)r[4]);
+    DWORD w = 0;
+    WriteFile(h, line, (DWORD)n, &w, NULL);
     CloseHandle(h);
 }
 
@@ -280,7 +367,8 @@ static void purge_captures(void) {
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   /* 不碰子目录 */
         if (!ends_with_ci(fd.cFileName, ".si") &&
-            !ends_with_ci(fd.cFileName, ".bin")) continue;
+            !ends_with_ci(fd.cFileName, ".bin") &&
+            !ends_with_ci(fd.cFileName, ".tsv")) continue;   /* manifest.tsv 同批清 */
         lstrcpyA(path, OUT_DIR);
         lstrcatA(path, "\\");
         lstrcatA(path, fd.cFileName);
@@ -336,21 +424,41 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
        hook_out_NNN.bin 编号相同，一眼看出一对。早先的实现是在 dump() 里各自
        取号，于是编号成了 src_001/out_002、src_003/out_004…，配对要看「-1」。 */
     LONG seq = InterlockedIncrement(&g_seq);
+    const void* sp = NULL;                 /* 源码数据（ptr + 8）与长度，留给 manifest */
+    long long slen = 0;
+    int s_wrote = 0;
     if (src) {
         long long len = *(long long*)src;
         void* ptr = *(void**)((char*)src + 8);
-        if (ptr) dump("src", ".si", (const char*)ptr + 8, len, seq);   /* 数据在 ptr + 8 */
+        if (ptr) {
+            sp = (const char*)ptr + 8;     /* 数据在 ptr + 8 */
+            slen = len;
+            s_wrote = dump("src", ".si", sp, len, seq);
+        }
     }
     if (!g_compile) return NULL;
     void* ret = g_compile(out, src, flags);
     if (out) {
         long long olen = *(long long*)out;
         void* optr = *(void**)((char*)out + 8);
+        int o_wrote = 0;
         if (optr) {
-            dump("out", ".bin", optr, olen, seq);
+            o_wrote = dump("out", ".bin", optr, olen, seq);
             /* MVP：让产物去 Python 里转一圈，原样写回。任何一步失败都不影响返回。 */
             optimize_inplace(optr, olen, seq, out);
         }
+        /* 放在写回之后：r2 记录的是改写器更新后的最终锚点。
+           sha 失败留 "-"，文件名按 dump 是否真的落了盘来写。 */
+        char ssha[65] = "-", osha[65] = "-", sname[32] = "-", oname[32] = "-";
+        if (s_wrote) {
+            sprintf(sname, "hook_src_%03ld.si", seq);
+            sha256_hex(sp, slen, ssha);
+        }
+        if (o_wrote) {
+            sprintf(oname, "hook_out_%03ld.bin", seq);
+            sha256_hex(optr, olen, osha);
+        }
+        manifest_line(seq, flags, sname, slen, ssha, oname, olen, osha, out);
     }
     return ret;
 }

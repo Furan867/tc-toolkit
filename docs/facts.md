@@ -8,9 +8,13 @@
 
 ### compile() 的调用契约
 签名 `Result* compile(Result* out /*rcx*/, NimStr* src /*rdx*/, int flags /*r8d*/)`；
-40 字节输出 = `{out_len, out, 第3字段, 0, 0}`，`out_len == 0` 表示编译失败。
-验证：`D:/bin/w64devkit/bin/objdump.exe -d compile_real.dll`，compile @ `0x2fddd5fd0`
-最后验证：2026-10-11
+40 字节输出 = `{out_len, out_ptr, entry_off, 0, 0}`：`out_len` 是**缓冲总长（含 8 字节头）**、
+`out_ptr` 指向缓冲、`entry_off` 是产物内锚点偏移，`out_len == 0` 表示编译失败。
+`flags` 是第 3 个参数，含义未知（离线调用传什么就原样转给真编译器）。
+验证：`D:/bin/w64devkit/bin/objdump.exe -d compile_real.dll`，compile @ `0x2fddd5fd0`；
+      外加 `work/hook/manifest.tsv` 的 qword 实测 —— 离线三次调用里 qword[3]/qword[4] 都**被写成 0**
+      （调用方缓冲预先填 0xCC 哨兵，读回来仍是 0，不是残留）
+最后验证：2026-10-13
 
 ### compile() 的内部流程
 `rawNewString(len + 27711)` → 拷 27711 字节固定前缀 → 拷用户源码 → `compile_source__OOZcore_u145`。
@@ -48,10 +52,22 @@
 最后验证：2026-10-11
 
 ### 清空语义
-`work/hook/` 与 `work/opt/` 同为转发层工作区、编号同出 `g_seq`，**每次加载一起清空**；
-`work/freq/` 是采样数据，跨会话保留。
-验证：静态核对（`compile_hook.c`）
-最后验证：2026-10-11
+`work/hook/`（`.si` / `.bin` / `manifest.tsv`）与 `work/opt/`（`.raw.bin` / `.opt.bin` / `.entry.txt` / `.log`）
+同为转发层工作区、编号同出 `g_seq`，**每次加载一起清空**；`work/freq/` 是采样数据，跨会话保留。
+验证：静态核对（`compile_hook.c` 的 `purge_captures` / `purge_workdir`）+ 实测（连续两次加载，`manifest.tsv` 都从 001 重新开始）
+最后验证：2026-10-13
+
+### 转发层 manifest.tsv
+`work/hook/manifest.tsv`，一次 `compile()` 一行（首行表头，制表符分隔）：
+`seq time flags src src_len src_sha256 out out_len out_sha256 r0 r1 r2 r3 r4`。
+`r0..r4` 是 Result 的 5 个 qword（十六进制）；`r2` 记的是**改写后**的最终锚点（该行写在
+`optimize_inplace` 之后）。sha256 由转发层用系统 BCrypt 算，与 Python `hashlib` **逐字符一致**（已对拍）。
+不写进 `hook.log` 的理由：`hook.log` 的行格式已被 `bench_rewrite`（数新行）与 `watch_freq`
+（提 `rewrite=` 行）解析，且语义是「配置与流程事件」，结构化字段会搅混它。
+失败一律静默：sha 算不出写 `-`，捕获没落盘则文件名写 `-`。
+验证：`py work/tmp/verify_manifest.py <样本.si>`（离线加载转发层、3 次调用；flags = 0x0 / 0x0 / 0x7 如实入库，
+      src 与产物的 sha256、长度、qword 全对拍通过）
+最后验证：2026-10-13
 
 ### 产物 rewrite 模式的权威来源
 只认 `optimize.log`。`watch_freq` 读「检测时刻」的 `opt.ini` 会在编译间隙切开关时错位。

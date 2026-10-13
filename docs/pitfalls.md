@@ -25,3 +25,6 @@
 - 脚本首行写 `#!/usr/bin/env python3` 会让 PyLauncher 去 **PATH** 里找 `python3.exe`
   （本机命中 MSYS2 那个），同一个 DLL 编译慢 **16 倍**且**毫无报错**。工具脚本一律写
   `#!python3`；`build_component_map` 会打印每次编译耗时，十几秒就是选错解释器了。
+- 别往 `hook.log` 里塞结构化字段 —— 它的行格式已被 `bench_rewrite`（数新行判断编译是否触发）
+  与 `watch_freq`（提 `rewrite=` 行）解析，语义是「配置与流程事件」；每次调用的结构化事实
+  写 `work/hook/manifest.tsv`（flags / Result 5 字段 / sha256）。

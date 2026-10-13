@@ -220,7 +220,8 @@ done:
  * 列（制表符分隔，首行表头）：
  *   seq time flags src src_len src_sha256 out out_len out_sha256 r0 r1 r2 r3 r4
  * r0..r4 是 Result 的 qword[0..4]（40 字节），r0 = 缓冲总长、r1 = 缓冲指针、
- * r2 = 锚点偏移；r3/r4 到 2026-10 为止没人读过，正是要记下来看的东西。
+ * r2 = 锚点偏移；r3/r4 到 2026-10 为止没人读过，记下来就是为了看编译器是否初始化它们
+ * —— 离线实测被写成 0（调用方缓冲预先填 0xCC 哨兵，读回来仍是 0，不是残留）。
  *
  * 必须在 optimize_inplace 之后调用：那时 r2 才是交给游戏的**最终**锚点。
  * 任何一步失败都静默跳过（与 dump / opt_log 同一风格）。
@@ -404,7 +405,7 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     }
 }
 
-/* 加载时清空 OUT_DIR 下的 .si / .bin。
+/* 加载时清空 OUT_DIR 下的 `.si` / `.bin` / `.tsv`（不含子目录）。
  *
  * 为什么：编号计数器 g_seq 是**本 DLL 的全局变量**，每次加载都从 1 重新编号。
  * 不清空的话，新捕获会覆盖同号的旧文件，而且新旧混在同一目录里分不出哪些是
@@ -446,7 +447,8 @@ static void purge_captures(void) {
  * hook_out_001.bin 只剩本轮那一份。后果是按编号回查产物信息时会摸到上一轮
  * 会话的记录，指纹张冠李戴。
  *
- * 只删这三类，不整目录删 —— 免得误伤将来往这里放的东西。
+ * 只删这四类（`.raw.bin` / `.opt.bin` / `.entry.txt` / `.log`），不整目录删 —— 免得误伤
+ * 将来往这里放的东西。
  */
 static void purge_workdir(void) {
     char pat[MAX_PATH], path[MAX_PATH];

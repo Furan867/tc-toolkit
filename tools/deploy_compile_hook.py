@@ -94,8 +94,7 @@ def build():
     except OSError as exc:
         print(f"❌ 建不出 build 目录：{exc}", file=sys.stderr)
         return 1
-    # -lbcrypt：转发层用系统 BCrypt 算产物/源码 sha256（写 manifest.tsv）
-    cmd = [gcc, "-shared", "-O2", "-static", "-o", dst, src, "-lbcrypt"]
+    cmd = [gcc, "-shared", "-O2", "-static", "-o", dst, src]
     print("$ " + " ".join(cmd))
     r = subprocess.run(cmd)
     if r.returncode != 0:

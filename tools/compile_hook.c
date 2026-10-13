@@ -46,12 +46,12 @@
  *
  * 编译
  * ----
- *   D:\bin\w64devkit\bin\gcc.exe -shared -O2 -static -o compile.dll compile_hook.c -lbcrypt
+ *   D:\bin\w64devkit\bin\gcc.exe -shared -O2 -static -o compile.dll compile_hook.c
  *
- *   -lbcrypt 只给 manifest.tsv 的 sha256 用（走系统 BCrypt，见 sha256_hex）。
+ *   无第三方链接依赖：manifest.tsv 的 sha256 走系统 bcrypt.dll 的按需绑定
+ *   （见 cng_bind / sha256_hex），所以不用 -lbcrypt、也不 include <bcrypt.h>。
  */
 #include <windows.h>
-#include <bcrypt.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -122,35 +122,96 @@ static int dump(const char* tag, const char* ext, const void* p, long long n, LO
     return ok && written == (DWORD)n;
 }
 
+/* ---- 系统 CNG（bcrypt.dll）的按需绑定 ------------------------------------
+ *
+ * sha256 用 Windows 自带的 CNG，但**不链接 -lbcrypt** —— 那要依赖 w64devkit
+ * 的导入库 libbcrypt.a（只是声明，不含实现）。这里只取 7 个函数：首次用到时
+ * LoadLibrary 一次、GetProcAddress 一次，之后每次调用只查一个静态标志，
+ * 与 ensure_real() 是同一套路。
+ *
+ * 连 <bcrypt.h> 也不 include：需要的符号一共就下面这几个，自己声明即可，
+ * 免得依赖 w64devkit 的头文件。
+ *
+ * 绑不上（或任一环节失败）就让 sha256 退化成写 "-"，不影响编译与返回值。
+ * 多线程首次并发可能重复 LoadLibrary —— 与 ensure_real 同样宽容处理，无害。
+ */
+#define CNG_DLL           "bcrypt.dll"
+#define CNG_SHA256        L"SHA256"
+#define CNG_OBJECT_LENGTH L"ObjectLength"
+
+typedef LONG (WINAPI *cng_open_t)(void** alg, LPCWSTR id, LPCWSTR impl, ULONG flags);
+typedef LONG (WINAPI *cng_prop_t)(void* obj, LPCWSTR prop, PUCHAR out, ULONG outlen,
+                                  ULONG* got, ULONG flags);
+typedef LONG (WINAPI *cng_create_t)(void* alg, void** hash, PUCHAR buf, ULONG buflen,
+                                    PUCHAR secret, ULONG secretlen, ULONG flags);
+typedef LONG (WINAPI *cng_data_t)(void* hash, PUCHAR in, ULONG inlen, ULONG flags);
+typedef LONG (WINAPI *cng_finish_t)(void* hash, PUCHAR out, ULONG outlen, ULONG flags);
+typedef LONG (WINAPI *cng_destroy_t)(void* hash);
+typedef LONG (WINAPI *cng_close_t)(void* alg, ULONG flags);
+
+static struct {
+    int           state;          /* 0 = 还没试过，1 = 可用，-1 = 不可用 */
+    cng_open_t    open_alg;
+    cng_prop_t    get_prop;
+    cng_create_t  create_hash;
+    cng_data_t    hash_data;
+    cng_finish_t  finish_hash;
+    cng_destroy_t destroy_hash;
+    cng_close_t   close_alg;
+} g_cng;
+
+static int cng_bind(void) {
+    if (g_cng.state) return g_cng.state > 0;
+    HMODULE m = LoadLibraryA(CNG_DLL);
+    if (m) {
+        g_cng.open_alg     = (cng_open_t)   GetProcAddress(m, "BCryptOpenAlgorithmProvider");
+        g_cng.get_prop     = (cng_prop_t)   GetProcAddress(m, "BCryptGetProperty");
+        g_cng.create_hash  = (cng_create_t) GetProcAddress(m, "BCryptCreateHash");
+        g_cng.hash_data    = (cng_data_t)   GetProcAddress(m, "BCryptHashData");
+        g_cng.finish_hash  = (cng_finish_t) GetProcAddress(m, "BCryptFinishHash");
+        g_cng.destroy_hash = (cng_destroy_t)GetProcAddress(m, "BCryptDestroyHash");
+        g_cng.close_alg    = (cng_close_t)  GetProcAddress(m, "BCryptCloseAlgorithmProvider");
+    }
+    if (!m || !g_cng.open_alg || !g_cng.get_prop || !g_cng.create_hash ||
+        !g_cng.hash_data || !g_cng.finish_hash || !g_cng.destroy_hash ||
+        !g_cng.close_alg) {
+        g_cng.state = -1;
+        if (m) FreeLibrary(m);
+        return 0;
+    }
+    g_cng.state = 1;
+    return 1;
+}
+
 /* SHA-256 十六进制串（小写，64 字符 + 终止符）。
  *
- * 走系统 BCrypt 而不是自带实现：仓库里没有比它更权威的 sha256，而
- * optimize.log 的指纹是 Python hashlib 算的 —— 两边必须逐字符一致才谈得上
- * 交叉核对，所以宁可用同一个标准库。
+ * 用系统 CNG 而不是自带实现：`optimize.log` 的指纹是 Python hashlib 算的，
+ * 两边必须逐字符一致才谈得上交叉核对，所以用同一个标准实现。
  *
- * **失败时不碰 out**（保留调用方给的 "-"）—— 记录失败要静默，不能因为
- * 指纹算不出来就影响编译或写出一条看似有效的错指纹。
+ * **失败时不碰 out**（保留调用方给的 "-"）—— 记录失败要静默，不能因为指纹
+ * 算不出来就影响编译，或写出一条看似有效的错指纹。
  */
 static void sha256_hex(const void* p, long long n, char* out) {
     if (!p || n <= 0 || n > (64LL << 20)) return;
-    BCRYPT_ALG_HANDLE alg = NULL;
-    BCRYPT_HASH_HANDLE h = NULL;
+    if (!cng_bind()) return;
+    void* alg = NULL;
+    void* hash = NULL;
     PUCHAR obj = NULL;
-    DWORD objlen = 0, got = 0;
+    ULONG objlen = 0, got = 0;
     UCHAR digest[32];
-    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0) return;
-    if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objlen,
-                          sizeof(objlen), &got, 0) != 0) goto done;
+    if (g_cng.open_alg(&alg, CNG_SHA256, NULL, 0) != 0) return;
+    if (g_cng.get_prop(alg, CNG_OBJECT_LENGTH, (PUCHAR)&objlen,
+                       sizeof(objlen), &got, 0) != 0) goto done;
     obj = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, objlen);
     if (!obj) goto done;
-    if (BCryptCreateHash(alg, &h, obj, objlen, NULL, 0, 0) != 0) goto done;
-    if (BCryptHashData(h, (PUCHAR)p, (ULONG)n, 0) != 0) goto done;
-    if (BCryptFinishHash(h, digest, (ULONG)sizeof(digest), 0) != 0) goto done;
+    if (g_cng.create_hash(alg, &hash, obj, objlen, NULL, 0, 0) != 0) goto done;
+    if (g_cng.hash_data(hash, (PUCHAR)p, (ULONG)n, 0) != 0) goto done;
+    if (g_cng.finish_hash(hash, digest, (ULONG)sizeof(digest), 0) != 0) goto done;
     for (int i = 0; i < 32; i++) sprintf(out + i * 2, "%02x", digest[i]);
 done:
-    if (h) BCryptDestroyHash(h);
+    if (hash) g_cng.destroy_hash(hash);
     if (obj) HeapFree(GetProcessHeap(), 0, obj);
-    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    g_cng.close_alg(alg, 0);
 }
 
 /* 追加一行 manifest.tsv：把一次 compile() 的四样东西串起来 ——

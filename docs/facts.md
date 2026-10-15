@@ -8,11 +8,61 @@
 
 ### compile() 的调用契约
 签名 `Result* compile(Result* out /*rcx*/, NimStr* src /*rdx*/, int flags /*r8d*/)`；
-40 字节输出 = `{out_len, out_ptr, entry_off, 0, 0}`：`out_len` 是缓冲总长（含 8 字节头）、
-`out_ptr` 指向缓冲、`entry_off` 是产物内锚点偏移，`out_len == 0` 即编译失败；`flags` 含义未知。
-qword[3]/[4] 实测被写成 0（不是残留，判定依据见 `manifest_line` 注释）。
-验证：`objdump -d compile_real.dll`（compile @ `0x2fddd5fd0`）+ `work/hook/manifest.tsv` 实测
-最后验证：2026-10-13
+40 字节输出 = `{out_len, out_ptr, entry_off, err_len, err_ptr}`：`out_len` 是缓冲总长（含 8 字节头）、
+`out_ptr` 指向缓冲、`entry_off` 是产物内锚点偏移（相对机器码起点），`out_len == 0` 即编译失败。
+`err_len/err_ptr` 是**错误消息字符串** `{len, ptr}`：成功时两者都是 0，非 0 即失败。
+`flags` 实测恒为 0（游戏侧唯一调用点 `0x14021cff6 xor %r8d,%r8d`；manifest 10/10）。
+验证：`objdump -d compile_real.dll`（compile @ `0x2fddd5fd0`）+ exe `0x14021cf20` 段
+      + `work/hook/manifest.tsv` 实测
+最后验证：2026-10-15
+
+### 失败时不能只把 out_len 置 0
+`out_len == 0` 且 `err_len == 0` 时游戏走**成功路径**（exe `0x14021d08c` → `createThread`），
+`jit` 里 `len <= 0` 触发 `raiseIndexError2`。**失败必须给非 0 的 `err_len`**
+（判定点 exe `0x14021d07b`/`0x14021d083`：`test %rbx,%rbx; jne 0x14021d198`，失败分支跳过
+`send_command(1)` 与 `createThread`，不跑新代码）。
+验证：反汇编 exe `0x14021cf20`–`0x14021d310`
+最后验证：2026-10-15
+
+### 游戏如何执行产物
+`jit__modelZsimulationZjitZjit_u1807`（exe `0x14021cc60`）：分配 `out_len` 字节可执行内存
+（dynlib 取到的 CreateFileMappingW(PAGE_EXECUTE_READWRITE) / MapViewOfFileEx，🔍 判读）
+→ `memcpy(dest, out_ptr + 8, out_len)` → `c_jit()`（exe `0x140001a40` 实测就是 `ret`）
+→ `jmp *dest + entry_off`。**不设置任何寄存器、无参数、无返回值** →
+产物内部调用约定由编译器自定，entry 自己保存现场。
+⚠️ memcpy 读到 `out_ptr + 8 + out_len`，比缓冲末尾多 8 字节（参考实现靠 Nim 字符串余量兜住；
+自研实现要显式留 8 字节 padding）。
+验证：反汇编 exe `0x14021cc60`–`0x14021cd40`、`0x140001a40`
+最后验证：2026-10-15
+
+### 产物头 8 字节：只有 bit62 被读
+头 word 的**值**游戏从不读（全 exe 只有 `jit` 的 `memcpy(ptr+8, len)` 一处读产物）；
+但 `eqdestroy___pureZtimes_u2668`（exe `0x14001c260`）会 `testb $0x40,0x7(p)` 看头 word 的 **bit 62**：
+置位 → 不 free，否则 `rawDealloc(allocator__system_u7164, p)`。错误消息指针走同一门控
+（成功路径 `0x14021d127` → `deallocShared`）。
+→ 自研实现的产物头**必须置 bit62**，否则游戏会用自己的分配器 free 我们的指针。
+代价：`analyze_jit_code.py` 的「头值 == 文件总长」自检要掩掉这一位。
+验证：反汇编 exe `0x14001c260`–`0x14001c2a0`、`0x14021d11a`–`0x14021d130`
+最后验证：2026-10-15
+
+### 产物的内存所有权与释放时机
+游戏只在 bit62 未置位时释放产物，**无 refcount**（唯一性靠 `wasMoved`/move 保证）。
+`jit_function` 在调 `jit` 前会拷贝一次产物字符串（`eqcopy` @`0x14021cd78`），
+且 `handle_request_compile_and_run` 每条请求都先 `send_command(3)+joinThreads` 再 `compile()`，
+而 `compile()` 全 exe 只有一个调用点、单线程串行
+→ 「下次 compile 开始时释放上一份产物」安全。
+验证：反汇编 exe `0x14021cf20` 段（`0x14021d230` 起的 join 路径）
+最后验证：2026-10-15
+
+### entry = 顶层语句块，每次编译只进入 1 次
+程序根是**顶层语句块**：空源码 / 只定义函数 → 产物恒 8581 字节（函数被 DCE）；
+顶层写一句 `store(...)` → 产物 +13 字节且立即数落在 `0x215c`。顶层块末尾有隐式 `thread_exit()`。
+`jit` 尾跳进 entry 后无返回路径，`jit_function` 全 exe 只作为 `createThread` 的线程过程出现一次，
+`handle_request_compile_and_run` 每次请求都无条件编译 + 起线程
+→ **每次编译 entry 恰好进入 1 次**，同一产物不会被重复进入；每次进入都重新初始化
+（产物内数据每次被 memcpy 覆盖）。
+验证：离线探针（空源码 / 仅定义函数 / 顶层 store 三例对比）+ 反汇编 exe `jit`/`jit_function`
+最后验证：2026-10-15
 
 ### compile() 的内部流程
 `rawNewString(len + 27711)` → 拷 27711 字节固定前缀 → 拷用户源码 → `compile_source__OOZcore_u145`。
@@ -33,6 +83,7 @@ qword[3]/[4] 实测被写成 0（不是残留，判定依据见 `manifest_line` 
 
 ### 产物文件前 8 字节是长度头
 不是机器码；头字段的值**等于文件总长（含头自己）**，不是数据长度。
+（自研实现置 bit62 后，头值 = 总长 \| bit62，见「产物头 8 字节：只有 bit62 被读」。）
 验证：`stat -c %s` 与 `od -An -tu8 -N8` 比对任一 `work/hook/hook_out_*.bin`
 最后验证：2026-10-11
 

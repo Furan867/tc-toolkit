@@ -17,12 +17,20 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
 ----------
     删掉我们的 compile.dll，把 compile_real.dll 改名回 compile.dll
 
-编译做的事（--build）
+编译做的事（build）
 ------------------
     调 w64devkit 的 gcc 把 tools/compile_hook.c 编译成 build/compile_hook.dll
     （gcc 路径可用环境变量 W64DEVKIT_GCC 覆盖）—— 免去手敲那条长命令。
 
-典型流程：`--build` → `--deploy` → 启动游戏。
+命令
+----
+    status        看当前状态（是否已部署、游戏是否在跑）
+    build         只编译转发层
+    deploy        只部署（把 build/ 的 dll 盖上去；游戏在跑会拒绝）
+    build-deploy  编译后立刻部署 —— 改完 compile_hook.c 的常规流程
+    restore       还原为原始 compile.dll
+
+典型流程：`build-deploy` → 启动游戏。
 
 ⚠️ 游戏运行时 DLL 文件被锁、无法改名 —— 脚本检测到游戏在跑会直接拒绝执行。
 """
@@ -108,7 +116,7 @@ def deploy():
     if not guard():
         return 1
     if not os.path.exists(HOOK):
-        print(f"❌ 转发层不存在：{HOOK}\n   先编译：py tools/deploy_compile_hook.py --build",
+        print(f"❌ 转发层不存在：{HOOK}\n   先编译：py tools/deploy_compile_hook.py build-deploy",
               file=sys.stderr)
         return 1
     if os.path.exists(REAL):
@@ -162,18 +170,21 @@ def restore():
 
 def main():
     ap = argparse.ArgumentParser(description="部署/恢复 compile.dll 转发层")
-    g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--deploy", action="store_true", help="部署转发层")
-    g.add_argument("--restore", action="store_true", help="还原为原始 compile.dll")
-    g.add_argument("--status", action="store_true", help="查看当前状态")
-    g.add_argument("--build", action="store_true",
-                   help="编译 tools/compile_hook.c → build/compile_hook.dll")
-    a = ap.parse_args()
-    if a.status:
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status", help="查看当前状态")
+    sub.add_parser("build", help="编译 tools/compile_hook.c → build/compile_hook.dll")
+    sub.add_parser("deploy", help="部署转发层（游戏在跑则拒绝）")
+    sub.add_parser("build-deploy", help="编译后立刻部署（改完 compile_hook.c 的常规流程）")
+    sub.add_parser("restore", help="还原为原始 compile.dll")
+    cmd = ap.parse_args().cmd
+    if cmd == "status":
         return status()
-    if a.build:
+    if cmd == "build":
         return build()
-    return deploy() if a.deploy else restore()
+    if cmd == "build-deploy":
+        rc = build()
+        return rc if rc else deploy()
+    return deploy() if cmd == "deploy" else restore()
 
 
 if __name__ == "__main__":

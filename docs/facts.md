@@ -146,9 +146,12 @@ qword[3]/[4] 实测被写成 0（不是残留，判定依据见 `manifest_line` 
 每行 `时间 \t 编号 \t 事件 \t key=value…`（事件表与键表见 `tools/hook_log.py`，
 C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什么（原样搬运），
 `opt` 行 = 实际执行的模式 / 改写处数 / 产物 sha256 —— 两者不一致就是 short 退回了 on。
-`opt_stderr.log` 是子进程的自检明细（多行、非结构化），**不是**记录项，单独放。
-验证：静态核对（`tools/hook_log.py` + `compile_hook.c`）+ 部署后实测 `work/opt/hook.log`
-最后验证：2026-10-13
+`opt_stderr.log` 是子进程 stdout/stderr 的原样重定向（多行、非结构化、**GBK 编码**，
+不是 UTF-8），**不是**记录项，单独放。
+验证：静态核对（`tools/hook_log.py` + `compile_hook.c`）+ 游戏内 10 次编译实测：
+`hook.log` 32 行全可解析（无坏行）、每次 `cfg`/`opt`/`writeback` 齐全、无 `error` 行、
+`opt` 行的 sha256 与 `NNN.opt.bin` 逐条相符、`entry` 与 `NNN.entry.txt` 相符
+最后验证：2026-10-15
 
 ## 主频读数
 

@@ -145,7 +145,7 @@ qword[3]/[4] 实测被写成 0（不是残留，判定依据见 `manifest_line` 
 ### 三份日志的语义
 `hook.log` = 配置了什么；`optimize.log` = 实际执行的模式 / 改写处数 / 产物 sha256；
 `opt_stderr.log` = 自检明细，**追加写**（`compile_hook.c` 用 `FILE_APPEND_DATA`），历史原因都在。
-两者不一致（`hook.log` 的配置值 vs `optimize.log` 的实际值）就是 short 退回了 on。
+`hook.log` 与 `optimize.log` 不一致就是 short 退回了 on。
 验证：静态核对（`compile_hook.c:210`）
 最后验证：2026-10-11
 
@@ -206,8 +206,6 @@ Alt 解锁，再 `AttachThreadInput` 拼接输入队列。
 ### DWARF 节不含 Nim 信息
 `compile_real.dll` 的 `.debug_info` / `.debug_line` 是 MinGW CRT 的：`objdump --dwarf=info`
 得 25 个 CU、含 `nim` 的 **0 个**、`OOZ` 出现 **0 次**。
-⚠️ 陷阱：`objdump -g`（不加 `--dwarf=`）会打印 `…@spasses@sfront_end@stokenizer.nim.c:`
-这种名字，看着像 Nim 符号，实则来自 **COFF `.file` 记录**，不是 DWARF 节的内容。
 验证：`objdump --dwarf=info compile_real.dll | grep -ci nim` 应为 0
 最后验证：2026-10-11
 

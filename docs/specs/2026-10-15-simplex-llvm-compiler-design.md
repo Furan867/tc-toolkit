@@ -1,0 +1,402 @@
+# 设计：Simplex → LLVM 编译器（drop-in 替换 compile.dll）
+
+- 日期：2026-10-15
+- 分支：`main`（本设计尚未落代码）
+- 状态：**设计定稿；实现未开始**。产物契约由 T1–T5 实测闭合（见 §2、§4）
+- 相关文档：`docs/facts.md`（复用结论）、`docs/status.md`（当前进度）、`docs/pitfalls.md`（踩过的坑）
+- 证据等级：✅已证（跑过命令 / 反汇编核对）｜🔍推断（由实测数据推得）｜❓未确认
+
+---
+
+## 1. 目标与非目标
+
+**目标**：把游戏目录的 `compile.dll` 换成自研实现 —— 用自研前端把 Simplex 源码编译成 LLVM IR，交给 LLVM
+优化，再装配成游戏可直接 JIT 执行的机器码块，提升游戏内电路仿真主频。
+
+**正确性判据**：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**（定义见 §7.1）。
+
+**主频测量**：`tools/watch_freq.py`，benchmark 用 RV32IM 电路（很远，暂不做）。
+
+**非目标**：
+- **不做转译**（Simplex → C/C++ 再交给别的编译器），理由见 §5.3。
+- 不修改游戏本体（`Turing Complete.exe` / `game_engine.dll`）；不重写游戏侧代码生成器。
+- 不做关卡编辑器 / UI 相关工作。
+
+**交付形态**：drop-in DLL。游戏按文件名 `compile.dll` + 符号名 `compile` 加载
+（✅ `nimLoadLibrary("compile.dll")` @`0x14021d40b` + `nimGetProcAddr("compile")` @`0x14021d426`）。
+参考实现保留为 `compile_real.dll`（现网转发层已如此部署）。
+
+---
+
+## 2. 已实测的系统事实
+
+### 2.1 调用契约（✅）
+
+```c
+Result* compile(Result* out /*rcx*/, NimStr* src /*rdx*/, int flags /*r8d*/);
+// NimStr = { int64 len; void* ptr; }   字符数据在 ptr + 8
+// Result = 40 字节，游戏侧落在栈上 rsp+0x20..0x48
+```
+- 导出表只有 3 个符号：`compile` / `NimMain` / `NimDestroyGlobals`。
+- **`flags` 恒为 0**：调用点 `0x14021cff6 xor %r8d,%r8d` → `0x14021d004 call *compile`；
+  `work/hook/manifest.tsv` 10 次调用全为 `0x0`（✅ 两路独立印证）。
+- 全 exe 只有**一个**调用点（`0x14021d004`，在 `handle_request_compile_and_run` 内，跑在 compile 线程上）。
+- 可脱离游戏进程调用；同一源码在同一 rewrite 模式下产物逐字节确定
+  （✅ `manifest.tsv` 002–006 五次同源同 sha；跨进程亦可复现，见 `facts.md`）。
+
+### 2.2 Result 的字段语义（✅）
+
+| 字段 | 含义 | 成功值 | 失败值 |
+|---|---|---|---|
+| `out[0]` | 产物缓冲总长（含 8 字节头） | 码长 + 8 | 0 |
+| `out[1]` | 产物缓冲指针 | 有效指针 | 0 |
+| `out[2]` | `entry_off`（int32，相对机器码起点） | 顶层块偏移 | 0 |
+| `out[3]` | **错误消息长度**（非 0 即失败） | 0 | 非 0 |
+| `out[4]` | **错误消息指针**（Nim 字符串形状） | 0 | 有效指针 |
+
+- 失败判定：`0x14021d07b mov 0x80(%rsp),%rbx`（= `out[3]`）→ `0x14021d083 test %rbx,%rbx`
+  → `jne 0x14021d198`（失败路径，**跳过** `send_command(1)` 与 `createThread`，不跑新代码）。
+- 成功路径：`0x14021d08c mov $1,%ecx; call send_command` → `0x14021d0f5 createThread(jit_function)`。
+- ⚠️ **失败时只给 `out[0]=0` 不够**：若 `out[0]=0` 且 `out[3]=0`，游戏走成功路径起 jit 线程，
+  `len<=0` 触发 `raiseIndexError2`（`jit` @`0x14021ccd9`）。失败**必须**给非 0 的 `out[3]`。
+- 返回值（16 字节 Nim string，sret）形状：成功 `{0, nil}`（`0x14021d13a xor ebx,ebx`）；
+  失败 `{out[3], out[4]}`（`0x14021d17a/0x14021d17e`）。
+- `out[3]`/`out[4]` 是一对 Nim 字符串 `{len, ptr}`，游戏对它**只 move、无 refcount**；
+  最终释放在主线程消费处，同样是 bit62 门控 + `deallocShared`（✅ 引用流已追；UI 显示点 ❓）。
+
+### 2.3 产物形态与内存所有权（✅）
+
+- 产物 = `[8 字节头][机器码]`，`out[1]` 指向头，机器码从 `out[1]+8` 起。
+- **8 字节头的值游戏从不读**（✅ T4）：全 exe 只有 `jit` 的 `memcpy(ptr+8, len)` 一处读产物。
+- 但头的**一个 bit 会被读**：`eqdestroy___pureZtimes_u2668` @`0x14001c260` 做
+  `testb $0x40,0x7(p)` —— 看头 word 的 **bit 62**；置位 → `ret`（不 free），否则
+  `rawDealloc(allocator__system_u7164, p)`（🔍 该 bit 即 Nim 的 `NIM_STRLIT_FLAG`；旁证：
+  exe 内静态字面量 `0x14053c2e0 = 34 00 00 00 00 00 00 40` = 52 | bit62）。
+- `out[4]`（错误消息）走同一门控：成功路径 `0x14021d11a`→`0x14021d127`→`0x14021d300 deallocShared`；
+  失败路径 `0x14021d203`（此处读到的是已被 `eqwasMoved` 清零的副本，恒为 no-op）→ `0x14021d21e`。
+- **所有权结论**：游戏只在 bit62 未置位时释放；无 refcount。
+  → 我们的实现**必须把头 word 的 bit62 置位**，内存自持（否则游戏会用它自己的分配器 free 我们的指针）。
+- 释放时机安全：`handle_request_compile_and_run` 每条请求都先 `send_command(3)+joinThreads`
+  再走到 `compile()`（✅ `0x14021d230` 段），且 `compile()` 只有一个调用点、在单线程串行
+  → 「下次 compile 开始时释放上次的产物」安全；最保守也可直接泄漏。
+
+### 2.4 游戏侧执行与程序模型（✅）
+
+- `jit__modelZsimulationZjitZjit_u1807` @`0x14021cc60`：
+  `CreateFileMappingW(len, PAGE_EXECUTE_READWRITE=0x40)` + `MapViewOfFileEx`（🔍 这两个是 dynlib
+  取到的函数指针，T4 判读；语义已由调用序列 + `memcpy` + `jmp` 证实）
+  → `memcpy(dest, out[1]+8, len)` → `c_jit()`（✅ 实测 `0x140001a40` 就是 `ret`）→ `jmp *dest+entry`。
+  **不设置任何寄存器、无参数、无返回值**。
+- `jit_function` @`0x14021cd40` 在调用 `jit` 之前对产物做一次 Nim 字符串拷贝
+  （`eqcopy` @`0x14021cd78`）→ `jit` 的 memcpy 源是那份拷贝（或经 strlit 优化退化成别名）。
+- **entry 每次编译恰好进入 1 次**（✅ T3）：`jit` 尾跳后无返回路径；`jit_function` 全 exe 只作为
+  `createThread` 的线程过程出现一次；`handle_request_compile_and_run` 每次请求都无条件编译 + 起线程。
+  触发单位 = 一条 sim 请求（单步 / 输入变化 / 关卡测试 / 关卡加载 / 重编译各 1 次）。
+- **程序根 = 顶层语句块**（✅）：空源码 / 只定义函数 → 产物恒 8581 字节（函数被 DCE）；
+  顶层写一句 `store(...)` → 产物 +13 字节且立即数落在 `0x215c`。顶层块末尾有隐式 `thread_exit()`。
+- 生成代码的顶层块是长驻主循环（`work/hook/hook_src_001.si:697-850`）：
+  `run_sim: while true { reset_sim(); while true { mode_refresh(); …轮询命令… } … switch 命令 { case run { mode_run(target_cycle) } … } }`。
+- **推论**：entry 语义 = 「一次运行」；每次进入都重新初始化（blob 内数据每次被 memcpy 覆盖）；
+  跨请求状态只能放在产物之外（游戏内存 —— 生成源码里本来就是写死的绝对地址）。
+
+### 2.5 参考实现的产物质量与编译延迟（✅）
+
+- RV32IM 产物（46591 条指令）：`mov*` 占 65.2%（其中 reg-reg 拷贝 27.7%）、碰 `rsp/rbp` 19.4%、
+  置零 6327 次；典型片段反复重算地址：`mov %rax,%r9; add $8,%r9; mov %r9,%r8; mov (%r8),%r9`。
+- 纯窥孔改写（去掉变量移位依赖链）已实测 **5.4 → 8.0 MHz（+48%）**。
+- 编译延迟：419888 B 源码 → 458276 B 码，**≈2.09 s**。设计预算：最终 **5 s**（调试期放开）。
+- 参考编译器结构（🔍 由 `recovered/compiler-src/OO/*` 符号表）：66 模块 / 1989 函数，
+  管线 front_end（parse/infer/generics/macro）→ middle（SSA/phi/peephole/suffix_tree）→
+  back_end（lifetime/allocate_registers/spill_sort/emit）→ targets(x86_64/aarch64) + jit。
+
+### 2.6 固定前缀（stdlib）与内建清单（✅）
+
+- `compile()` 每次调用都把 **27711 字节 Simplex 源码**（`compile_real.dll` 偏移 `0x119F48`，1503 行）
+  拼在用户源码之前，再整体编译。该前缀是**游戏作者的运行时库**：类型/常量、arena 内存管理、
+  字符串与打印、数组与排序、大整数、时间与随机、`extern windows_x64 kernel32` 系统层。
+- 从前缀里「被调用但未定义」的名字可抽出**编译器内建（intrinsic）清单**（约 20 个）：
+  `load, store, raw_cast, empty_array_address, grow, shrink, join, index_read, index_write,
+  clz, inc, swap, type_of_element, partition, big_int_sub/mul/div_u/div_s/mod_u/mod_s/rol/ror/asr/bswap`。
+  ⚠️ 该清单由 16 份生成源码 + 前缀反推得出，**语料有限**，是派生物而非冻结规格。
+- `print_using_stack` 在 x86-64 Windows 上的实现被作者注释掉了（注释原文 `X86 WINDOWS IS UNSOUND SOMEHOW`），
+  只剩 aarch64 的 `svc 0x80` → Windows 上 `print` 很可能是空操作（🔍，待验证）。
+
+### 2.7 语料（✅）
+
+| 来源 | 规模 | 说明 |
+|---|---|---|
+| `campaign/**/test.si` | 92 文件 / 458 KB | 官方关卡测试代码（手写） |
+| 转发层抓取的生成源码 | 16 文件 / 1.70 MB | 整程序（电路生成代码 + 测试代码 + 主循环），最大 420 KB |
+| 生成源码的产物 | 16 份 `.bin` | 与源码同号配对，可当 oracle 基线 |
+| stdlib 前缀 | 1 份 / 27711 B | 已提取（工作目录 `stdlib_prefix.si`） |
+
+生成源码用到的构造：顶层语句、`load/store`（9.4k 处）、sized int 与强制转换、`Struct/Enum/别名`、
+`switch/case`、`while`、带标签循环、字符串插值、`@Size/@Type` 泛型、`raw_cast`、
+`#if in_scope("fn"){…}`（编译期条件）、`in_scope`。
+
+### 2.8 社区前作（✅）
+
+`github.com/michalusio/TC-si`（MIT，9.4k 行 TypeScript）：Simplex 的解析器 + 类型检查 + 标准库签名表 +
+代码生成 + 寄存器分配 + 优化器，目标为游戏内 Symphony 架构（不是 x86-64）。覆盖 `Struct/Enum/泛型/
+运算符重载/asm/extern`；**不覆盖** `#if in_scope`、`raw_cast`。可作前端语义参考，不能当后端复用。
+
+---
+
+## 3. 系统框架
+
+```
+游戏进程
+  Turing Complete.exe（Nim）
+    compile 线程 ──(1) compile(out, src, flags=0)──▶ compile.dll（我们的壳）
+                                                      │
+                       ┌──────────────────────────────┴───────────────────────┐
+                       │ 0. 壳：加载 compile_real.dll（回退用）                 │
+                       │    模式：ours / ours_with_fallback / reference        │
+                       │    记录 flags 与 Result（转发层已有 manifest.tsv）     │
+                       └───────┬───────────────────────────┬──────────────────┘
+                       失败/不支持 │                           │ 支持
+                                   ▼                           ▼
+                        compile_real.dll（原样返回）   我们的编译器
+                                                        ├ 前端：词法/语法/预处理(#if in_scope)
+                                                        │      作用域/类型/泛型/常量求值/重载解析
+                                                        ├ Lowering：Simplex 语义 → LLVM IR
+                                                        │      （load/store 直映射、别名、$ 写回、
+                                                        │        内建映射、extern 声明、entry 包装）
+                                                        ├ LLVM 管线（版本锁定）→ 目标码
+                                                        └ 装配器：局部符号 PC 相对 + extern 解析 +
+                                                           8 字节头(bit62) + entry 偏移 + 生命周期
+                                                      │
+    jit 线程 ◀──(2) 分配可执行内存 → memcpy(blob+8, out_len) → jmp base+entry ──┘
+    （entry 内部自带主循环；每次编译 = 新 blob + 新线程 + 进入 1 次）
+
+验证支线 A（离线，agent 日常）：
+  语料 → 参考产物(oracle) ┐
+  语料 → 我们的产物        ┼→ 差分宿主（假游戏内存 + 命令驱动 + extern 桩）→ 逐 tick 状态 diff
+                          ┘
+验证支线 B（游戏内，验收）：
+  真实关卡 + RV32IM 电路 → 转发层切 ours/reference → watch_freq.py 采样主频
+```
+
+### 3.1 组件职责
+
+| 组件 | 输入 → 输出 | 职责 | 现状 |
+|---|---|---|---|
+| 转发层（壳） | 游戏调用 → 产物 | 选实现、记录 `flags`/Result、异常熔断（绝不让游戏崩）、失败转交 | 已有（`tools/compile_hook.c`），需加"选实现" |
+| 前端 | 源码文本 → 类型化 AST | 词法/语法、`#if in_scope` 预处理、作用域、类型系统、常量求值、重载解析、内建识别、根确定与 DCE | 待写 |
+| Lowering | 类型化 AST → LLVM IR | 语义保真映射（§5）、内建映射表、extern 声明、entry 包装 | 待写 |
+| LLVM 管线 | LLVM IR → 目标码 | 固定版本 + pass pipeline + 目标三元组/ABI | 待定（spike） |
+| 装配器 | 目标码/目标文件 → blob | 局部符号 PC 相对、extern `GetProcAddress`、8 字节头、entry 偏移、blob 生命周期 | 待写 |
+| runtime | — | 生成代码/测试代码真正用到的内建与运行时（路线 B）；终态由 stdlib 源码取代（路线 A） | 待写 |
+| 验证体系 | 语料 → 判据 | 语义档案、离线差分宿主、游戏内 A/B、判据入口 | 待写 |
+
+---
+
+## 4. 产物契约（必须逐字复现）
+
+| 项 | 值 | 依据 |
+|---|---|---|
+| `out[0]` | **缓冲总长（含 8 字节头）** = `8 + 码长`（与参考实现同形，工具链不变） | ✅ 2.2 |
+| `out[1]` | 缓冲指针（我们分配、我们持有） | ✅ 2.3 |
+| `out[2]` | `entry_off`，**相对机器码起点**（= `blob+8`） | ✅ 2.2 |
+| `out[3]`/`out[4]` | 成功必须 `0`/`0`；失败给 `{len≠0, ptr}` 的 Nim 字符串形状 | ✅ 2.2 |
+| `blob[0:8]` | 小端 u64 = **`out[0] \| (1<<62)`**（bit62 = 不要 free） | ✅ 2.3 |
+| `blob[8:]` | 机器码；内部引用一律 PC 相对 | ✅ 2.3 / 🔍 |
+| 缓冲实际分配 | **`out[0] + 8` 字节**（多 8 字节 padding） | 见下 |
+| 释放 | 由我们负责：每次编译分配一块，**下次编译释放上一块**（或泄漏） | ✅ 2.3 |
+
+两条容易踩的点：
+
+1. **多分配的 8 字节 padding 是必需的**：游戏 `memcpy(dest, blob+8, out[0])` 会读到 `blob+8+out[0]`，
+   即比缓冲末尾多 8 字节。参考实现靠 Nim 字符串的分配余量兜住；我们必须显式留出，
+   否则可能读到我们自己分配的页边界外（我们用的是自管内存，不像 Nim 字符串有对齐余量）。
+2. **bit62 会让"头值 == 文件总长"这条工具链约定失效**：`tools/analyze_jit_code.py` 的 `header_len`
+   自检要求头值等于文件总长。工具链比较时应掩掉 bit62（`value & ~(1<<62)`），
+   或明确接受"头值 = 总长 | bit62"。这是我们要改的唯一一处既有约定。
+3. 头 word 里**不放别的东西**（不放 magic/版本）——需要元数据就放 padding，别动头。
+
+### 4.1 extern 与重定位（设计约束）
+
+- extern（`kernel32` 等）在**编译期**解析成进程内绝对地址（✅ 参考实现如此：同一源码跨进程有 69 字节
+  差异，全落在 kernel32 区间的 `movabs`）。
+- 装配器职责：局部符号解成 PC 相对；外部符号用 `GetProcAddress` 解析。若目标地址超出 `call rel32`
+  范围，需在 blob 内生成 `movabs rax, imm64; jmp rax` 桩（stub pool），不能让重定位失败。
+- 产物内部**不得**出现指向自身固定地址的绝对引用（blob 会被游戏拷到任意地址执行）。
+
+---
+
+## 5. 前端必须给 LLVM 什么（语义保真）
+
+主频提升主要来自 LLVM 后端，但**前端决定 LLVM 能做什么**：
+
+1. **`load`/`store` 必须 lowering 成 LLVM 的 load/store**（带类型/对齐/别名信息），
+   **不能**降成对 runtime 函数的不透明调用 —— 生成代码里 9.4k 处 `load/store`，
+   这正是参考产物 65% 是 `mov` 的根源之一。
+2. **`$` 参数写回**、`raw_cast`、指针别名必须给出**精确**（不保守）的 IR。
+3. **extern 调用的副作用要标注**（无副作用者可让 LLVM 跨调用优化，有副作用者必须挡住）。
+4. **函数边界要干净**：参考产物是"多函数拼接 + 数据混在代码流里"，会让内联与寄存器分配退化。
+5. **顶层块**（程序的 `main`，长驻循环）要作为正常函数参与内联/优化。
+6. **常量与泛型实例化在编译期完成**（大整数常量、`#if in_scope` 分支裁剪），不留运行期分支。
+7. **未支持构造必须显式报错并回退**，不允许"猜一个语义"。
+
+### 5.3 为什么禁止转译
+
+- sized int 的精确 wrapping/隐式截断、`$` 参数写回时机、数组越界与别名语义，在 C/C++ 里无法精确表达
+  （引入 UB 或语义漂移）。
+- 内建（`index_read/index_write/grow/…`）语义无法在 C/C++ 层一一对应。
+- 语义在转译层就丢了一次，之后连差分测试都定位不了。
+
+---
+
+## 6. runtime 与 stdlib：两条路线
+
+| | 路线 B（先做） | 路线 A（终态） |
+|---|---|---|
+| 做法 | 前端不碰前缀，自研 runtime 覆盖生成代码/测试代码真正用到的内建与运行时 | 把 27711 字节前缀也交给我们的前端 |
+| 真实差别 | **增量**：不支持的程序回退参考实现 | **全有全无**：前缀对每次编译都生效，少支持一个构造 → 所有编译全挂 |
+| 代价 | 必须实现运行时**行为等价** | 前端必须先覆盖全部语法（泛型/重载/asm/extern/大整数常量） |
+| 判据 | 差分测试 + 覆盖率矩阵 | 同上，且覆盖率矩阵覆盖 stdlib 全部构造 |
+
+两者都必须吃透 stdlib 语义；差别只在"必须先吃透全部"还是"边跑边吃"。**先 B 后 A。**
+
+---
+
+## 7. 验证体系
+
+### 7.1 差分测试（唯一正确性判据）
+
+> 同一份源码，分别由参考实现与我们编译；运行后**对状态的改变必须逐 tick 完全一致**。
+
+- **可观测量**（已决定）：= 程序写过的游戏内存页 ∪ extern 调用的实参/返回值序列。
+  游戏内显示器 / UI / 输出组件都源自内存写（🔍 输出组件很可能只是对特定地址的写），天然被覆盖；
+  不依赖宿主机输出。
+- **白名单**：arena/分配器内部布局等不可观测差异必须显式列白、可审计、尽量小。
+- 逐 tick 观测不需要插桩：主循环是 `case run { mode_run(Int get_setting(sim_target_cycle)) }`，
+  驱动方把 `sim_target_cycle` 依次设为 1,2,3,… 并递增命令序号发 `run`，即得天然 tick 边界。
+
+### 7.2 离线差分宿主（agent 日常）
+
+- 复用游戏的执行方式：分配可执行内存 → `memcpy(blob+8)` → `jmp base+entry`。
+- **假游戏内存**：生成源码把所有绝对地址写死在源码里（`Ptr 1781626765312` 这类），扫出来按页分配；
+  更稳的做法是守卫页/缺页记录触达地址。
+- **extern 中和**：参考产物的 kernel32 地址是编译期写死的绝对立即数 → patch 成我们的桩
+  （`ExitProcess/ExitThread/sleep/WriteFile`），否则宿主进程会被杀。
+  `tools/optimize_image.py` 已有 movabs 改写能力可复用。
+- **自比对基线**：先跑「参考产物 vs 参考产物」证明宿主本身可靠，再接我们的产物。
+- 超时 + 可重放（程序内含 `while true` + `sleep`）。
+
+### 7.3 游戏内 A/B（验收）
+
+- 转发层支持切换实际编译器（`ours` / `ours_with_fallback` / `reference`）。
+- 主频用 `watch_freq.py`；benchmark 固定 RV32IM 电路；协议：多轮取中位数、同一次游戏会话内交替。
+
+### 7.4 语义档案（semantics dossier）
+
+每条 = `{名字, 最小 .si, 驱动方式, 参考产物下的可观测状态变化, 备注}`，**机器可执行**、
+由脚本自动采集（写一条 → 跑一次采集 → 入库）。覆盖：cast 顺序、wrapping、移位越界、除零、
+数组越界、字面量宽度推断、泛型实例化、`#if in_scope`、struct 布局/对齐、enum 取值、
+`$` 写回时机、字符串编码。每条同时就是一个差分测试用例。
+
+### 7.5 判据入口
+
+一条本地命令跑完：`解析全语料 → 全量编译（我们 vs 参考）→ 逐 tick 状态差分 → 覆盖率矩阵
+（特性 × 文件）`，输出通过数、失败的最小复现、未覆盖特性（机器可读报告 + 人读摘要）。
+作用：让并行 agent 能自证"做完了"。游戏内部分单独标 manual/slow，不进这条命令。
+
+---
+
+## 8. Agent 工作流与接口冻结
+
+实现几乎全部交给 agent，因此**先冻结接口、再并行开工**。建议目录（仓库归属待定，见 §11）：
+
+```
+simplexc/
+  frontend/   词法、语法、ast、类型系统、consteval、重载解析、预处理(#if in_scope)、内建识别
+  lower/      类型化 AST → LLVM IR（内存模型、$ 写回、extern、entry 包装）
+  runtime/    路线 B 的运行时（arena、字符串、打印、排序…）
+  assemble/   目标码 → blob（PC 相对、extern 解析、8 字节头、entry、生命周期）
+  shell/      compile.dll 壳（加载参考实现、三模式、失败转交）
+  tools/      语料抓取、oracle CLI、差分宿主、判据入口、语义档案采集
+  corpus/     语料 + manifest
+  dossier/    语义档案（机器可执行）
+```
+
+**必须先冻结的接口**（冻结前不要并行开工）：
+
+1. **前端产物**：类型化 AST 与类型表示（sized int 宽度/符号、struct 布局规则、泛型实例化表示）。
+2. **内建表 schema**：名字 → 语义 + lowering 目标（含 mutating 语义、返回值、对齐）。
+3. **runtime ABI**：函数签名、谁保存寄存器、字符串/数组的内存布局（我们的布局，不必与游戏一致，
+   但必须与源码语义一致）。
+4. **装配器接口**：输入（目标文件/镜像 + 符号表）→ 输出（blob 字节 + entry 偏移 + 生命周期句柄）。
+5. **DLL 壳**：三模式 + 失败转交 + 记录格式（沿用 `manifest.tsv`）。
+6. **差分宿主驱动协议**：假内存布局、命令写入格式、快照格式。
+
+**工作纪律**：一个写者一个目录；每次提交跑判据入口；未支持构造一律"显式报错 + 回退"，
+禁止静默降级。
+
+---
+
+## 9. 里程碑（按能力划分，不写工期）
+
+- **M0 观测设施**：语料固化 + oracle CLI + 转发层可切换实现（`flags`/Result 记录已完成）。
+- **M1 spike 最小闭环**：手写 LLVM IR → `-O2` → 我们的装配器 → 游戏里跑通一个空程序
+  （验 DLL 形态、LLVM 版本、装配链路、bit62、entry 包装），不崩游戏。
+- **M2 差分宿主可用**：参考产物自比对通过（宿主可靠性得证）。
+- **M3 生成代码子集编译 + 逐 tick 状态等价**（RV32IM 电路）。
+- **M4 主频对照**：转发层切 ours/reference，`watch_freq.py` 出对照结论。
+- **M5 全量语料覆盖**：campaign tests + stdlib（路线 A），覆盖率矩阵达标。
+- **M6 回退关闭**：语义档案完备，`ours` 可独立承担全部编译。
+
+---
+
+## 10. 版本锁定与 Steam 更新后的重验
+
+| 项 | 当前值 |
+|---|---|
+| 游戏 | appid `1444480` / buildid `25294874` / `StateFlags 4` / 最后更新 2026-09-14 |
+| 路径 | `F:\opt\SteamLibrary\steamapps\common\Turing Complete`（`D:\symlink\steamapps_c2` 为符号链接） |
+| 参考编译器 | `compile_real.dll`（1.8 MB） |
+| 转发层 | 游戏目录 `compile.dll` = `build/compile_hook.dll` |
+| LLVM | 固定到项目启动时的最新稳定版 |
+| 编译延迟预算 | 最终 5 s（调试期放开） |
+
+**重验脚本（设计）**：把 T1–T5 的结论写成**按符号名定位**（`nm`/`find_sym` 查符号 → 反汇编该函数
+→ 断言指令模式）的可重跑脚本，Steam 更新后先跑它，不要硬编码地址。断言清单：
+
+1. `compile` 导出仍存在，且 exe 内只有 1 个调用点、`flags` 实参为 0；
+2. `jit` 内存在 `memcpy(dest, ptr+8, len)` 与尾跳 `jmp`；
+3. `handle_request_compile_and_run` 内存在 `out[3]` 的 `test/jne` 失败分支；
+4. `eqdestroy` 内存在 `testb $0x40,0x7(p)` + `rawDealloc`（bit62 门控）；
+5. 产物头 8 字节的值仍不被读取（除 bit62）。
+
+---
+
+## 11. 未确认项与开放决策
+
+| # | 问题 | 影响 | 处理 |
+|---|---|---|---|
+| U1 | 失败时错误消息的 UI 显示点 | 只影响我们自造错误消息的收益 | 未追到；按"整单转交参考实现"绕过 |
+| U2 | exe 里 `Solution took too long to compile` 是编译超时还是仿真超时 | 若是编译超时，它才是 5 s 预算的真正上界 | 待查 |
+| U3 | `print_using_stack` 在 Windows x86-64 是否真是空操作 | 决定 runtime 是否要复刻打印 | 待验证 |
+| U4 | 语言版本（当前安装版 vs 社区提到的 TC 2.0 新版 Simplex） | 文法差异会改变前端 | 锁定当前构建；出现新版时重新对齐 |
+| U5 | 内建清单完备性（语料只有 16 份生成源码） | 决定 lowering 表 | 扩样 + 与 `compile.dll` 的 `INTRINSIC_*` 常量表交叉验证 |
+| U6 | 代码落在哪个仓库/目录（建议 `reversing/simplexc/`） | 影响 agent 工作流 | **待定** |
+| U7 | benchmark 与性能目标 | 暂缓 | 测法已定（`watch_freq.py` + 转发层切换） |
+
+---
+
+## 12. 证据索引（可复现）
+
+| 事实 | 复现方式 |
+|---|---|
+| 导出表 3 个符号 / 调用契约 | 手写 PE 解析脚本；或 `objdump -p compile_real.dll` |
+| Result 5 字段语义 / 成功失败路径 | `objdump -d --start-address=0x14021cf20 --stop-address=0x14021d310 "Turing Complete.exe"` |
+| `flags=0` | `0x14021cff6 xor %r8d,%r8d`；或 `work/hook/manifest.tsv` 的 flags 列 |
+| 游戏侧 JIT 流程 | `objdump -d --start-address=0x14021cc60 --stop-address=0x14021cd40` |
+| blob 头 bit62 门控 | `objdump -d --start-address=0x14001c260 --stop-address=0x14001c2a0` |
+| entry 每次进入 1 次 / 程序模型 | T3 子代理报告（按符号名定位的调用链） |
+| stdlib 前缀 27711 B / 1503 行 | 从 `compile_real.dll` 偏移 `0x119F48` 提取 |
+| 内建清单 | 对前缀做「被调用但未定义」统计 |
+| 指令质量统计 | `objdump -D -b binary -m i386:x86-64` + 计数脚本 |
+| 编译延迟 | 离线编译 419888 B 源码计时（≈2.09 s） |
+| 游戏版本 | `F:\opt\SteamLibrary\steamapps\appmanifest_1444480.acf` |
+| 社区前作 | `github.com/michalusio/TC-si`（MIT） |

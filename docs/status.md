@@ -16,8 +16,27 @@
 提升游戏内电路仿真主频。正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 主频测量用 `watch_freq.py`，benchmark 用 RV32IM 电路（很远，暂不做）。
 
-## 转发层（工具，2026-10-15）
+**设计定稿**：`docs/specs/2026-10-15-simplex-llvm-compiler-design.md`
+（产物契约由 T1–T5 实测闭合：`flags` 恒 0、`out[3]/out[4]` 是错误消息字符串、
+blob 头 bit62 决定游戏是否 free、entry = 顶层块且每次编译只进入 1 次。）
 
-`work/opt/hook.log` 是**唯一**记录型日志（转发层与改写器共写、追加写、可扩容的
-结构化行，格式与事件表见 `tools/hook_log.py`）；`opt_stderr.log` 只放子进程自检明细。
-改完转发层后的流程：`py tools/deploy_compile_hook.py build-deploy`。
+### 下一步（已决定）
+
+1. **spike**：手写 LLVM IR → `-O2` → 我们的装配器 → 游戏里跑通一个空程序。
+   一次验掉 DLL 形态、LLVM 版本、装配链路、头 bit62、entry 包装；不崩游戏即算通过。
+   壳需要新增「选实现」开关（`ours` / `ours_with_fallback` / `reference`），失败一律整单转交
+   `compile_real.dll` 并原样返回它的 Result。
+2. **facts.md 补 4 条**：`flags` 恒 0（10/10 实测）；`out[3]/out[4]` = 错误消息 `{len,ptr}`（非 0 即失败，
+   失败必须给非 0，否则游戏走成功路径触发 `raiseIndexError2`）；blob 头 bit62 = 不要 free
+   （`eqdestroy` @`0x14001c260` 门控）；`entry` = 顶层语句块且每次编译只进入 1 次。
+3. **观测设施**：语料固化（92 份 campaign test.si + 16 份生成源码）+ oracle CLI + 离线差分宿主
+   （假游戏内存 + extern 桩 + 逐 tick 驱动）；先用「参考产物 vs 参考产物」自比对证明宿主可靠。
+4. **前端与 runtime**：先走路线 B（自研 runtime + 只吃生成代码子集 + 失败回退），跑通后再上路线 A
+   （全 stdlib，终态）。
+
+### 待定
+
+- 代码落库位置：建议 `reversing/simplexc/`（与语料/工具/文档同仓），未拍板。
+- 判据入口（一条命令 + 覆盖率矩阵）、agent 接口冻结清单、Steam 更新后的按符号名重验脚本：
+  设计已起草（spec §7.5 / §8 / §10），**待确认**。
+- benchmark 协议与性能目标：暂缓（测法已定，见 spec §7.3）。

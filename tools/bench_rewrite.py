@@ -56,6 +56,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import hook_log  # noqa: E402
 import simctl  # noqa: E402
 import term  # noqa: E402
 import watch_freq as W  # noqa: E402（复用它的产物指纹 / 日志解析 / 宽度工具）
@@ -116,13 +117,14 @@ def latest_product() -> tuple[str | None, float]:
 
 
 def hook_lines() -> list[str]:
-    """转发层日志（每发生一次编译多 3 行：rewrite= / 已就地写回 / 入口偏移已更新）。
+    """日志的全部行（一次编译至少多 3 行：转发层的 cfg/writeback 与改写器的 opt）。
 
     用它判断「发出去的按键到底有没有触发编译」—— 光看 simctl.recompile() 的 ok
     不行，它只表示「键发出去了」（SendInput 是异步的，游戏那边不反馈）。
+    行数判据不要求只有编译相关行：编译是这个文件唯一的增长来源。
     """
     try:
-        return (OPT_DIR / "hook.log").read_text(
+        return Path(hook_log.PATH).read_text(
             encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []

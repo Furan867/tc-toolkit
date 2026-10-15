@@ -47,6 +47,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hook_log
 import term
 import winmem
 
@@ -56,12 +57,7 @@ OPT_DIR = ROOT / "work" / "opt"        # 转发层工作区（每次游戏会话
 FREQ_DIR = ROOT / "work" / "freq"      # 本工具的输出（跨会话保留，不会被人清掉）
 LOG_PATH = FREQ_DIR / "freq_log.tsv"
 SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"     # 给人读的总结（每次运行覆盖）
-OPT_LOG = OPT_DIR / "optimize.log"          # 改写子进程写的（实际执行值）
-# 转发层 hook.log 里每编译一条 `rewrite=<值>`：它是转发层**起改写子进程之前**按
-# 当时的 opt.ini 写下的，且 2026-10-05 起会把这个值作为 `--mode` 传给改写器 ——
-# 两边同源，正常情况必然一致。万一不一致（历史上 C 侧自己维护过一份白名单，
-# 把 short_cse 当非法值归成 on），编译点行会直接把差异标出来，那正是要查的信号。
-HOOK_LOG = OPT_DIR / "hook.log"
+# 转发层与改写器共写的 work/opt/hook.log（路径与解析都在 hook_log 模块）
 
 OPT_WAIT = 15.0        # 见过 hook_out 后等 opt.bin 的上限秒数（转发层自己等子进程 8 秒）
 
@@ -251,48 +247,41 @@ def product_fp(num: str | None) -> str:
 
 
 def opt_info(num: str | None) -> tuple[str, str, str]:
-    """取该产物的（指纹, 改写处数, rewrite 模式），读不到就退化成占位符。
+    """取该产物的（指纹, 改写处数, **实际执行**的 rewrite 模式），读不到退化成占位符。
 
-    模式从 optimize.log 的 note 行提取 —— 那是编译时刻的权威记录。
+    读 hook.log 的 `opt` 行（改写器写的）—— 那是编译时刻的权威记录。
     早先读 opt.ini 的当前值，但那是「检测时刻」的配置：用户在编译间隙
     切开关时必然错位（实测 #005 编译时是 on、标注成了 off，而 005 与 006
-    的产物 sha 完全相同，铁证是同模式）。判定产物模式**只认 optimize.log**。
+    的产物 sha 完全相同，铁证是同模式）。判定产物模式**只认这条记录**。
+    取结构化键，不解析 note 里的中文 —— 文案随时会改。
     """
-    fp, rewritten, rewrite = "-", "", "?"
+    fp, n_rw, mode = "-", "", "?"
     if num:
-        try:
-            for line in OPT_LOG.read_text(encoding="utf-8").splitlines():
-                if f"{num}.raw.bin" in line:
-                    m = re.search(r"sha256 (\w{8})", line)
-                    if m:
-                        fp = m.group(1)
-                    m = re.search(r"改写 (\d+) 处", line)
-                    if m:
-                        rewritten = f"改写 {m.group(1)} 处"
-                    if "CSE 删" in line:
-                        rewrite = "short_cse"      # 缩短 + 删重复装载
-                    elif "缩短改写" in line:
-                        rewrite = "short"          # 纯缩短（不带 CSE）
-                    elif "（等长）" in line:
-                        rewrite = "on"
-                    elif "未改写" in line:
-                        rewrite = "off"
-        except OSError:
-            pass
-    return fp, rewritten, rewrite
+        for rec in hook_log.find("opt", num):
+            kv = rec.kv
+            if kv.get("sha256"):
+                fp = kv["sha256"][:8]
+            if "rewritten" in kv:
+                n_rw = kv["rewritten"]
+            if "mode" in kv:
+                mode = kv["mode"]
+    return fp, n_rw, mode
 
 
 def mode_from_hook_log(num: str | None) -> str:
+    """转发层起改写子进程**之前**按当时的 opt.ini 写下的配置值（`cfg` 行的 `rewrite=`）。
+
+    它同时也是转发层传给改写器的 `--mode`（2026-10-05 起）—— 两边同源，正常必然
+    一致。万一不一致（历史上 C 侧自己维护过一份白名单，把 short_cse 当非法值归成
+    on），编译点行会把差异标出来，那正是要查的信号。
+    """
     if not num:
         return "?"
-    try:
-        for line in reversed(HOOK_LOG.read_text(encoding="utf-8").splitlines()):
-            m = re.search(rf"\b{num}\s+rewrite=(\S+)", line)
-            if m:
-                return m.group(1)
-    except OSError:
-        pass
-    return "?"
+    cfg = "?"
+    for rec in hook_log.find("cfg", num):
+        if "rewrite" in rec.kv:
+            cfg = rec.kv["rewrite"]         # 同号只有一条，取最后一条更稳
+    return cfg
 
 
 def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str], str]:
@@ -318,16 +307,14 @@ def summarize(regions: list[dict], verbose: bool = False) -> tuple[str, list[str
             # 区间只记编号，摘要时重查 —— 读数只依赖产物与日志，跟当时终端
             # 打印了什么无关。
             fp = product_fp(region["num"])
-            _f, rewritten, _rw = (opt_info(region["num"])
+            fp_log, n_rw, mode = (opt_info(region["num"])
                                   if region["num"] else ("-", "", "?"))
-            if fp == "-" and _f != "-":
-                fp = _f          # 产物已被清（游戏重启过）：退回日志里记的 sha
-            rewrite = _rw if _rw != "?" else mode_from_hook_log(region["num"])
-            m = re.search(r"(\d+)", rewritten)
-            n_rw = m.group(1) if m else "-"
+            if fp == "-" and fp_log != "-":
+                fp = fp_log      # 产物已被清（游戏重启过）：退回日志里记的 sha
+            rewrite = mode if mode != "?" else mode_from_hook_log(region["num"])
             row = (f"{nth:>2d}) {region['label']:<5s}{med / 1e6:6.3f}"
                    f" {len(vals):>3d}  {(max(vals) - min(vals)) / med * 100:5.2f}"
-                   f" {fp:<8s} {n_rw:>5s}  {rewrite}")
+                   f" {fp:<8s} {n_rw or '-':>5s}  {rewrite}")
             lines.append(row)
             digest.append(f"{region['label']}={med / 1e6:.3f}MHz")
         elif verbose:

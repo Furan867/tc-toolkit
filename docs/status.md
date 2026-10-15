@@ -15,3 +15,9 @@
 目标：把游戏目录的 `compile.dll` 换成自研实现 —— Simplex → LLVM IR → 优化 → 装配成游戏可 JIT 的 blob，
 提升游戏内电路仿真主频。正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 主频测量用 `watch_freq.py`，benchmark 用 RV32IM 电路（很远，暂不做）。
+
+## 转发层（工具，2026-10-15）
+
+`work/opt/hook.log` 是**唯一**记录型日志（转发层与改写器共写、追加写、可扩容的
+结构化行，格式与事件表见 `tools/hook_log.py`）；`opt_stderr.log` 只放子进程自检明细。
+改完转发层后的流程：`py tools/deploy_compile_hook.py build-deploy`。

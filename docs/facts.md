@@ -57,9 +57,9 @@ qword[3]/[4] 实测被写成 0（不是残留，判定依据见 `manifest_line` 
 最后验证：2026-10-13
 
 ### 产物 rewrite 模式的权威来源
-只认 `optimize.log`（为何不能读 `opt.ini`，见 `watch_freq.py` 的 `opt_info`）。
+只认 `hook.log` 的 `opt` 行（为何不能读 `opt.ini`，见 `watch_freq.py` 的 `opt_info`）。
 验证：静态核对（`watch_freq.py`）+ 历史铁证（`hook_out_005`/`006` 产物 sha 相同却标了不同模式）
-最后验证：2026-10-11
+最后验证：2026-10-13
 
 ## 组件映射
 
@@ -136,17 +136,19 @@ qword[3]/[4] 实测被写成 0（不是残留，判定依据见 `manifest_line` 
 
 ### `opt.ini` 规则
 不在 git 里；切换靠搬注释符；**若多行都放开：取第一个匹配行生效、不报错**
-（读法为何必须与转发层一致、旧实现错在哪，见 `rewrite_mode()` 的注释）；
+（读法为何必须与转发层一致、旧实现错在哪，见 `resolve_mode()` 的注释）；
 非法值与读不到时都按 `on` 兜底。
 验证：静态核对（`optimize_image.py:607-629`）
 最后验证：2026-10-11
 
-### 三份日志的语义
-`hook.log` = 配置了什么；`optimize.log` = 实际执行的模式 / 改写处数 / 产物 sha256；
-`opt_stderr.log` = 自检明细，**追加写**（`compile_hook.c` 用 `FILE_APPEND_DATA`），历史原因都在。
-`hook.log` 与 `optimize.log` 不一致就是 short 退回了 on。
-验证：静态核对（`compile_hook.c:210`）
-最后验证：2026-10-11
+### 日志的语义与格式
+`work/opt/hook.log` 是**唯一**的记录型日志，转发层与改写子进程共写、追加写；
+每行 `时间 \t 编号 \t 事件 \t key=value…`（事件表与键表见 `tools/hook_log.py`，
+C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什么（原样搬运），
+`opt` 行 = 实际执行的模式 / 改写处数 / 产物 sha256 —— 两者不一致就是 short 退回了 on。
+`opt_stderr.log` 是子进程的自检明细（多行、非结构化），**不是**记录项，单独放。
+验证：静态核对（`tools/hook_log.py` + `compile_hook.c`）+ 部署后实测 `work/opt/hook.log`
+最后验证：2026-10-13
 
 ## 主频读数
 

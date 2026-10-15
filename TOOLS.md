@@ -13,7 +13,7 @@
 | `build_component_map.py` | 建组件 ↔ 机器码偏移映射（被上一行调用） | ✅ |
 | `analyze_sim_hotspot.py` | 组件级耗时报告（按 `comp_index` 聚合） | ⚠️ ⑥-B `com_none` 未滤除，待修 |
 | `sample_threads.py` | RIP 采样 | ✅ |
-| `deploy_compile_hook.py` | 部署 / 查询转发层（`--status` 看状态） | ✅ |
+| `deploy_compile_hook.py` | 构建 / 部署 / 查询转发层（子命令 `build-deploy`、`status`…） | ✅ |
 
 ## 源码与产物
 
@@ -50,7 +50,7 @@
 
 ```
 work/hook/     捕获的源码(.si) 与产物(.bin)   ← 同号即一对；manifest.tsv 为每次调用的结构化记录
-work/opt/      转发层工作区：NNN.raw.bin / NNN.opt.bin / 三个 log
+work/opt/      转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log（唯一记录型日志）+ opt_stderr.log
 work/freq/     主频采样：freq_log.tsv（事件）与 freq_summary.txt（给人读）
 work/symbols/  符号表        work/maps/  组件映射表与建映射中间产物
 work/reports/  分析报告      work/tmp/   一次性中间产物

@@ -68,8 +68,9 @@ Result[2]），否则游戏跳进指令中间：实测主频掉到 0.566（≈5.
 
 诊断
 ----
-- work/opt/optimize.log：每次一行（时间 / 字节数 / sha256 / 模式与改写处数 / 自校验）
-  **这行是「子进程真的跑过」的唯一证据**。
+- `work/opt/hook.log` 的 `opt` 行（键表见 tools/hook_log.py）：这一趟的字节数 /
+  sha256 / **实际执行**的模式 / 改写处数。**这行是「子进程真的跑过」的唯一证据** ——
+  恒等改写时 opt 与 raw 逐字节相同，光看产物分不出「跑了但没改」和「压根没跑」。
 - 明细写 stderr（转发层把它引到 work/opt/opt_stderr.log）。
 """
 from __future__ import annotations
@@ -80,13 +81,12 @@ import hashlib
 import os
 import re
 import sys
-import time
 from collections import Counter
 
 import analyze_jit_code as A
+import hook_log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LOG = os.path.normpath(os.path.join(HERE, os.pardir, "work", "opt", "optimize.log"))
 
 SHIFT_MN = ("shl", "shr", "sar")
 #: 保守判据：中途只要出现跳转/调用就放弃 —— 免得漏掉"别的路径也会读 ecx"
@@ -647,6 +647,7 @@ def run(src: str, dst: str, entry: int | None = None,
         return 2
     size0 = len(data0)
     data = data0
+    num = os.path.basename(src).split(".")[0]      # 编译编号（日志的 seq 列 / 文件名前缀）
 
     parsed = A.load_insns(src)
     mode = resolve_mode(mode_cli)
@@ -656,7 +657,13 @@ def run(src: str, dst: str, entry: int | None = None,
     new_entry = None
     note = "未改写（解析失败）" if parsed is None else f"未改写（rewrite = {mode}）"
 
-    fallback = ""                       # 缩短没生效的原因 —— 写进 optimize.log，
+    # 结构化记录项（hook.log 的 opt 行）：applied 是**实际执行**的模式，与转发层
+    # cfg 行的 rewrite 不同就说明配置没生效；三个计数对应等长改写处数 / CSE 删
+    # 处数 / 重定位条数 —— 消费者读这些键，不必再解析 note 里的中文。
+    applied = "off"
+    n_rewritten = n_cse = n_reloc = 0
+
+    fallback = ""                       # 缩短没生效的原因 —— 写进 hook.log，
                                         # 否则日志只有「（等长）」，看不出为什么
     if parsed is not None and mode in ("short", "short_cse") and entry is None:
         # 防呆：老转发层不传 --entry，缩短后 Result[2] 没人改 → 游戏拿到错锚点
@@ -704,10 +711,13 @@ def run(src: str, dst: str, entry: int | None = None,
                 new_entry = map_off(entry)
                 note += f" / 入口 0x{entry:X}→0x{new_entry:X}"
                 short_used = True
+                applied = "short_cse" if cse else "short"
+                n_rewritten, n_cse, n_reloc = len(wins), len(cse), reloc
 
     if parsed is not None and mode == "on" and not short_used:
         data, done, skipped = rewrite(data0, parsed)
         note = f"改写 {done} 处 / 模式 {done + sum(skipped.values())} 处（等长）"
+        applied, n_rewritten, n_cse, n_reloc = "on", done, 0, 0
         if fallback:
             note += f" ⚠ 缩短未生效：{fallback}"
         for k, v in skipped.most_common(4):
@@ -758,8 +768,7 @@ def run(src: str, dst: str, entry: int | None = None,
     # 入口文件最后才写（一切自检通过后）：任何失败路径都没写过它，
     # 转发层读不到就不会改 Result[2]，游戏拿到的仍是原样产物与原样入口。
     if short_used and new_entry is not None:
-        entry_path = os.path.join(os.path.dirname(dst),
-                                   os.path.basename(dst).split(".")[0] + ".entry.txt")
+        entry_path = os.path.join(os.path.dirname(dst), num + ".entry.txt")
         try:
             with open(entry_path, "w", encoding="ascii") as f:
                 f.write(hex(new_entry))
@@ -768,15 +777,9 @@ def run(src: str, dst: str, entry: int | None = None,
             write_out(data0)
             return 6
 
-    try:
-        os.makedirs(os.path.dirname(LOG), exist_ok=True)
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  "
-                    f"{os.path.basename(src)} → {os.path.basename(dst)}  "
-                    f"{len(data)} 字节  sha256 {hashlib.sha256(data).hexdigest()}  "
-                    f"{note}\n")
-    except OSError as exc:
-        print(f"写日志失败：{exc}", file=sys.stderr)
+    hook_log.append(num, "opt", mode=applied, rewritten=n_rewritten, cse=n_cse,
+                    reloc=n_reloc, len=len(data),
+                    sha256=hashlib.sha256(data).hexdigest(), note=note)
     return 0
 
 

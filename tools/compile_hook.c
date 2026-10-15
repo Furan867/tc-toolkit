@@ -185,7 +185,7 @@ static int cng_bind(void) {
 
 /* SHA-256 十六进制串（小写，64 字符 + 终止符）。
  *
- * 用系统 CNG 而不是自带实现：`optimize.log` 的指纹是 Python hashlib 算的，
+ * 用系统 CNG 而不是自带实现：`hook.log` 里 `opt` 行的指纹是 Python hashlib 算的，
  * 两边必须逐字符一致才谈得上交叉核对，所以用同一个标准实现。
  *
  * **失败时不碰 out**（保留调用方给的 "-"）—— 记录失败要静默，不能因为指纹
@@ -284,9 +284,16 @@ static BOOL read_entry(const char* path, long long* val) {
     return sscanf(buf, "%llx", (unsigned long long*)val) == 1;
 }
 
-/* 优化器的运行日志。恒等改写时 opt 与 raw 逐字节相同，光看产物分不出
-   「跑了但没改」和「压根没跑」—— 这行日志就是唯一的证据。 */
-static void opt_log(LONG seq, const char* tag) {
+/* 转发层的记录项 —— 与改写器写的 `opt` 行同处一个 hook.log。
+ *
+ * 格式（制表符分隔：时间 / 编号 / 事件 / key=value…）与扩容方式（只加事件名或
+ * 键，消费者忽略不认识的）见 tools/hook_log.py 的模块 docstring —— 那是这份契约
+ * 的权威描述，本函数只是它在 C 侧的实现，改一处必须改另一处。
+ *
+ * 追加写（FILE_APPEND_DATA）：转发层与改写子进程同时往这个文件里写，追加语义由
+ * 系统保证；日志的价值也全在历史。
+ */
+static void hook_log(LONG seq, const char* event, const char* kv) {
     CreateDirectoryA(OPT_DIR, NULL);
     char path[MAX_PATH];
     sprintf(path, "%s%chook.log", OPT_DIR, SEP);
@@ -295,10 +302,12 @@ static void opt_log(LONG seq, const char* tag) {
     if (h == INVALID_HANDLE_VALUE) return;
     SYSTEMTIME st;
     GetLocalTime(&st);
-    char line[160];
-    int n = sprintf(line, "%04d-%02d-%02d %02d:%02d:%02d  %03ld  %s\r\n",
+    char line[320];
+    int n = sprintf(line, "%04d-%02d-%02d %02d:%02d:%02d\t%03ld\t%s",
                     st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
-                    seq, tag);
+                    seq, event);
+    if (kv && kv[0]) n += sprintf(line + n, "\t%s", kv);
+    n += sprintf(line + n, "\r\n");
     DWORD w = 0;
     WriteFile(h, line, (DWORD)n, &w, NULL);
     CloseHandle(h);
@@ -334,8 +343,8 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
        这一行与下面传给改写器的值同源，必然一致。 */
     char tag[64];
     sprintf(tag, "rewrite=%s", mode[0] ? mode : "(空)");
-    opt_log(seq, tag);
-    if (!write_file(raw, buf, len)) { opt_log(seq, "写 raw 失败，放弃"); return; }
+    hook_log(seq, "cfg", tag);
+    if (!write_file(raw, buf, len)) { hook_log(seq, "error", "stage=raw"); return; }
 
     /* 把 Result[2]（旧锚点偏移）与模式一起传给改写器 —— 缩短模式必须同步更新
        锚点；模式由转发层传过去，是为了让配置**只被读一次、只被判定一次**。 */
@@ -371,7 +380,7 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
                                   sink != INVALID_HANDLE_VALUE,
                                   CREATE_NO_WINDOW, NULL, OPT_PROJ, &si, &pi);
     if (sink != INVALID_HANDLE_VALUE) CloseHandle(sink);
-    if (!started) { opt_log(seq, "起子进程失败，放弃"); return; }
+    if (!started) { hook_log(seq, "error", "stage=spawn"); return; }
 
     DWORD wait = WaitForSingleObject(pi.hProcess, OPT_TIMEOUT);
     DWORD code = 1;
@@ -379,29 +388,39 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     else TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    if (wait != WAIT_OBJECT_0 || code != 0) { opt_log(seq, "子进程失败或超时，放弃"); return; }
+    if (wait != WAIT_OBJECT_0 || code != 0) {
+        char kv[64];
+        if (wait != WAIT_OBJECT_0) sprintf(kv, "stage=child\ttimeout=1");
+        else sprintf(kv, "stage=child\tcode=%lu", (unsigned long)code);
+        hook_log(seq, "error", kv);
+        return;
+    }
 
     HANDLE h = CreateFileA(opt, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) { opt_log(seq, "读不到 opt，放弃"); return; }
+    if (h == INVALID_HANDLE_VALUE) { hook_log(seq, "error", "stage=optbin"); return; }
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(h, &sz) || sz.QuadPart != len) {
         CloseHandle(h);
-        opt_log(seq, "长度与原件不符，放弃（MVP 不改长度）");
+        hook_log(seq, "error", "stage=length");
         return;
     }
     DWORD got = 0;
     BOOL ok = ReadFile(h, buf, (DWORD)len, &got, NULL);
     CloseHandle(h);
-    if (!ok || got != (DWORD)len) { opt_log(seq, "写回失败"); return; }
-    opt_log(seq, "已就地写回（长度未变）");
+    if (!ok || got != (DWORD)len) { hook_log(seq, "error", "stage=read"); return; }
+    char kvw[64];
+    sprintf(kvw, "len=%lld", len);
+    hook_log(seq, "writeback", kvw);
 
     /* 缩短模式：改写器把平移后的入口偏移写在 NNN.entry.txt，
        必须同步改回 Result[2]，否则游戏按旧偏移调进指令中间（实测必崩） */
     long long v = 0;
     if (read_entry(entry, &v) && v > 0 && v < len) {
         *(long long*)((char*)out + 16) = v;
-        opt_log(seq, "入口偏移已更新");
+        char kve[48];
+        sprintf(kve, "offset=0x%llX", v);
+        hook_log(seq, "entry", kve);
     }
 }
 

@@ -15,7 +15,7 @@
 tools/        分析脚本与工具（已固化的）
 docs/         本套文档 + 专题记录（specs/ 下是设计文档）
 work/hook/    转发层捕获：hook_src_NNN.si ↔ hook_out_NNN.bin（同号即一对）
-work/opt/     转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log / optimize.log / opt_stderr.log
+work/opt/     转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log / opt_stderr.log
 work/freq/    主频采样输出：freq_log.tsv（事件）与 freq_summary.txt（给人读）
 work/symbols/ 符号表        work/maps/   组件映射表与建映射中间产物
 work/reports/ 分析报告      work/tmp/    一次性中间产物

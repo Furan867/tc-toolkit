@@ -182,6 +182,14 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 9. entry 符号 = 手写 shim `__tc_entry`：保存寄存器 + 对齐栈 + `call <llvm_main>` + 收尾（`thread_exit`），
    因为游戏是 `jmp` 进来的、不保证 ABI 对齐（主设计 §5 第 8 条）。
 
+**输入形状已实测（2026-10-16，`simplexc/shell/llvm_link_probe.cpp`）**：
+`x86_64-pc-windows-gnu` + RelocMode=Static + CodeModel=Small + `default<O2>` 下，
+- 节：`.text`/`.data`/`.bss`（空的也在），有栈帧的函数额外带 `.pdata`/`.xdata`；
+- `.text` 重定位**只有** `IMAGE_REL_AMD64_REL32`，出现三种目标：内部函数、未定义 extern、**`___chkstk_ms`**
+  （>4 KiB 栈帧才出现）；
+- `.pdata` 用的是 `IMAGE_REL_AMD64_ADDR32NB`（指向 `.text`/`.xdata`）→ 正好被第 4 条「整节丢弃」干掉；
+- 未定义符号在 COFF 里是 `sec 0` + `scl 2`。
+
 ---
 
 ## 5. DLL 壳（`tools/compile_hook.c` 演进 + `simplexc/shell/`）

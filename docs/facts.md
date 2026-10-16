@@ -117,7 +117,6 @@
 最后验证：2026-10-13
 
 ## 参考实现 compile_real.dll（编译器 / 产物侧）
-
 ### 产物的绝对地址绑定 compile_real.dll 的加载基址
 参考产物里的 `movabs r64,imm64` 全是 image 空间地址，落在 **compile_real.dll 自己的镜像**里：
 会话里 DLL 加载在 `0x7FF9A0DE0000`，产物里的 `0x7FF9A0DE1310` = DLL 内 RVA `0x1310`，字节是
@@ -177,6 +176,31 @@ ref_match ref_match_rebased rebased_delta`；`corpus/ref/*.bin` **不进 git**�
 
 ### 判据入口的基线：参考产物 vs 参考产物
 宿主可靠性得证前不得接我们的产物（主设计 §7.2）。
+
+## 构建与 LLVM
+
+### LLVM 固定版 = 官方 23.1.3（win64 / MSVC 构建）+ 自造 MinGW 导入库
+资产 `clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.zst`（263.5 MB），
+sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
+（GitHub API 的 `digest` 与本地重算一致）。
+取件：`python tools/fetch_llvm.py --dest D:/downloads` → `build/llvm/{bin/LLVM-C.dll, include/**, lib/LLVM-C.lib}`
+（不进 git；`build/llvm/llvm.json` 记版本/资产名/sha256）。MinGW 导入库：
+`gendef LLVM-C.dll`（1240 个导出）→ `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
+（MSVC 那份 `LLVM-C.lib` 没用上）。运行期靠系统中已有的 MSVC 运行时
+（`vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`）。
+验证：`g++ -std=c++17 -O2 -I build/llvm/include simplexc/shell/llvm_link_probe.cpp -o build/llvm/probe.exe -L build/llvm/lib -lLLVM-C`
+      编译通过，运行输出 `RESULT: OK`
+最后验证：2026-10-16
+
+### LLVM 产出的 COFF：装配器的输入形状
+`x86_64-pc-windows-gnu` + `RelocMode=Static` + `CodeModel=Small` + `default<O2>`：
+- 节：`.text` / `.data` / `.bss`（空的也在）；有栈帧的函数额外带 `.pdata` / `.xdata`；
+- `.text` 重定位**只有** `IMAGE_REL_AMD64_REL32`，目标有三类：内部函数、未定义 extern、
+  **`___chkstk_ms`**（>4 KiB 栈帧才出现，是 CRT 符号不是 kernel32）；
+- `.pdata` 用 `IMAGE_REL_AMD64_ADDR32NB`（指向 `.text`/`.xdata`）→ **整节丢弃**即可，别去解；
+- 未定义符号在 COFF 里是 `sec 0` + `scl 2`。
+验证：跑 `build/llvm/probe.exe build/llvm/probe_obj.obj` 后 `objdump -h/-t/-r build/llvm/probe_obj.obj`
+最后验证：2026-10-16
 
 ## 组件映射
 

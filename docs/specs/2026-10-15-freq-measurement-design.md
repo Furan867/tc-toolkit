@@ -93,6 +93,8 @@ tools/freq/                 # 包（位置与命名已确认）
   - 人读：保持现有表格形状与列（负责人对格式满意）；
   - 机器读：`bench_<ts>.json`（run → variant/compiler/rewrite/产物 sha/实际实现/samples/median/spread/相对基线 + schema）；
   - TSV 增列 `compiler`、`impl`，向后兼容。
+- **回退率**：报告必须能按 per-call `impl` 行统计每个变体的回退率与回退原因分类
+  （`ours` 与 `ours_with_fallback` 的差值就是回退的代价）。
 - **前置断言（失败要吵）**：游戏在跑、PID 稳定、撤销栈非空、能抢到前台、无阻塞弹窗、偏移可读（与 buildid 绑定）。
 
 ---

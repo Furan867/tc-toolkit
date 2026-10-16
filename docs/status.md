@@ -15,42 +15,38 @@
 目标：把游戏目录的 `compile.dll` 换成自研实现 —— Simplex → LLVM IR → 优化 → 装配成游戏可 JIT 的 blob，
 提升游戏内电路仿真主频。正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 
-**设计定稿**（2026-10-15 负责人确认，含后续补充）：
-- 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`：产物契约由 T1–T5 实测闭合
-  （`flags` 恒 0、`out[3]/out[4]` 是错误消息字符串、blob 头 bit62 决定游戏是否 free、entry = 顶层块
-  且每次编译只进入 1 次）；§7.5 判据入口 / §8 agent 工作流 / §10 重验脚本已确认；
-  代码落库 `reversing/simplexc/`；**LLVM 链接方式 = `LLVM-C.dll` + C API + 现有 w64devkit g++**
-  （不引入 CMake，构建照抄 `tools/deploy_compile_hook.py` 的直调 gcc）。
-- 主频测量层 `docs/specs/2026-10-15-freq-measurement-design.md`（5 项决策已确认）。
-- **语料实测**：`work/hook/all/` 180 份源码 + 180 份参考产物（同名配对）→ 去重 98 份唯一源码；
-  ⚠️ **`all/` 里没有 manifest，entry 没留** → M0 用 `tools/try_compile_dll.py` **离线重编译 98 份**，
-  补出含 `entry` 的 manifest。
-- **MVP 验收下界 = 沙盒模式能跑起来**；主线关卡专用构造允许「显式报错 + 回退」，用回退率量化。
+**设计定稿**：
+- 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约由 T1–T5 闭合；§7.5 判据入口 /
+  §8 工作流 / §10 重验脚本；LLVM 链接 = `LLVM-C.dll` + C API + w64devkit g++）。
+- **接口冻结版 1：`docs/specs/2026-10-15-simplexc-interfaces.md`**（主设计 §8 的 7 项）。
+  2026-10-16 批准的取舍：runtime 目标码随 blob 装配（自包含）／blob 内部禁止绝对重定位／corpus 的 `.bin` 不进 git。
+- 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（5 项决策已确认；实现未开始）。
+- 代码落库 `reversing/simplexc/`（frontend / lower / runtime / assemble / shell / cli / tools / corpus / dossier）。
+
+**M0/M1 前置项（§11 的 U10/U11/U12）已答，结论进 `docs/facts.md`**：
+- U12：`#` 只有 `#if in_scope("…")`（4 种实参形态）与 `const #NAME=` 两类 → 预处理器范围就这两块。
+- U11：生成源码把游戏内存地址硬编码成编译期常量；`get_memory`/`set_ram_value` 等是生成源码里的**空桩** →
+  离线宿主必须按绝对地址造假内存；`Arr` 头布局必须与 Nim seq 同构。
+- U10：extern 调用走 Win64 ABI（`sub rsp,imm16` 影子空间），**且调用目标 = `compile_real.dll` 自己的导入 thunk**
+  （2026-10-16 更正：原判读为"直接调 kernel32"）→ 参考产物绑定 DLL 加载基址，跨 boot 不能逐字节相等。
 
 ### 下一步（已决定）
 
-1. **spike**：手写 LLVM IR → `-O2` → 我们的装配器 → 游戏里跑通一个空程序。
-   验收点：**`LLVM-C.dll` 能否被 MinGW 链接并调用**（C API：`LLVMRunPasses` +
-   `LLVMTargetMachineEmitToMemoryBuffer`）、DLL 形态、装配链路、bit62 置 1 后游戏不 free、
-   entry 包装（最外层必须是手写 shim：保存寄存器 + 对齐栈 16 字节）、不崩游戏。
-   壳要新增「选实现」开关（`ours` / `ours_with_fallback` / `reference`），失败一律整单转交
-   `compile_real.dll` 并原样返回它的 Result。
-2. **M1.5 收益探针**：一块最小电路的端到端主频 A/B（参考产物 vs 我们的产物），先量出量级。
-3. **观测设施**：语料固化（180 份 → 去重 98 份 + **离线重编译补出含 entry 的 manifest** + 按构造打标签）
-   + oracle CLI + 离线差分宿主（假游戏内存 + extern 桩 + 逐 tick 驱动）；先用「参考产物 vs 参考产物」自比对证明宿主可靠。
-4. **前端与 runtime**：先走路线 B（自研 runtime + 只吃生成代码子集 + 失败回退），跑通后再上路线 A
-   （全 stdlib，终态）。同一个核心要有**两个前端**：DLL 壳与离线 CLI（agent 日常走 CLI，不碰游戏）。
-5. **判据入口**（spec §7.5）：一条命令跑「全语料编译 → 逐 tick 差分 → 覆盖率矩阵 + **回退率**」，
-   机器可读报告 + 人读摘要；游戏内部分单独标 slow/manual。
-6. **Steam 更新后的重验脚本**（spec §10 的 5 条断言）：按符号名定位，不硬编码地址。
-7. **主频/bench 层重写**：设计见 freq spec。顺序：零行为变化抽库（用现有
-   freq_log.tsv / freq_summary.txt / bench_*.tsv 回归）→ 统一 median → 泛化 `Variant(compiler, rewrite)`
-   → JSON 报告接判据入口 → 收尾。附带转发层改动：`hook.log` 从 `work/opt/` 移到 `work/hook/`
-   + 新增 per-call「实际实现」行（与 spike 同碰 `tools/compile_hook.c`，两条线**不要同时派发**）。
-8. **并发写者协调**：按 spec §8 执行 —— 默认静态分区（一个写者一个目录）+ 两把显式锁
-   （`work/tmp/locks/game.lock` 游戏内实验串行；`ledger.lock` 共享账本由主导者独占写）。
+1. **M0 收尾**：98 份唯一源码 + 含 entry 的 manifest（子 agent 在跑）→ 构造标签 → 覆盖率矩阵
+   （沙盒模式用到的构造 = MVP 验收下界）。判据：差异全部可解释且归一化到 DLL 镜像偏移后逐字节相同。
+2. **M1 spike**：取 `LLVM-C.dll`（先试 MSYS2 mingw-w64 LLVM 包，备选官方 win64 包 + `gendef`/`dlltool`）
+   → `LLVMRunPasses` + `LLVMTargetMachineEmitToMemoryBuffer` 拿 COFF 字节 → 装配器 → 手写 entry shim
+   → 游戏内跑通空程序（bit62 置 1 不被 free、不崩游戏）。**先钉死这台的 LLVM 版本与 sha256 再写代码。**
+3. **M1.5 收益探针**：最小电路端到端主频 A/B（参考产物 vs 我们的产物），先量出量级。
+4. **M3 语义档案**：接口文档 §9 的 U-L1…U-L14 **必须实验后才写死**（`load`/`store` 的地址单位是地基）。
+5. **M2 差分宿主**：先用「参考产物 vs 参考产物」自比对证明宿主可靠，再接我们的产物。
+6. **判据入口**（§7.5）：全语料编译 → 逐 tick 差分 → 覆盖率矩阵 + 回退率；游戏内部分标 slow/manual。
+7. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行。与 spike 抢同一份
+   `tools/compile_hook.c` → **串行（spike 先、freq 后）**，锁文件 `work/tmp/locks/compile-hook.lock`。
+8. **Steam 更新后的重验脚本**（§10 的 5 条断言，按符号名定位、不硬编码地址）。
 
 ### 待定
 
-- benchmark 协议与性能目标：暂缓（测法已定，见主设计 §7.3）。
-- 主设计 §11 的 U1–U5、U10–U12：其中 **U10/U11/U12 是 M0/M1 前置**（先做实验再写死，推断不得进 facts.md）。
+- benchmark 协议与性能目标：暂缓（测法已定，主设计 §7.3）。
+- 主设计 §11 的 U1–U4、U7：未动。U5（内建清单完备性）已有权威来源（`compile_real.dll` 的 `.rdata` 字面量池），
+  待提取成表（接口文档 §2/U-L13）。

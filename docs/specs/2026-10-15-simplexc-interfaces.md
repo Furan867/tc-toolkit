@@ -1,0 +1,305 @@
+# 设计：simplexc 接口冻结（主设计 §8 的 7 项）
+
+- 日期：2026-10-16
+- 状态：**冻结版 1**（负责人 2026-10-16 批准三处取舍：runtime 目标码随 blob 装配 / blob 内部禁止绝对重定位 /
+  corpus 的 `.bin` 不进 git）
+- 上游（唯一权威，本文件不复制其内容）：
+  - 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 §2/§4、语义保真 §5、验证 §7、工作流 §8、里程碑 §9）
+  - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（变体轴、归属语义、`hook.log` 迁移）
+- 证据等级：✅已证（跑过命令/读过字节）｜🔍推断｜❓未确认；**❓一律不得当已确认项用**（见 §9）
+- 改动流程：改本文件的接口 = 改契约 → 必须同步通知所有在跑的写者，并在此文件登记版本号
+
+---
+
+## 0. 代码落库与所有权
+
+```
+reversing/simplexc/
+  frontend/   词法/语法/ast/类型系统/consteval/重载解析/#if in_scope/内建识别   → TypedProgram
+  lower/      类型化 AST → LLVM IR（内存模型、$ 写回、extern、entry 包装）      → LLVMModuleRef
+  runtime/    路线 B 的运行时（C++17，编成 COFF，随 blob 装配）
+  assemble/   COFF → blob（重定位、extern 桩、8 字节头、entry、生命周期）
+  shell/      壳里**新增的那部分**（选实现、三模式、失败转交、核心入口）
+  cli/        离线 CLI（--src/--out/--entry），与 shell 共用核心
+  tools/      语料/判据/宿主/提取器等脚本
+  corpus/     语料 + manifest（`ref/` 不进 git）
+  dossier/    语义档案（机器可执行，§9 的实验都在这里落地）
+```
+
+- 既有 `reversing/tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
+- 一个写者一个目录（主设计 §8）；`tools/compile_hook.c` 由 `work/tmp/locks/compile-hook.lock` 串行化。
+
+---
+
+## 1. 前端产物：类型化 AST 与类型表示
+
+**语言与文件**：C++17；接口头 `simplexc/frontend/ast.h`、`simplexc/frontend/frontend.h`。
+
+```cpp
+// 冻结：类型标识 ------------------------------------------------------------
+enum class TypeKind { Error, Void, Bool, Int, Uint, SizedInt, Ptr, Array, Struct, Enum, TypeValue };
+struct Type {
+  TypeKind kind;
+  int  bits;            // SizedInt：位宽 1..64（U1/U5/U8/U16/U32/U64 都合法，不是 2 的幂也合法）
+  bool is_signed;       // SizedInt
+  const Type* elem;     // Array / Ptr 的元素类型（Ptr 的 elem = void）
+  struct StructInfo* stru;
+  struct EnumInfo*   enu;
+};
+
+// 冻结：类型等价 ------------------------------------------------------------
+// Bool ≡ SizedInt{1,unsigned}（Bool 是别名）；Int ≡ SizedInt{64,signed}；Ptr 与 U64 是不同类型，
+// 互转必须显式 raw_cast 或走指针算术规则。
+// Uint / Sint 不是具体类型，是**重载族约束**（匹配任一无符号/有符号整数），只允许出现在参数类型位置
+// （依据：stdlib 前缀 `def str(number: Uint) Str`）。
+
+// 冻结：泛型 = 单态化 -------------------------------------------------------
+// @Type → TypeValue 参数；@Size → 编译期整数参数；@Any → 任意类型参数。
+// 实例化名 = "<函数名>$<实参规范化字符串>"（同一 (函数, 实参) 只实例化一次）。
+// 实例化集合在编译期封闭；不留运行期泛型分发。
+
+// 冻结：程序根 -------------------------------------------------------------
+// 程序根 = 顶层语句块（含全局 var 初始化），末尾隐式 thread_exit()（依据：主设计 §2.4 ✅）。
+// entry 每次编译只进入 1 次 → 全局数据的唯一初始化点就在顶层块，不需要运行期守卫。
+
+// 冻结：编译期构造 ---------------------------------------------------------
+// 只有两类（U12 实测：98 份语料里 `#` 只出现这两类）：
+//   (a) `#if <const-expr>{ … }`  —— 语料里唯一形态是 `#if in_scope("name"){ … }`
+//   (b) `const #NAME = <const-expr>`
+// in_scope("name") = "该名字在此处可见（含后置定义）" → 必须做**两遍/不动点**判定。
+
+// 冻结：前端接口 -----------------------------------------------------------
+struct CompileOptions { bool allow_unsupported = false; /* 恒 false：见 §8 */ };
+struct CompileError  { ErrKind kind; std::string message; Span span; };
+Result<TypedProgram, CompileError> parse_and_typecheck(std::string_view src, const CompileOptions&);
+```
+
+- `TypedProgram` 必须给 lowering 提供：`main` 块、函数表（含单态化实例）、全局 var 表、编译期常量表、
+  `extern` 声明表、内建调用点表、每个表达式/左值的**解析后类型**。
+- **未支持构造一律 `CompileError`**（§8）。禁止"猜一个语义"。
+- 布局/宽度规则（struct 布局、enum 底层宽度、整数提升与截断）**不在本文件冻结**，由 §9 的实验给出后写进
+  `docs/facts.md`，前端只允许调用唯一实现 `layout_struct()` / `enum_storage_bits()`。
+
+---
+
+## 2. 内建表 schema（唯一来源）
+
+- 单一来源文件：`simplexc/lower/builtins.def`（X-macro，一处定义，前后端与 runtime 都从它生成/校验）。
+
+```c
+// BUILTIN(名字, 签名, 是否 mutating, 副作用, 对齐, lowering)
+BUILTIN(load,   "load(<T>, Ptr) -> T",        no,  read,  natural, LLVM_LOAD)
+BUILTIN(store,  "store(Ptr, T) -> Void",      YES, write, natural, LLVM_STORE)
+BUILTIN(raw_cast,"raw_cast(<T>, V) -> T",     no,  none,  - ,      BITCAST)
+BUILTIN(grow,   "grow(arena?, Arr[T], Int) -> Arr[T]", YES, alloc+copy, - , RT_grow)
+...
+```
+
+- 每行必须写清：**参数（含类型参数）、返回类型、是否 mutating、副作用、对齐要求、lowering 目标**。
+  mutating 判定错 = 语义分叉（`swap` / `partition` / `grow` / `shrink` / `join` / `append` / `store`）。
+- lowering 目标三种：`LLVM_*`（直映射）、`RT_*`（调用我们 runtime）、`INLINE`（在 lowering 期内联展开）。
+- **权威清单（三路交叉，缺一路不算钉子）**：
+  1. `compile_real.dll` 的字面量池 —— `mac_*` 名表已实测提取到（17 个：`mac_in_scope, mac_uint_of_size,
+     mac_raw_cast, mac_type_of_element, mac_type_of, mac_append, mac_shrink, mac_grow, mac_join, mac_clone,
+     mac_array, mac_empty_array_address, mac_default, mac_int_of_size, mac_store, mac_load, mac_size`），
+     提取器 `reversing/tools/extract_nim_strings.py`；**裸名表（store/min/max/clz/ctz/asr/lsr/lsl/ror/rol/
+     bswap/…）也在同一池里，但类别分组（STANDARD/UNARY/BINARY/BINARY_MUTATING）尚未从容器结构确认 → §9 U-L13**。
+  2. stdlib 前缀里「被调用但未定义」的名字。
+  3. 98 份语料里「被调用但未定义」的名字。
+- 附录 A = 我这次实测的 (2)+(3) 并集，作为 M3 的起点清单；**它还不是冻结的完备集**。
+
+---
+
+## 3. runtime ABI（路线 B）
+
+**实现语言/形态**：C++17，`w64devkit g++ -c` 编成 COFF，由装配器**与 LLVM 产出的目标文件一起链接进 blob**（自包含）。
+不做常驻 runtime DLL（已批准项 a）。
+
+**调用约定（冻结）**
+- Win64 ABI：整型/指针参数 `rcx, rdx, r8, r9`，其余走栈；调用方留 32 字节影子空间；`call` 时 `rsp ≡ 0 (mod 16)`。
+- callee-saved：`rbx, rbp, rdi, rsi, r12–r15`；xmm6–xmm15 在 Win64 上也是 non-volatile。
+- runtime 函数**不得递归**、不得依赖大栈（线程栈大小未知，主设计 §5 第 8 条）。
+
+**数组/字符串布局（冻结：必须与 Nim ARC/ORC seq 同构）**
+
+```
+payload p 指向第 0 个元素
+p[-8] : u64 = (len << 16) | cap_log2     // len 是 48 位，cap_log2 是低 16 位
+p[-2] : u16 = cap_log2                    // get_capacity = (1 << cap_log2) >> 1 字节
+len   = u64(p-8) >> 16
+```
+依据（✅ stdlib 前缀实测，`stdlib_prefix.si` 的 `allocate_raw`/`get_capacity`/`get_length`/`set_length`）：
+`store(arr_ptr, (length << 16) | arr_cap)`、`get_length = load(<Int>, p-8) >> 16`、`get_capacity = to_capacity(u16(p-2))`、
+`to_capacity(l) = (1<<l)>>1`。
+**为什么不是自由选择**：游戏把自己的 seq/字符串按硬编码绝对地址交给生成代码
+（`var input_replay = raw_cast(<Arr[U64]>, 2416573480960)`、`const #SIMULATION_STATE = Ptr 2416623026176`，
+`work/hook/all/hook_src_001.si:5,11`）→ 长度/容量字段必须同构，否则读游戏数组就分叉。
+
+**arena（冻结）**：我们自己的 arena，实现自由；**不依赖游戏给的 `#DATA_*` 地址**（那些是游戏数据段里的 RAM 数据，
+不是我们的分配区）。arena 元数据放 blob 的 `.data/.bss`（blob 每次编译被整体 memcpy → 每次进入都是干净状态）。
+空数组哨兵 `empty_array_address()` 的**具体值待实测**（§9 U-L9），冻结其语义 = 「长度 0、可安全读写 0 字节」。
+
+**字符串**：`Str = Arr[Char]`，`Char` = 1 字节无符号（0..255）。是否 NUL 终止、字面量编码见 §9 U-L3/U-L10。
+
+**谁保存寄存器（冻结）**：入口 shim 保存全部易失与非易失通用寄存器、把栈对齐到 16 字节后再 `call` 我们的
+`main`；LLVM 生成的函数一律按 Win64 callee-saved 规则行事。
+
+---
+
+## 4. 装配器接口
+
+```cpp
+struct ObjectFile  { std::string name; std::vector<uint8_t> bytes; };   // COFF
+struct ExternSym   { std::string symbol; std::string dll, proc; };       // 由壳在编译期解析成绝对地址
+struct Blob {
+  std::vector<uint8_t> bytes;   // bytes[0:8] = out_len | (1<<62)；机器码从 +8 起
+  uint64_t entry_off;           // 相对机器码起点（= 相对 blob+8）
+};
+enum class AsmStatus { Ok, UndefinedSymbol, UnsupportedReloc, InternalRelocToExtern, TooLarge };
+struct AsmResult  { AsmStatus status; Blob blob; std::string detail; };
+
+AsmResult assemble(const std::vector<ObjectFile>& objs,
+                   std::string_view entry_symbol,       // = 我们的 shim 符号 __tc_entry
+                   const std::vector<ExternSym>& externs,
+                   const AsmOptions& opt);
+```
+
+**冻结的装配规则**
+1. 输入是 COFF 目标文件（`LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)` 的字节）；
+   解析节/符号/重定位，**复用 `reversing/tools/coff_symbols.py` 已探明的解析方式，不另起一套**。
+2. 允许的重定位：`IMAGE_REL_AMD64_REL32`(0x04) 及其 `+1..+5` 变体（内部符号）。
+   **任何指向内部符号的绝对重定位（`ADDR64`=0x01 / `ADDR32`=0x02 / `ADDR32NB`）一律 `UnsupportedReloc` 硬错误**
+   （已批准项 b：blob 会被拷到任意地址执行，内部绝对地址必然失效）。
+3. 未定义符号：按「stub pool + 编译期解析」处理 —— 每个未定义符号在 `.text` 尾部分配一个
+   `movabs rax, imm64 ; jmp rax`（16 字节）桩；call/jmp 用 `REL32` 指向该桩（同一 blob 内，必在 ±2GB）。
+   `GetProcAddress` 失败的符号 → `UndefinedSymbol`（不是崩溃）。
+4. 整节丢弃 `.pdata` / `.xdata` / `.debug*`；IR 层禁 `uwtable`、禁异常。
+5. `__chkstk` / `___chkstk_ms` 由 `runtime/` 提供（我们自己的页探测实现），不依赖 CRT。
+6. 产物上限：`out_len ≤ 64 MB`（与转发层 `dump()` 的上限一致）；超出 → `TooLarge`。
+7. 头 8 字节 = `out_len | (1<<62)`（bit62 置位 → 游戏不 free，主设计 §2.3/§4）；**头里不放别的元数据**。
+8. 缓冲分配：壳里 `malloc(out_len + 8)`（多 8 字节 padding，主设计 §4 第 1 条），生命周期由壳持有：
+   **下次编译开始时释放上一块**。
+9. entry 符号 = 手写 shim `__tc_entry`：保存寄存器 + 对齐栈 + `call <llvm_main>` + 收尾（`thread_exit`），
+   因为游戏是 `jmp` 进来的、不保证 ABI 对齐（主设计 §5 第 8 条）。
+
+---
+
+## 5. DLL 壳（`tools/compile_hook.c` 演进 + `simplexc/shell/`）
+
+**模式（冻结）**：`opt.ini` 的 `[opt] compiler = reference | ours | ours_with_fallback`；**缺失键兜底 `reference`**
+（fail-safe：绝不能把"没配"当成"我们的实现"）。
+
+| 模式 | 我们编译成功 | 我们编译失败（未支持/内部错误/超时/熔断） |
+|---|---|---|
+| `reference` | —（不调用我们的编译器） | — |
+| `ours_with_fallback` | 用我们的产物 | **整单转交 `compile_real.dll`，原样返回它的 Result** |
+| `ours` | 用我们的产物 | **不转交**：返回自造失败 Result（`out[3]≠0`），游戏走失败分支，不跑新代码 |
+
+- 自造失败 Result（仅 `ours` 模式需要）：
+  `out[3] = len`、`out[4] = 指向 { u64(len | (1<<62)), char data[len], NUL }` —— bit62 置位 → 游戏不 free
+  （依据：主设计 §2.3 的门控 + §2.2 的失败判定）。内容前缀固定 `ours: ` + 错误分类，供回退率统计。
+- **熔断**：VEH（`AddVectoredExceptionHandler`）包住整次调用；触发后本进程内永久切 `reference`
+  （记 `error stage=ours_fault`）。耗时超预算（默认 5 s，调试期 60 s）→ 记 `error stage=ours_timeout` → 按模式回退。
+  失败一律**不崩游戏**：任何异常路径都返回一个形状合法的 Result。
+- 记录（冻结）：
+  - `manifest.tsv` **末尾追加 `impl` 列**（既有列序号不变）：`ours | ours_with_fallback→reference | reference`；
+  - `hook.log` 新增 per-call `impl` 行（键：`impl` / `reason`），与主频层设计 §4 的契约一致；
+  - 归属只认 `hook.log` 的 `opt` / `impl` 行（主设计 §7.3）。
+- 三模式与 `rewrite` 正交（`rewrite` 仍只由改写器定义合法值集合）。
+
+---
+
+## 6. 差分宿主驱动协议
+
+**形态（冻结）**：宿主是**独立进程**（`simplexc/tools/host/`），输入 = blob 文件 + 地址表 + 命令序列，
+输出 = 逐 tick 快照 JSONL；不依赖游戏、不需要 `game.lock`。
+
+- **假游戏内存**：生成源码把所有游戏地址写成字面量（`Ptr <digits>`、`raw_cast(<T>, <digits>)`、`#DATA_*`），
+  产物里对应 `movabs imm64` → 宿主按 64 KB 页 `VirtualAlloc` 预留这些地址区间。
+  **产物里出现地址表外的 movabs 立即数 = 宿主报错退出**（宁可吵，也别静默错）。
+- **extern 中和**：把产物里指向 kernel32 的 movabs 立即数改写成宿主桩地址（复用
+  `tools/optimize_image.py` 的 movabs 改写能力）；桩记录 `{name, args, ret}` 进快照。
+- **命令驱动**（依据主设计 §7.1）：命令块在游戏内存里（`commands[...]`/`settings[...]`），
+  驱动方把 `sim_target_cycle` 依次设为 `1,2,3,…` 并递增 `ctl_command_id` 发 `SimCommand.run`
+  → 每次 `run` 返回即一个 tick 边界。
+- **快照**：`{tick, pages: {addr → sha256(page)}, extern: [...], alive}`；差分 = 逐 tick 比对
+  `pages` 与 `extern` 序列（逐字节，不做近似）。
+- **白名单**：arena/分配器内部布局等不可观测差异必须显式列白、可审计、尽量小（主设计 §7.1）。
+- **自比对基线**：参考产物 vs 参考产物 必须逐 tick 全等（M2 完成判据）。
+- 超时：每 tick 有预算，超时记 `timeout` 并杀宿主进程；宿主崩溃也要留下「最后成功的 tick」。
+
+---
+
+## 7. 构建与链接
+
+- C/C++：`D:\bin\w64devkit\bin\g++.exe`（GCC 14.2），`-std=c++17 -O2`，**直调 gcc，不引入 CMake**
+  （照抄 `tools/deploy_compile_hook.py` 的构建风格）；构建脚本 `simplexc/tools/build.py`。
+- LLVM：**`LLVM-C.dll` + C API**，版本锁定；三元组 `x86_64-pc-windows-gnu`，`RelocMode=Static`，`CodeModel=Small`，
+  禁 `uwtable`/异常。管线：`LLVMRunPasses`（`-O2`）+ `LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)`。
+- 取导入库的两条路（M1 spike 先试 ①）：
+  1. MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，无 MSVC 运行时依赖，与目标三元组同源）；
+  2. 官方 win64 发行包 + `gendef`/`dlltool` 造导入库（官方包只有 DLL，无 C++ 库/头）。
+- 落地位置：DLL 与导入库放 `reversing/build/llvm/`（**不进 git**）；版本号 + DLL sha256 记进 `docs/facts.md`。
+- 构建产物：`reversing/build/simplexc.dll`（壳）、`reversing/build/simplexc-cli.exe`（离线 CLI）。
+
+---
+
+## 8. 错误模型与回退契约（横切）
+
+- 错误分类（回退率报告按此分类）：`UnsupportedConstruct` / `InternalError` / `Timeout` / `OursFault` /
+  `BlobTooLarge` / `RelocUnsupported` / `SymbolUndefined`。
+- **禁止静默降级**：任何不支持 → 显式错误 + （按模式）回退；不允许"猜一个语义"或"悄悄用参考实现"。
+- 每条错误必须能定位到源码 span（`UnsupportedConstruct` 尤其），供覆盖率矩阵与最小复现。
+- `CompileError.kind` 与 §5 的记录字段一一对应，别在别处再定义一套分类。
+
+---
+
+## 9. 未冻结 / 必须先实验的项（❓，禁止当已确认用）
+
+这些全部由 **M3 语义档案**（`simplexc/dossier/`，主设计 §7.4）产出，每条 = 最小 `.si` + 驱动方式 +
+参考产物下的可观测状态变化 + 结论（写进 `docs/facts.md` 或 `docs/pitfalls.md`）：
+
+| # | 问题 | 影响 |
+|---|---|---|
+| U-L1 | `load`/`store` 的**地址单位**（字节 or 位）与对齐要求；`load(<U5>, p)` 这类非字节宽度怎么读 | 内存模型的地基；错则全盘错 |
+| U-L2 | `arr[i]` 越界语义（trap / 未定义 / 掩码） | 索引 lowering |
+| U-L3 | `Str` 是否 NUL 终止；`+` 拼接的分配语义 | 字符串 runtime |
+| U-L4 | struct 布局与对齐规则（字段序、padding、嵌套） | 前端布局 + `raw_cast` |
+| U-L5 | enum 底层宽度规则（成员数 → 1/2/4/8 字节） | 前端类型系统 |
+| U-L6 | `$` 参数写回时机（每次赋值 or 调用返回） | lowering 的别名/写回 |
+| U-L7 | 整数提升 / wrapping / 隐式截断规则（`U8 x = ...` 与 `U8(v)` 的区别） | 语义保真的核心 |
+| U-L8 | 除零 / 移位越界 / 有符号右移的行为 | 未定义行为映射 |
+| U-L9 | `empty_array_address()` 的哨兵值 | 空数组读写 |
+| U-L10 | 字符串字面量编码（`\n` 转义、是否带长度头） | runtime 字符串 |
+| U-L11 | `type_of(x)` / `size(x)` 的精确语义（对值 vs 对类型；返回类型还是常量） | 内建表 |
+| U-L12 | `min` / `max` 的类型规则（同型？提升？） | 内建表 |
+| U-L13 | `INTRINSIC_*_NAMES` 四张表的**分组与完备内容**（从 `compile_real.dll` 的容器结构提取） | 内建表完备性（U5 的钉子） |
+| U-L14 | `#if in_scope` 的名字可见性规则（含前向引用、`@Size` 实例化影响） | 预处理 |
+
+---
+
+## 附录 A：内建/未定义名清单（实测并集，M3 起点）
+
+来源 ①stdlib 前缀（`stdlib_prefix.si`，1503 行）里「被调用但未定义」：
+`clz, empty_array_address, grow, index_read, index_write, join, load, raw_cast, shrink, store, type_of_element`
+（另有一批是**方法糖**：`.len/.push/.pop/.contains/.next/.min/.size/.write/.array/.cstring` 与时间单位 `.ms/.ns/.us/.sec/.day/.hour`）。
+
+来源 ②98 份生成源码里「被调用且本文件未定义」（按出现文件数）：
+`store 98, raw_cast 98, load 97, min 97, type_of 27, asr 23, size 23, array 16, hex 13, ror 2, clz 2, str 3, bin 1`
+（`in_scope` 是编译期谓词；`sleep/get_time/memory_clear/memory_copy/random` 等由前缀定义，不是内建）
+
+来源 ③`compile_real.dll` 字面量池的 `mac_*` 名表（17 个，见 §2）。
+
+**注**：`RAW`/`INTRINSIC` 的完整分组与大小写规范见 U-L13；本表只用于 M3 打底，不能当规范。
+
+---
+
+## 证据索引
+
+| 事实 | 复现方式 |
+|---|---|
+| 数组布局 = `(len<<16)\|cap`，`get_capacity = (1<<cap)>>1` | 读 `stdlib_prefix.si` 的 `allocate_raw`/`get_length`/`set_length`/`get_capacity` |
+| 游戏把自己的数组硬编码交给生成代码 | `grep -n 'raw_cast(<Arr\|#SIMULATION_STATE' work/hook/all/hook_src_001.si` |
+| `#` 只有 `#if in_scope` 与 `const #NAME` 两类 | `grep -oh '#[A-Za-z_][A-Za-z0-9_]*' work/hook/all/*.si \| sort -u` |
+| 内建/宏名表在 DLL 的字面量池里 | `reversing/tools/extract_nim_strings.py <dll>` → `mac_*` 组 |
+| extern 调用 = Win64 ABI + `sub rsp,imm16` 影子空间 | 反汇编任一 `work/hook/all/hook_out_*.bin`（U10）；调用目标是 `compile_real.dll` 的导入 thunk，见 `docs/facts.md` |

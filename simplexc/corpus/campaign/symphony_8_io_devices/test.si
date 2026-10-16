@@ -1,0 +1,408 @@
+
+const #OP_IO  = 0
+const #OP_ALU = 1
+const #OP_JMP = 2
+const #OP_RAM = 3
+
+const #MAX_RAM = U32 1 << 24
+const #MAX_SSD = U32 1000
+
+var counter   = U32 0
+var registers = array(<U32>, 16)
+var ram       = array(<U8>, #MAX_RAM)
+var ssd       = array(<U8>, #MAX_SSD)
+var saved_time = 0
+var screen_setting = array(<Int>, 8)
+screen_setting[2] = 16777200
+
+
+const #UP_DOWN    = 0x101
+const #UP_UP      = 0x001
+const #DOWN_DOWN  = 0x103
+const #DOWN_UP    = 0x003
+const #RIGHT_DOWN = 0x102
+const #RIGHT_UP   = 0x002
+
+
+var keypresses = [#DOWN_DOWN, #DOWN_UP, #RIGHT_DOWN, #RIGHT_UP, #DOWN_DOWN, #DOWN_UP, #RIGHT_DOWN, #RIGHT_UP, #RIGHT_DOWN, #RIGHT_UP, #UP_DOWN, #UP_UP, #RIGHT_DOWN, #RIGHT_UP, #RIGHT_DOWN, #RIGHT_UP, #UP_DOWN, #UP_UP, #RIGHT_DOWN, #RIGHT_UP, #RIGHT_DOWN, #RIGHT_UP, #DOWN_DOWN, #DOWN_UP]
+var keypress_index = 0
+
+{
+
+    var i = 0
+
+    while i < keypresses.len() {
+
+        add_keyboard_value(Bool (keypresses[i] >> 8), U8 keypresses[i])
+
+        i += 1
+
+    }
+
+}
+
+{
+    // Copy assembled code to RAM
+
+    var i = 0
+
+    while i < ram.len() {
+
+        let byte = get_ram_value("Main Memory", i, <U8>)
+        ram[i] = byte
+        i += 1
+
+    }
+
+}
+
+def flag_result(a: U32, b: U32) U32 {
+
+    let equal = U32 (a == b)
+    let uless = U32 (U32 a < U32 b) & 1
+    let sless = U32 (S32 a < S32 b) & 1
+
+    return (sless << 2) | (uless << 1) | equal
+
+}
+
+def retire_instruction(instruction: Int, input: Int, output_enabled: Bool, output_value: Int) Bool {
+
+    let mode            = (instruction >> 29) & 0b11
+    let opcode          = (instruction >> 24) & 0b1111
+    let dest            = (instruction >> 20) & 0b1111
+    let a               = (instruction >> 16) & 0b1111
+    let b               = (instruction >> 8) & 0b1111
+    let immediate       = (instruction >> 28) & 1 != 0
+    let immediate_value =  U32 (instruction & 0xffff)
+
+    let a_value = registers[a]
+    let b_value = immediate ? immediate_value : registers[b]
+
+    switch mode
+
+        case #OP_IO {
+
+            const #NOP      = 0
+            const #INPUT    = 1
+            const #OUTPUT   = 2
+            const #KEYBOARD = 3
+            const #SCREEN   = 4
+            const #TIME_0   = 5
+            const #TIME_1   = 6
+            const #COUNTER  = 7
+
+            switch opcode & 0xf
+                case #INPUT    { registers[dest] = U32 input }
+                case #OUTPUT   {
+                    let expected_output = Int b_value
+
+                    if !output_enabled {
+
+                        set_error((31337_18975134592059, `Output should have been enabled.`))
+                        return true
+                    }
+
+                    if output_value != expected_output {
+
+                        set_error((31337_30816527015736, `Output should have been {expected_output}, not {output_value}.`))
+                        return true
+
+                    }
+
+                }
+                case #KEYBOARD {
+                    if keypress_index < keypresses.len() {
+                        registers[dest] = U32 keypresses[keypress_index]
+                        keypress_index += 1
+                    } else {
+                        registers[dest] = 0
+                    }
+                }
+                case #SCREEN   { screen_setting[a_value] = Int b_value }
+                case #TIME_0   {
+                    saved_time = get_last_time()
+                    registers[dest] = U32 saved_time
+                }
+                case #TIME_1   {
+                    registers[dest] = U32 (saved_time >> 32)
+
+                    if registers[dest] != U32 get_ram_value("Register File", dest * 4, <U32>) {
+                        set_error((31337_29202969341865, `Wrong time output (did you remember to cache the time on the time_0 instruction?)`))
+                        return true
+                    }
+                }
+                case #COUNTER  { registers[dest] = counter }
+
+            counter += 4
+
+        }
+
+        case #OP_ALU {
+
+            counter += 4
+
+            var result = U32 0
+
+            switch opcode
+                case 0  { result = ~(a_value &  b_value) }
+                case 1  { result =   a_value |  b_value }
+                case 2  { result =   a_value &  b_value }
+                case 3  { result = ~(a_value |  b_value) }
+                case 4  { result =   a_value +  b_value }
+                case 5  { result =   a_value -  b_value }
+                case 6  { result =   a_value ^  b_value }
+                case 7  { result =   a_value << b_value }
+                case 8  { result =   a_value >> b_value }
+                case 9  { result =  U32 asr(S32 a_value, S32 b_value) }
+                case 10 { result =  flag_result(a_value, b_value) }
+
+            registers[dest] = result & 0xffff_ffff
+
+        }
+
+        case #OP_JMP {
+
+            let flags   = Int a_value & 0b111
+            let matched = (opcode & flags) > 0
+            let met     = matched != ((opcode & 0b1000) > 0)
+
+            if met {
+
+                counter = b_value
+
+            } else {
+
+                counter += 4
+
+            }
+
+        }
+
+        case #OP_RAM {
+            counter += 4
+
+            const #LOAD_8    = 0b0000
+            const #LOAD_16   = 0b0001
+            const #LOAD_32   = 0b0010
+            const #PLOAD     = 0b0011
+            const #STORE_8   = 0b0100
+            const #STORE_16  = 0b0101
+            const #STORE_32  = 0b0110
+            const #PSTORE    = 0b0111
+
+            const #RAM_MASK = #MAX_RAM - 1
+
+            switch opcode
+
+                case #LOAD_8{
+
+                    registers[dest] = U32 ram[b_value & #RAM_MASK]
+
+                }
+
+                case #LOAD_16 {
+
+                    registers[dest] = (U32 ram[b_value & #RAM_MASK] << 8) | (U32 ram[(b_value + 1) & #RAM_MASK])
+
+                }
+
+                case #LOAD_32 {
+
+                    registers[dest] = (U32 ram[b_value  & #RAM_MASK] << 24) | (U32 ram[(b_value + 1) & #RAM_MASK] << 16) | (U32 ram[(b_value + 2) & #RAM_MASK] << 8) | (U32 ram[(b_value + 3) & #RAM_MASK])
+
+                }
+
+                case #STORE_8 {
+
+                    ram[b_value & #RAM_MASK] = U8 a_value
+
+                }
+
+                case #STORE_16 {
+
+                    ram[(b_value + 1) & #RAM_MASK] = U8 a_value
+                    ram[(b_value + 0) & #RAM_MASK] = U8 (a_value >> 8)
+
+                }
+
+                case #STORE_32 {
+
+                    ram[(b_value + 3) & #RAM_MASK] = U8 a_value
+                    ram[(b_value + 2) & #RAM_MASK] = U8 (a_value >> 8)
+                    ram[(b_value + 1) & #RAM_MASK] = U8 (a_value >> 16)
+                    ram[(b_value + 0) & #RAM_MASK] = U8 (a_value >> 24)
+
+                }
+
+                case #PLOAD {
+
+                    registers[dest] = (U32 ssd[b_value] << 24) | (U32 ssd[b_value + 1] << 16) | (U32 ssd[b_value + 2] << 8) | (U32 ssd[b_value + 3])
+
+                }
+
+                case #PSTORE {
+
+                    if b_value < #MAX_SSD - 4 {
+
+                        ssd[b_value + 3] = U8 a_value
+                        ssd[b_value + 2] = U8 (a_value >> 8)
+                        ssd[b_value + 1] = U8 (a_value >> 16)
+                        ssd[b_value + 0] = U8 (a_value >> 24)
+
+                    }
+
+                }
+
+
+        }
+
+    registers[0] = 0
+
+}
+
+def on_ui_update(input: Input, output: Output) None {
+
+    let actual_counter = get_load_port_input("Instruction")
+
+    var instruction = get_ram_value("Main Memory", Int actual_counter, <U32>)
+    ui_set_instruction(0, Int instruction, Int actual_counter)
+
+}
+
+def get_input(cycle: Int) Input {
+
+    if cycle < 0xff {
+
+        return Input {input: U32 random(0xff)}
+
+    } else {
+
+        return Input {input: U32 random(0xffff_ffff)}
+
+    }
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if get_screen_connection("screen") != "Main Memory" {
+        set_error((31337_46474751521062, `Link the screen to the "Main Memory" component (use the little red button in the corner of the screen).`))
+        return fail
+
+    }
+
+    let actual_counter = get_load_port_input("Instruction")
+
+    if U32 actual_counter != counter {
+
+        ui_set_instruction(0, 0, 0)
+        let counter_value = counter
+        set_error((31337_41024505081324, `You should have read address {counter_value} from the Main Memory, not {actual_counter}. You must have not updated the counter correctly last cycle.`))
+        return fail
+
+    }
+
+    var instruction = get_ram_value("Main Memory", Int counter, <U32>)
+
+    let error = retire_instruction(Int instruction, Int input.input, output.output_enabled, Int output.output)
+
+    if error {
+
+        return fail
+
+    }
+
+    {
+
+        var reg = 0
+        while reg < 16 {
+
+            let value = U32 get_ram_value("Register File", reg * 4, <U32>)
+
+            if value != registers[reg] {
+
+                if reg == 0 {
+
+                    set_error((31337_29909286517152, `The 'zr' register should always be zero (address 0 in the 'Register File').`))
+
+                } else {
+
+                    var register = ""
+                    switch reg
+                        case 14 { register = "'sp'" }
+                        case 15 { register = "'flags'" }
+                        default { register = `r{reg}`}
+
+                    let address = reg * 4
+                    let expected_value = "0x" + hex(8, Int registers[reg])
+                    let actual_value = "0x" + hex(8, Int value)
+                    set_error((31337_31400969059429, `{register} ('Register File' address {address}) should have hex value {expected_value}, not {actual_value}`))
+
+                }
+                return fail
+
+            }
+
+            reg += 1
+
+        }
+    }
+
+
+    {
+        // Tests only use addresses between 10k and 11k to speed up simulation
+
+        var i = 10000
+
+        while i < 11000 {
+            let value = get_ram_value("Main Memory", i, <U8>)
+            if ram[i] != value {
+                let address = ram[i]
+                set_error((31337_78917660933958, `Main Memory address {i} is supposed to have value {address}, not {value}`))
+                return fail
+            }
+            i += 1
+        }
+    }
+
+    {
+        // Tests only the first 1k
+
+        var i = 0
+
+        while i < 1000 {
+            let value = get_ram_value("Persistent Memory", i, <U8>)
+            if ssd[i] != value {
+                let address = ssd[i]
+                set_error((31337_26871980917450, `Persistent Memory address {i} is supposed to have value {address}, not {value}`))
+                return fail
+            }
+            i += 1
+        }
+    }
+
+    {
+
+        var i = 0
+
+        while i < screen_setting.len() {
+
+            let value = get_screen_settings("screen", i)
+            if value != screen_setting[i] {
+                let expected_value = screen_setting[i]
+                set_error((31337_42960087865089, `Screen setting {i} is supposed to be {expected_value}, not {value}`))
+                return fail
+            }
+
+            i += 1
+
+        }
+
+    }
+
+    if cycle > 45000 {
+        return win
+    }
+
+}

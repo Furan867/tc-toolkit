@@ -1,0 +1,88 @@
+
+def get_input(cycle: Int) Input {
+
+    var in = random(2)
+    var out = random(2)
+    var val1 = 0
+    var val2 = 0
+
+    if in == 0 {
+
+        val1 = random(256)
+
+    } else {
+
+        val2 = random(256)
+
+    }
+
+    let source = in == 0 ? "A" : "B"
+    let destination = out == 0 ? "X" : "Y"
+    ui_set_text("description", (31337_69214136994673, `Forward the value from {source} to {destination}`))
+
+    return Input {
+        input_select: U1 in,
+        a: U8 val1,
+        b: U8 val2,
+        output_select: U1 out,
+    }
+
+}
+
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    var val = U8 0
+
+    if input.input_select == 0 {
+
+        val = input.a
+
+    } else {
+
+        val = input.b
+
+    }
+
+
+    if input.output_select == 0 {
+
+        if output.x_is_z || output.x != val {
+
+            set_error((31337_65293894030728, `Output X should be {val}.`))
+            return fail
+
+        }
+
+        if !output.y_is_z {
+
+            set_error((31337_75577618213381, `Output Y should be Z.`))
+            return fail
+
+        }
+
+    } else {
+
+        if output.y_is_z || output.y != val {
+
+            set_error((31337_28173496384607, `Output Y should be {val}.`))
+            return fail
+
+        }
+
+        if !output.x_is_z {
+
+            set_error((31337_46672500255781, `Output X should be Z.`))
+            return fail
+
+        }
+
+    }
+
+    if cycle == 32 {
+
+        return win
+
+    }
+
+}

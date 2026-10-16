@@ -1,0 +1,53 @@
+let test = get_test()
+if test == 0 {
+    ui_set_hidden("table", false)
+    ui_set_hidden("text", true)
+} else {
+    ui_set_hidden("table", true)
+    ui_set_hidden("text", false)
+}
+
+def get_input(cycle: Int) Input {
+    var disable = U1 1
+    if test == 0 {
+        disable = 0
+    }
+
+    return Input {input: U3 cycle, disable: disable}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    var value = Int output.output
+
+    if output.output_is_z {
+
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+
+    }
+
+    if input.disable == 1 {
+        if value != 0 {
+
+            set_error((31337_18073111523064, `Expected all outputs to be [F] since the disable bit is [T]`))
+            return fail
+
+        }
+
+    } elif value != 1 << cycle {
+
+        set_error((31337_10870388349665, `Expected output {cycle} to be [T] and other outputs to be [F]`))
+        return fail
+
+    }
+
+
+    if cycle == 7 {
+
+        return win
+
+    }
+
+}

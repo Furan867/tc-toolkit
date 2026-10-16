@@ -1,0 +1,5485 @@
+
+
+var commands                          = Ptr 2416573349888
+var settings                          = Ptr 2416573415424
+var input_replay                      = raw_cast(<Arr[U64]>, 2416573480960)
+var output_history_pins               = Ptr 2416576167936
+var error_buffer                      = Ptr 2416633315328
+var ui_buffer                         = Ptr 2416633380864
+var ctl_input_replay_reset            = raw_cast(<Arr[U64]>, 2416636067840)
+
+const #SIMULATION_STATE               = Ptr 2416623026176
+const #SIMULATION_KEYBOARD_CHARACTER  = Ptr 2416635478064
+const #SIMULATION_KEYBOARD_COORDINATE = Ptr 2416635490352
+const #SIMULATION_PUSH_BUTTON         = Ptr 2416635502640
+
+type SimCommand Enum[run, refresh, mode_reset, quit_simulation]
+type CommandIndex Enum[ctl_command, ctl_command_id, ctl_cycle_speed_ms, ctl_exit, ctl_level_manual_input, ctl_level_manual_input_id, ctl_test]
+type StateIndex Enum[sim_cycle, sim_target_cycle, sim_test_result, sim_last_command_id, sim_error_component, sim_short_circuit_component_id_1, sim_short_circuit_component_id_2, sim_short_circuit_pin_1, sim_short_circuit_pin_2, sim_short_circuit_top_level_permanent_id_1, sim_short_circuit_top_level_permanent_id_2, sim_short_circuit_value_1, sim_short_circuit_value_2, sim_short_circuit_any_top_level_wire_id, sim_running]
+
+def get_command(idx: CommandIndex) U64 {
+    return load(<U64>, commands + (Int idx) * 8)
+}
+
+def get_setting(idx: StateIndex) U64 {
+    return load(<U64>, settings + (Int idx) * 8)
+}
+
+def set_setting(idx: StateIndex, value: U64) None {
+    store(settings + (Int idx) * 8, value)
+}
+
+type TestResult Enum[pass, win, fail]
+
+
+def set_text(text: Str, offset: Int) None {
+    let length = text.len()
+    store(ui_buffer + offset, length)
+    var i = 0
+    while i < length {
+        store(ui_buffer + offset + 8 + i, U8 text[i])
+        i += 1
+    }
+}
+
+type ComponentType Enum[com_off, com_on, com_not_bit, com_and_bit, com_and_3_bit, com_nand_bit, com_or_bit, com_or_3_bit, com_nor_bit, com_xor_bit, com_xnor_bit, com_switch_bit, com_delay_line_bit, com_register_bit, com_full_adder, com_maker_bit_8, com_splitter_bit_8, com_not_word, com_or_word, com_and_word, com_nand_word, com_nor_word, com_xor_word, com_xnor_word, com_switch_word, com_equal, com_less_u, com_less_s, com_neg, com_add, com_mul, com_div, com_lsl, com_lsr, com_rol, com_ror, com_asr, com_counter, com_register_word, com_level_output_8_pin, com_level_delay_gate, com_mux, com_decoder_1, com_decoder_2, com_decoder_3, com_constant, com_splitter_word_2, com_maker_word_2, com_clz, com_register_word_config, com_probe_wire_asm, com_push_button, com_load_port, com_delay_line_word, com_store_port, com_ctz, com_cc_level_output, com_level_gate, com_level_input_1_pin, com_level_input_word, com_level_input_switched, com_level_input_2_pin, com_level_input_3_pin, com_level_input_4_pin, com_level_output_1_pin, com_level_output_word, com_level_output_switched, com_level_output_2_pin, com_level_output_3_pin, com_level_output_4_pin, com_level_output_counter, com_custom, com_cc_input, com_cc_output, com_probe_memory_bit, com_probe_memory_word, com_probe_wire_bit, com_probe_wire_word, com_halt, com_segment_display, com_static_value, com_screen, com_time, com_keyboard, com_static_eval, com_verilog_input, com_verilog_output, com_maker_word_4, com_maker_word_8, com_splitter_word_4, com_splitter_word_8, com_static_indexer, com_inc, com_cc_level_input, com_mod, com_splitter_bit_2, com_splitter_bit_4, com_maker_bit_2, com_maker_bit_4, com_concatenator_2, com_concatenator_4, com_concatenator_8, com_static_indexer_config, com_ram, com_delay_line_word_config]
+
+def get_cycle() Int { return cycle }
+def get_test() Int { return Int get_command(ctl_test) }
+def get_gate_score() Int { return 203}
+def get_delay_score() Int { return 8 }
+def get_component_count() Int { return 199 }
+def get_component_count(component_type: ComponentType) Int {
+    const #COUNTS = [0, 6, 0, 92, 0, 0, 1, 0, 16, 8, 0, 35, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    return #COUNTS[Int component_type]
+}
+
+def ui_set_position(id: Str, x: Int, y: Int) None {
+    switch id
+        case "table" { store(ui_buffer + 8, U64 (x << 16 | (y & 0xffff))) }
+}
+
+def ui_set_width(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_hidden(id: Str, value: Bool) None {
+    switch id
+        case "table[0][0]" { store(ui_buffer + 88, U64 value) }
+        case "table[0][1]" { store(ui_buffer + 96, U64 value) }
+        case "table[0][2]" { store(ui_buffer + 104, U64 value) }
+        case "table[1][0]" { store(ui_buffer + 112, U64 value) }
+        case "table[1][1]" { store(ui_buffer + 120, U64 value) }
+        case "table[1][2]" { store(ui_buffer + 128, U64 value) }
+        case "table[2][0]" { store(ui_buffer + 136, U64 value) }
+        case "table[2][1]" { store(ui_buffer + 144, U64 value) }
+        case "table[2][2]" { store(ui_buffer + 152, U64 value) }
+        case "table[3][0]" { store(ui_buffer + 160, U64 value) }
+        case "table[3][1]" { store(ui_buffer + 168, U64 value) }
+        case "table[3][2]" { store(ui_buffer + 176, U64 value) }
+        case "table[4][0]" { store(ui_buffer + 184, U64 value) }
+        case "table[4][1]" { store(ui_buffer + 192, U64 value) }
+        case "table[4][2]" { store(ui_buffer + 200, U64 value) }
+        case "table[5][0]" { store(ui_buffer + 208, U64 value) }
+        case "table[5][1]" { store(ui_buffer + 216, U64 value) }
+        case "table[5][2]" { store(ui_buffer + 224, U64 value) }
+        case "table" { store(ui_buffer + 0, U64 value) }
+}
+
+def ui_set_size(id: Str, value: Int) None {
+    switch id
+        case "table" { store(ui_buffer + 40, U64 value) }
+}
+
+def ui_set_column_header_size(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_row_header_size(id: Str, value: Int) None {
+    switch id
+        case "table" { store(ui_buffer + 56, U64 value) }
+}
+
+def ui_set_color(id: Str, value: Int) None {
+    switch id
+        case "table" { store(ui_buffer + 48, U64 value) }
+}
+
+def ui_set_address_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_instruction_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_description_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_column_header_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_row_header_color(id: Str, value: Int) None {
+    switch id
+        case "table" { store(ui_buffer + 64, U64 value) }
+}
+
+def ui_set_text(id: Str, text: Str) None {
+    switch id
+        case "table[0][0]" { set_text(text, 10000) }
+        case "table[0][1]" { set_text(text, 20000) }
+        case "table[0][2]" { set_text(text, 30000) }
+        case "table[1][0]" { set_text(text, 40000) }
+        case "table[1][1]" { set_text(text, 50000) }
+        case "table[1][2]" { set_text(text, 60000) }
+        case "table[2][0]" { set_text(text, 70000) }
+        case "table[2][1]" { set_text(text, 80000) }
+        case "table[2][2]" { set_text(text, 90000) }
+        case "table[3][0]" { set_text(text, 100000) }
+        case "table[3][1]" { set_text(text, 110000) }
+        case "table[3][2]" { set_text(text, 120000) }
+        case "table[4][0]" { set_text(text, 130000) }
+        case "table[4][1]" { set_text(text, 140000) }
+        case "table[4][2]" { set_text(text, 150000) }
+        case "table[5][0]" { set_text(text, 160000) }
+        case "table[5][1]" { set_text(text, 170000) }
+        case "table[5][2]" { set_text(text, 180000) }
+}
+
+def ui_set_image_name(id: Str, text: Str) None {
+    switch id
+}
+
+def ui_set_instruction(index: Int, code: Int, pointer: Int) None {
+    switch index
+}
+def add_keyboard_value(key_down: Bool, key: U8) None {
+    let value = U16 key_down | (U16 key) << 8
+    var index = load(<U16>, #SIMULATION_KEYBOARD_CHARACTER + 4098)
+    store(#SIMULATION_KEYBOARD_CHARACTER + index, value)
+    store(#SIMULATION_KEYBOARD_CHARACTER + 4098, (index + 8) % 4096)
+
+}
+def get_last_time() Int { return Int time_component_last }
+def get_screen_connection(screen_name: Str) Str {
+}
+def get_memory(label: Str) Int { 
+}
+def get_load_port_input(label: Str) Int { 
+}
+def get_screen_settings(label: Str, index: Int) Int { 
+}
+def get_output(user_label: Str, index: Int) Int { 
+    if user_label == "Carry in" && index == 0 { return Int (U64 load(<U1>, #SIMULATION_STATE + 1)) }
+    if user_label == "A" && index == 0 { return Int (U64 load(<U8>, #SIMULATION_STATE + 1)) }
+    if user_label == "B" && index == 0 { return Int (U64 load(<U8>, #SIMULATION_STATE + 1)) }
+}
+def get_ram_value(label: Str, address: Int, size: @Size) @Size {
+}
+def set_ram_value(label: Str, offset: Int, value: @Type) None {
+}
+
+const #CYCLE_PAST_FAIL = 0
+def max(a: TestResult, b: TestResult) TestResult {
+    return TestResult max(U64 a, U64 b)
+}
+
+def set_error(input: Str) None {
+
+    let len = input.len()
+
+    store(error_buffer, U16 len)
+
+    var i = 0
+    while i < len {
+        store(error_buffer + i + 2, U8 input[i])
+        i += 1
+    }
+}
+
+
+var cycle = -1
+var last_command_id = U64 0
+var last_level_manual_input = U64 0
+var time_component_last = U64 0
+
+def reset_sim() None {
+
+    time_component_last = U64 0
+
+    set_error("")
+
+    global_seed = Seed (get_command(ctl_test) + 1) // 0 can't be seed
+
+    last_level_manual_input = 0
+    set_setting(sim_cycle, #U64_HIGH) // -1
+    set_setting(sim_short_circuit_component_id_1, U64 0)
+    set_setting(sim_short_circuit_component_id_2, U64 0)
+    set_setting(sim_test_result, U64 pass)
+    cycle = -1
+
+  
+    memory_clear(#SIMULATION_KEYBOARD_CHARACTER, 8192)
+    memory_clear(#SIMULATION_KEYBOARD_COORDINATE, 8192)
+    memory_clear(#SIMULATION_STATE, 913)
+
+
+}
+
+type Input Struct {
+    carry_in: U1,
+    a: U8,
+    b: U8,
+}
+
+type Output Struct {
+    output: U8,
+    output_is_z: Bool,
+    carry_out: U1,
+    carry_out_is_z: Bool,
+}
+
+var level_input = Input {}
+var level_output = Output {}
+
+def mode_refresh() None {
+
+        
+
+
+    // 2 com_level_input_word 1 2 Carry in
+    let value_id750 = input_replay[0]
+    store(#SIMULATION_STATE + 750, U1 (value_id750))
+    store(#SIMULATION_STATE + 751, U1 (value_id750))
+    
+
+
+    // 3 com_level_input_word 8 1 A
+    let value_id286 = input_replay[1]
+    store(#SIMULATION_STATE + 286, U8 (value_id286))
+    store(#SIMULATION_STATE + 287, U8 (value_id286))
+    
+
+
+    // 4 com_level_input_word 8 4257300573296473173 B
+    let value_id268 = input_replay[2]
+    store(#SIMULATION_STATE + 268, U8 (value_id268))
+    store(#SIMULATION_STATE + 269, U8 (value_id268))
+    
+
+
+    // 329 com_on 2 3272659222695817418 
+    let value_id256 = 1
+    store(#SIMULATION_STATE + 256, U1 (value_id256))
+    store(#SIMULATION_STATE + 257, U1 (value_id256))
+    
+
+
+    // 299 com_on 2 3039292497902327038 
+    let value_id258 = 1
+    store(#SIMULATION_STATE + 258, U1 (value_id258))
+    store(#SIMULATION_STATE + 259, U1 (value_id258))
+    
+
+
+    // 237 com_on 2 6741894066158890901 
+    let value_id260 = 1
+    store(#SIMULATION_STATE + 260, U1 (value_id260))
+    store(#SIMULATION_STATE + 261, U1 (value_id260))
+    
+
+
+    // 226 com_on 2 3990101100463026256 
+    let value_id262 = 1
+    store(#SIMULATION_STATE + 262, U1 (value_id262))
+    store(#SIMULATION_STATE + 263, U1 (value_id262))
+    
+
+
+    // 206 com_on 2 751394407524233464 
+    let value_id264 = 1
+    store(#SIMULATION_STATE + 264, U1 (value_id264))
+    store(#SIMULATION_STATE + 265, U1 (value_id264))
+    
+
+
+    // 100 com_on 2 506109882556767892 
+    let value_id266 = 1
+    store(#SIMULATION_STATE + 266, U1 (value_id266))
+    store(#SIMULATION_STATE + 267, U1 (value_id266))
+    
+
+
+    // 75 com_custom 8 5508864567531640846 
+    
+
+
+    // 74 com_custom 8 7385400359604595589 
+    
+
+
+    // 73 com_custom 8 4558334013969882168 
+    
+
+
+    // 72 com_custom 8 3067039436593061942 
+    
+
+
+    // 71 com_custom 8 5448160051714240898 
+    
+
+
+    // 70 com_custom 8 2433384593751225502 
+    
+
+
+    // 69 com_custom 8 1979237387421410526 
+    
+
+
+    // 68 com_custom 8 4178200028260564754 
+    
+
+
+    // 67 com_custom 8 8621001470008076056 
+    
+
+
+    // 66 com_custom 8 989610509271574253 
+    
+
+
+    // 65 com_custom 8 6327367195893928340 
+    
+
+
+    // 64 com_custom 8 8346973097772036783 
+    
+
+
+    // 63 com_custom 8 4214736121962526637 
+    
+
+
+    // 62 com_custom 8 2303825524766011723 
+    
+
+
+    // 60 com_custom 8 4471823326507498895 
+    
+
+
+    // 59 com_custom 8 2868583028852990215 
+    
+
+
+    // 58 com_custom 8 8643396160757473832 
+    
+
+
+    // 56 com_custom 8 1905985346502394831 
+    
+
+
+    // 55 com_custom 8 7014202477797746760 
+    
+
+
+    // 54 com_custom 8 5576227894633592795 
+    
+
+
+    // 53 com_custom 8 6503420522648959225 
+    
+
+
+    // 49 com_custom 8 7385295782071029079 
+    
+
+
+    // 45 com_custom 8 4919372341631911941 
+    
+
+
+    // 44 com_custom 8 9022749570453452880 
+    
+
+
+    // 42 com_custom 8 6840680076926126151 
+    
+
+
+    // 41 com_custom 8 7281866354208722079 
+    
+
+
+    // 39 com_custom 8 7270635955846455953 
+    
+
+
+    // 37 com_custom 8 4667861848801595190 
+    
+
+
+    // 36 com_custom 8 355833415193129229 
+    
+
+
+    // 34 com_custom 8 4253464963945242439 
+    
+
+
+    // 33 com_custom 8 8002516609073995301 
+    
+
+
+    // 10 com_custom 8 2909669246978464684 
+    
+
+
+    // 8 com_custom 8 757925656744402816 
+    
+
+
+    // 7 com_splitter_bit_8 2 8691470194311084254 
+    let input_7 = load(<U8>, #SIMULATION_STATE + 268)
+    let value_id270 = input_7
+    store(#SIMULATION_STATE + 270, U1 (value_id270))
+    store(#SIMULATION_STATE + 271, U1 (value_id270))
+    let value_id272 = (input_7 >> 1) & 1
+    store(#SIMULATION_STATE + 272, U1 (value_id272))
+    store(#SIMULATION_STATE + 273, U1 (value_id272))
+    let value_id274 = (input_7 >> 2) & 1
+    store(#SIMULATION_STATE + 274, U1 (value_id274))
+    store(#SIMULATION_STATE + 275, U1 (value_id274))
+    let value_id276 = (input_7 >> 3) & 1
+    store(#SIMULATION_STATE + 276, U1 (value_id276))
+    store(#SIMULATION_STATE + 277, U1 (value_id276))
+    let value_id278 = (input_7 >> 4) & 1
+    store(#SIMULATION_STATE + 278, U1 (value_id278))
+    store(#SIMULATION_STATE + 279, U1 (value_id278))
+    let value_id280 = (input_7 >> 5) & 1
+    store(#SIMULATION_STATE + 280, U1 (value_id280))
+    store(#SIMULATION_STATE + 281, U1 (value_id280))
+    let value_id282 = (input_7 >> 6) & 1
+    store(#SIMULATION_STATE + 282, U1 (value_id282))
+    store(#SIMULATION_STATE + 283, U1 (value_id282))
+    let value_id284 = (input_7 >> 7) & 1
+    store(#SIMULATION_STATE + 284, U1 (value_id284))
+    store(#SIMULATION_STATE + 285, U1 (value_id284))
+    
+
+
+    // 6 com_splitter_bit_8 2 3073349938438526925 
+    let input_6 = load(<U8>, #SIMULATION_STATE + 286)
+    let value_id288 = input_6
+    store(#SIMULATION_STATE + 288, U1 (value_id288))
+    store(#SIMULATION_STATE + 289, U1 (value_id288))
+    let value_id290 = (input_6 >> 1) & 1
+    store(#SIMULATION_STATE + 290, U1 (value_id290))
+    store(#SIMULATION_STATE + 291, U1 (value_id290))
+    let value_id292 = (input_6 >> 2) & 1
+    store(#SIMULATION_STATE + 292, U1 (value_id292))
+    store(#SIMULATION_STATE + 293, U1 (value_id292))
+    let value_id294 = (input_6 >> 3) & 1
+    store(#SIMULATION_STATE + 294, U1 (value_id294))
+    store(#SIMULATION_STATE + 295, U1 (value_id294))
+    let value_id296 = (input_6 >> 4) & 1
+    store(#SIMULATION_STATE + 296, U1 (value_id296))
+    store(#SIMULATION_STATE + 297, U1 (value_id296))
+    let value_id298 = (input_6 >> 5) & 1
+    store(#SIMULATION_STATE + 298, U1 (value_id298))
+    store(#SIMULATION_STATE + 299, U1 (value_id298))
+    let value_id300 = (input_6 >> 6) & 1
+    store(#SIMULATION_STATE + 300, U1 (value_id300))
+    store(#SIMULATION_STATE + 301, U1 (value_id300))
+    let value_id302 = (input_6 >> 7) & 1
+    store(#SIMULATION_STATE + 302, U1 (value_id302))
+    store(#SIMULATION_STATE + 303, U1 (value_id302))
+    
+
+
+    // 32 com_and_bit 2 7953982506024152637 
+    let value_id304 = load(<U1>, #SIMULATION_STATE + 302) & load(<U1>, #SIMULATION_STATE + 284)
+    store(#SIMULATION_STATE + 304, U1 (value_id304))
+    store(#SIMULATION_STATE + 305, U1 (value_id304))
+    
+
+
+    // 76 com_switch_bit 2 1925694734027706735 
+    store(#SIMULATION_STATE + 807, U1  0)
+    store(#SIMULATION_STATE + 806, U1 0)
+    store(#SIMULATION_STATE + 810, U1 0)
+    var vid807 = U1  0
+    var and_field_id807 = ~vid807
+    var component_id_id807 = 0
+    var component_top_id_id807 = 0
+    var pin_index_id807 = 0
+    if load(<U1>, #SIMULATION_STATE + 304) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 304)))
+        if component_id_id807 != 0 && vid807 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id807)
+            set_setting(sim_short_circuit_component_id_2, U64 76)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id807)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id807)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 0)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 532)
+            set_setting(sim_short_circuit_value_1, U64 vid807)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid807 |= value
+        and_field_id807 &= value
+        store(#SIMULATION_STATE + 807, value)
+        store(#SIMULATION_STATE + 811, value)
+        component_id_id807 = 76
+        component_top_id_id807 = 0
+        pin_index_id807 = 0
+        store(#SIMULATION_STATE + 806, U8 1)
+        store(#SIMULATION_STATE + 810, U8 1)
+    }
+    
+
+
+    // 31 com_nor_bit 2 9149931116012712290 
+    let value_id306 = ~(load(<U1>, #SIMULATION_STATE + 284) | load(<U1>, #SIMULATION_STATE + 302))
+    store(#SIMULATION_STATE + 306, U1 (value_id306))
+    store(#SIMULATION_STATE + 307, U1 (value_id306))
+    
+
+
+    // 30 com_nor_bit 2 8795941894907070935 
+    let value_id308 = ~(load(<U1>, #SIMULATION_STATE + 306) | load(<U1>, #SIMULATION_STATE + 304))
+    store(#SIMULATION_STATE + 308, U1 (value_id308))
+    store(#SIMULATION_STATE + 309, U1 (value_id308))
+    
+
+
+    // 29 com_and_bit 2 3728548360692591518 
+    let value_id310 = load(<U1>, #SIMULATION_STATE + 300) & load(<U1>, #SIMULATION_STATE + 282)
+    store(#SIMULATION_STATE + 310, U1 (value_id310))
+    store(#SIMULATION_STATE + 311, U1 (value_id310))
+    
+
+
+    // 336 com_cc_input_buffer 1 0 
+    let value_id312 = load(<U1>, #SIMULATION_STATE + 310)
+    store(#SIMULATION_STATE + 312, U1 (value_id312))
+    store(#SIMULATION_STATE + 313, U1 (value_id312))
+    
+
+
+    // 337 com_switch_bit 2 2782707272472093186 
+    store(#SIMULATION_STATE + 789, U1  0)
+    store(#SIMULATION_STATE + 788, U1 0)
+    store(#SIMULATION_STATE + 804, U1 0)
+    var vid789 = U1  0
+    var and_field_id789 = ~vid789
+    var component_id_id789 = 0
+    var component_top_id_id789 = 0
+    var pin_index_id789 = 0
+    if load(<U1>, #SIMULATION_STATE + 312) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 337)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 805, value)
+        component_id_id789 = 337
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 804, U8 1)
+    }
+    
+
+
+    // 28 com_nor_bit 2 3000539084310774889 
+    let value_id314 = ~(load(<U1>, #SIMULATION_STATE + 282) | load(<U1>, #SIMULATION_STATE + 300))
+    store(#SIMULATION_STATE + 314, U1 (value_id314))
+    store(#SIMULATION_STATE + 315, U1 (value_id314))
+    
+
+
+    // 27 com_nor_bit 2 4821902706089047440 
+    let value_id316 = ~(load(<U1>, #SIMULATION_STATE + 314) | load(<U1>, #SIMULATION_STATE + 310))
+    store(#SIMULATION_STATE + 316, U1 (value_id316))
+    store(#SIMULATION_STATE + 317, U1 (value_id316))
+    
+
+
+    // 320 com_cc_input_buffer 1 0 
+    let value_id318 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 318, U1 (value_id318))
+    store(#SIMULATION_STATE + 319, U1 (value_id318))
+    
+
+
+    // 316 com_cc_input_buffer 1 0 
+    let value_id320 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 320, U1 (value_id320))
+    store(#SIMULATION_STATE + 321, U1 (value_id320))
+    
+
+
+    // 310 com_cc_input_buffer 1 0 
+    let value_id322 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 322, U1 (value_id322))
+    store(#SIMULATION_STATE + 323, U1 (value_id322))
+    
+
+
+    // 267 com_cc_input_buffer 1 0 
+    let value_id324 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 324, U1 (value_id324))
+    store(#SIMULATION_STATE + 325, U1 (value_id324))
+    
+
+
+    // 187 com_cc_input_buffer 1 0 
+    let value_id326 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 326, U1 (value_id326))
+    store(#SIMULATION_STATE + 327, U1 (value_id326))
+    
+
+
+    // 174 com_cc_input_buffer 1 0 
+    let value_id328 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 328, U1 (value_id328))
+    store(#SIMULATION_STATE + 329, U1 (value_id328))
+    
+
+
+    // 161 com_cc_input_buffer 1 0 
+    let value_id330 = load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 330, U1 (value_id330))
+    store(#SIMULATION_STATE + 331, U1 (value_id330))
+    
+
+
+    // 25 com_and_bit 2 5797632620196728202 
+    let value_id332 = load(<U1>, #SIMULATION_STATE + 298) & load(<U1>, #SIMULATION_STATE + 280)
+    store(#SIMULATION_STATE + 332, U1 (value_id332))
+    store(#SIMULATION_STATE + 333, U1 (value_id332))
+    
+
+
+    // 321 com_cc_input_buffer 1 0 
+    let value_id334 = load(<U1>, #SIMULATION_STATE + 332)
+    store(#SIMULATION_STATE + 334, U1 (value_id334))
+    store(#SIMULATION_STATE + 335, U1 (value_id334))
+    
+
+
+    // 322 com_and_bit 2 8852713774730215582 
+    let value_id336 = load(<U1>, #SIMULATION_STATE + 318) & load(<U1>, #SIMULATION_STATE + 334)
+    store(#SIMULATION_STATE + 336, U1 (value_id336))
+    store(#SIMULATION_STATE + 337, U1 (value_id336))
+    
+
+
+    // 324 com_cc_input_buffer 1 0 
+    let value_id338 = load(<U1>, #SIMULATION_STATE + 336)
+    store(#SIMULATION_STATE + 338, U1 (value_id338))
+    store(#SIMULATION_STATE + 339, U1 (value_id338))
+    
+
+
+    // 328 com_switch_bit 2 294286609714413644 
+    if load(<U1>, #SIMULATION_STATE + 338) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 328)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 799, value)
+        component_id_id789 = 328
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 798, U8 1)
+    }
+    
+
+
+    // 306 com_cc_input_buffer 1 0 
+    let value_id340 = load(<U1>, #SIMULATION_STATE + 332)
+    store(#SIMULATION_STATE + 340, U1 (value_id340))
+    store(#SIMULATION_STATE + 341, U1 (value_id340))
+    
+
+
+    // 307 com_switch_bit 2 3003954067454508106 
+    store(#SIMULATION_STATE + 825, U1  0)
+    store(#SIMULATION_STATE + 824, U1 0)
+    store(#SIMULATION_STATE + 838, U1 0)
+    var vid825 = U1  0
+    var and_field_id825 = ~vid825
+    var component_id_id825 = 0
+    var component_top_id_id825 = 0
+    var pin_index_id825 = 0
+    if load(<U1>, #SIMULATION_STATE + 340) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 307)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 839, value)
+        component_id_id825 = 307
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 838, U8 1)
+    }
+    
+
+
+    // 22 com_nor_bit 2 4844103648165599852 
+    let value_id342 = ~(load(<U1>, #SIMULATION_STATE + 280) | load(<U1>, #SIMULATION_STATE + 298))
+    store(#SIMULATION_STATE + 342, U1 (value_id342))
+    store(#SIMULATION_STATE + 343, U1 (value_id342))
+    
+
+
+    // 21 com_nor_bit 2 6757871003368058233 
+    let value_id344 = ~(load(<U1>, #SIMULATION_STATE + 342) | load(<U1>, #SIMULATION_STATE + 332))
+    store(#SIMULATION_STATE + 344, U1 (value_id344))
+    store(#SIMULATION_STATE + 345, U1 (value_id344))
+    
+
+
+    // 315 com_cc_input_buffer 1 0 
+    let value_id346 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 346, U1 (value_id346))
+    store(#SIMULATION_STATE + 347, U1 (value_id346))
+    
+
+
+    // 318 com_and_bit 2 6660966176730956673 
+    let value_id348 = load(<U1>, #SIMULATION_STATE + 320) & load(<U1>, #SIMULATION_STATE + 346)
+    store(#SIMULATION_STATE + 348, U1 (value_id348))
+    store(#SIMULATION_STATE + 349, U1 (value_id348))
+    
+
+
+    // 308 com_cc_input_buffer 1 0 
+    let value_id350 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 350, U1 (value_id350))
+    store(#SIMULATION_STATE + 351, U1 (value_id350))
+    
+
+
+    // 291 com_cc_input_buffer 1 0 
+    let value_id352 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 352, U1 (value_id352))
+    store(#SIMULATION_STATE + 353, U1 (value_id352))
+    
+
+
+    // 285 com_cc_input_buffer 1 0 
+    let value_id354 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 354, U1 (value_id354))
+    store(#SIMULATION_STATE + 355, U1 (value_id354))
+    
+
+
+    // 278 com_cc_input_buffer 1 0 
+    let value_id356 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 356, U1 (value_id356))
+    store(#SIMULATION_STATE + 357, U1 (value_id356))
+    
+
+
+    // 270 com_cc_input_buffer 1 0 
+    let value_id358 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 358, U1 (value_id358))
+    store(#SIMULATION_STATE + 359, U1 (value_id358))
+    
+
+
+    // 261 com_cc_input_buffer 1 0 
+    let value_id360 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 360, U1 (value_id360))
+    store(#SIMULATION_STATE + 361, U1 (value_id360))
+    
+
+
+    // 268 com_and_bit 2 4283815188096319554 
+    let value_id362 = load(<U1>, #SIMULATION_STATE + 324) & load(<U1>, #SIMULATION_STATE + 360)
+    store(#SIMULATION_STATE + 362, U1 (value_id362))
+    store(#SIMULATION_STATE + 363, U1 (value_id362))
+    
+
+
+    // 256 com_cc_input_buffer 1 0 
+    let value_id364 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 364, U1 (value_id364))
+    store(#SIMULATION_STATE + 365, U1 (value_id364))
+    
+
+
+    // 180 com_cc_input_buffer 1 0 
+    let value_id366 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 366, U1 (value_id366))
+    store(#SIMULATION_STATE + 367, U1 (value_id366))
+    
+
+
+    // 170 com_cc_input_buffer 1 0 
+    let value_id368 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 368, U1 (value_id368))
+    store(#SIMULATION_STATE + 369, U1 (value_id368))
+    
+
+
+    // 171 com_and_bit 2 3655103148258055937 
+    let value_id370 = load(<U1>, #SIMULATION_STATE + 328) & load(<U1>, #SIMULATION_STATE + 368)
+    store(#SIMULATION_STATE + 370, U1 (value_id370))
+    store(#SIMULATION_STATE + 371, U1 (value_id370))
+    
+
+
+    // 157 com_cc_input_buffer 1 0 
+    let value_id372 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 372, U1 (value_id372))
+    store(#SIMULATION_STATE + 373, U1 (value_id372))
+    
+
+
+    // 158 com_and_bit 2 4302586722040349860 
+    let value_id374 = load(<U1>, #SIMULATION_STATE + 330) & load(<U1>, #SIMULATION_STATE + 372)
+    store(#SIMULATION_STATE + 374, U1 (value_id374))
+    store(#SIMULATION_STATE + 375, U1 (value_id374))
+    
+
+
+    // 148 com_cc_input_buffer 1 0 
+    let value_id376 = load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 376, U1 (value_id376))
+    store(#SIMULATION_STATE + 377, U1 (value_id376))
+    
+
+
+    // 20 com_and_bit 2 12636642320324533 
+    let value_id378 = load(<U1>, #SIMULATION_STATE + 296) & load(<U1>, #SIMULATION_STATE + 278)
+    store(#SIMULATION_STATE + 378, U1 (value_id378))
+    store(#SIMULATION_STATE + 379, U1 (value_id378))
+    
+
+
+    // 317 com_cc_input_buffer 1 0 
+    let value_id380 = load(<U1>, #SIMULATION_STATE + 378)
+    store(#SIMULATION_STATE + 380, U1 (value_id380))
+    store(#SIMULATION_STATE + 381, U1 (value_id380))
+    
+
+
+    // 319 com_and_bit 2 4845566385197344948 
+    let value_id382 = load(<U1>, #SIMULATION_STATE + 348) & load(<U1>, #SIMULATION_STATE + 380)
+    store(#SIMULATION_STATE + 382, U1 (value_id382))
+    store(#SIMULATION_STATE + 383, U1 (value_id382))
+    
+
+
+    // 325 com_cc_input_buffer 1 0 
+    let value_id384 = load(<U1>, #SIMULATION_STATE + 382)
+    store(#SIMULATION_STATE + 384, U1 (value_id384))
+    store(#SIMULATION_STATE + 385, U1 (value_id384))
+    
+
+
+    // 326 com_switch_bit 2 5857829065542404626 
+    if load(<U1>, #SIMULATION_STATE + 384) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 326)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 797, value)
+        component_id_id789 = 326
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 796, U8 1)
+    }
+    
+
+
+    // 290 com_cc_input_buffer 1 0 
+    let value_id386 = load(<U1>, #SIMULATION_STATE + 378)
+    store(#SIMULATION_STATE + 386, U1 (value_id386))
+    store(#SIMULATION_STATE + 387, U1 (value_id386))
+    
+
+
+    // 292 com_and_bit 2 6840674328463095928 
+    let value_id388 = load(<U1>, #SIMULATION_STATE + 386) & load(<U1>, #SIMULATION_STATE + 352)
+    store(#SIMULATION_STATE + 388, U1 (value_id388))
+    store(#SIMULATION_STATE + 389, U1 (value_id388))
+    
+
+
+    // 294 com_cc_input_buffer 1 0 
+    let value_id390 = load(<U1>, #SIMULATION_STATE + 388)
+    store(#SIMULATION_STATE + 390, U1 (value_id390))
+    store(#SIMULATION_STATE + 391, U1 (value_id390))
+    
+
+
+    // 298 com_switch_bit 2 7628024749180082734 
+    if load(<U1>, #SIMULATION_STATE + 390) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 298)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 833, value)
+        component_id_id825 = 298
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 832, U8 1)
+    }
+    
+
+
+    // 233 com_cc_input_buffer 1 0 
+    let value_id392 = load(<U1>, #SIMULATION_STATE + 378)
+    store(#SIMULATION_STATE + 392, U1 (value_id392))
+    store(#SIMULATION_STATE + 393, U1 (value_id392))
+    
+
+
+    // 234 com_switch_bit 2 601045178860081094 
+    store(#SIMULATION_STATE + 851, U1  0)
+    store(#SIMULATION_STATE + 850, U1 0)
+    store(#SIMULATION_STATE + 852, U1 0)
+    var vid851 = U1  0
+    var and_field_id851 = ~vid851
+    var component_id_id851 = 0
+    var component_top_id_id851 = 0
+    var pin_index_id851 = 0
+    if load(<U1>, #SIMULATION_STATE + 392) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 260)))
+        if component_id_id851 != 0 && vid851 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id851)
+            set_setting(sim_short_circuit_component_id_2, U64 234)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id851)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id851)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2303825524766011723)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 74)
+            set_setting(sim_short_circuit_value_1, U64 vid851)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid851 |= value
+        and_field_id851 &= value
+        store(#SIMULATION_STATE + 851, value)
+        store(#SIMULATION_STATE + 853, value)
+        component_id_id851 = 234
+        component_top_id_id851 = 2303825524766011723
+        pin_index_id851 = 0
+        store(#SIMULATION_STATE + 850, U8 1)
+        store(#SIMULATION_STATE + 852, U8 1)
+    }
+    
+
+
+    // 19 com_nor_bit 2 7422356026595846976 
+    let value_id394 = ~(load(<U1>, #SIMULATION_STATE + 278) | load(<U1>, #SIMULATION_STATE + 296))
+    store(#SIMULATION_STATE + 394, U1 (value_id394))
+    store(#SIMULATION_STATE + 395, U1 (value_id394))
+    
+
+
+    // 18 com_nor_bit 2 4343000998468322500 
+    let value_id396 = ~(load(<U1>, #SIMULATION_STATE + 394) | load(<U1>, #SIMULATION_STATE + 378))
+    store(#SIMULATION_STATE + 396, U1 (value_id396))
+    store(#SIMULATION_STATE + 397, U1 (value_id396))
+    
+
+
+    // 309 com_cc_input_buffer 1 0 
+    let value_id398 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 398, U1 (value_id398))
+    store(#SIMULATION_STATE + 399, U1 (value_id398))
+    
+
+
+    // 311 com_and_bit 2 5820684338313732236 
+    let value_id400 = load(<U1>, #SIMULATION_STATE + 398) & load(<U1>, #SIMULATION_STATE + 350)
+    store(#SIMULATION_STATE + 400, U1 (value_id400))
+    store(#SIMULATION_STATE + 401, U1 (value_id400))
+    
+
+
+    // 286 com_cc_input_buffer 1 0 
+    let value_id402 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 402, U1 (value_id402))
+    store(#SIMULATION_STATE + 403, U1 (value_id402))
+    
+
+
+    // 288 com_and_bit 2 5700188947329703077 
+    let value_id404 = load(<U1>, #SIMULATION_STATE + 402) & load(<U1>, #SIMULATION_STATE + 354)
+    store(#SIMULATION_STATE + 404, U1 (value_id404))
+    store(#SIMULATION_STATE + 405, U1 (value_id404))
+    
+
+
+    // 276 com_cc_input_buffer 1 0 
+    let value_id406 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 406, U1 (value_id406))
+    store(#SIMULATION_STATE + 407, U1 (value_id406))
+    
+
+
+    // 269 com_cc_input_buffer 1 0 
+    let value_id408 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 408, U1 (value_id408))
+    store(#SIMULATION_STATE + 409, U1 (value_id408))
+    
+
+
+    // 272 com_and_bit 2 1650345653342582755 
+    let value_id410 = load(<U1>, #SIMULATION_STATE + 358) & load(<U1>, #SIMULATION_STATE + 408)
+    store(#SIMULATION_STATE + 410, U1 (value_id410))
+    store(#SIMULATION_STATE + 411, U1 (value_id410))
+    
+
+
+    // 260 com_cc_input_buffer 1 0 
+    let value_id412 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 412, U1 (value_id412))
+    store(#SIMULATION_STATE + 413, U1 (value_id412))
+    
+
+
+    // 263 com_and_bit 2 6656264506801240251 
+    let value_id414 = load(<U1>, #SIMULATION_STATE + 362) & load(<U1>, #SIMULATION_STATE + 412)
+    store(#SIMULATION_STATE + 414, U1 (value_id414))
+    store(#SIMULATION_STATE + 415, U1 (value_id414))
+    
+
+
+    // 250 com_cc_input_buffer 1 0 
+    let value_id416 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 416, U1 (value_id416))
+    store(#SIMULATION_STATE + 417, U1 (value_id416))
+    
+
+
+    // 257 com_and_bit 2 5832490171448141166 
+    let value_id418 = load(<U1>, #SIMULATION_STATE + 364) & load(<U1>, #SIMULATION_STATE + 416)
+    store(#SIMULATION_STATE + 418, U1 (value_id418))
+    store(#SIMULATION_STATE + 419, U1 (value_id418))
+    
+
+
+    // 246 com_cc_input_buffer 1 0 
+    let value_id420 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 420, U1 (value_id420))
+    store(#SIMULATION_STATE + 421, U1 (value_id420))
+    
+
+
+    // 178 com_cc_input_buffer 1 0 
+    let value_id422 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 422, U1 (value_id422))
+    store(#SIMULATION_STATE + 423, U1 (value_id422))
+    
+
+
+    // 181 com_and_bit 2 2705086275808377863 
+    let value_id424 = load(<U1>, #SIMULATION_STATE + 422) & load(<U1>, #SIMULATION_STATE + 366)
+    store(#SIMULATION_STATE + 424, U1 (value_id424))
+    store(#SIMULATION_STATE + 425, U1 (value_id424))
+    
+
+
+    // 164 com_cc_input_buffer 1 0 
+    let value_id426 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 426, U1 (value_id426))
+    store(#SIMULATION_STATE + 427, U1 (value_id426))
+    
+
+
+    // 151 com_cc_input_buffer 1 0 
+    let value_id428 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 428, U1 (value_id428))
+    store(#SIMULATION_STATE + 429, U1 (value_id428))
+    
+
+
+    // 154 com_and_bit 2 2585997204751532349 
+    let value_id430 = load(<U1>, #SIMULATION_STATE + 374) & load(<U1>, #SIMULATION_STATE + 428)
+    store(#SIMULATION_STATE + 430, U1 (value_id430))
+    store(#SIMULATION_STATE + 431, U1 (value_id430))
+    
+
+
+    // 144 com_cc_input_buffer 1 0 
+    let value_id432 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 432, U1 (value_id432))
+    store(#SIMULATION_STATE + 433, U1 (value_id432))
+    
+
+
+    // 145 com_and_bit 2 23999335741767804 
+    let value_id434 = load(<U1>, #SIMULATION_STATE + 376) & load(<U1>, #SIMULATION_STATE + 432)
+    store(#SIMULATION_STATE + 434, U1 (value_id434))
+    store(#SIMULATION_STATE + 435, U1 (value_id434))
+    
+
+
+    // 132 com_cc_input_buffer 1 0 
+    let value_id436 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 436, U1 (value_id436))
+    store(#SIMULATION_STATE + 437, U1 (value_id436))
+    
+
+
+    // 122 com_cc_input_buffer 1 0 
+    let value_id438 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 438, U1 (value_id438))
+    store(#SIMULATION_STATE + 439, U1 (value_id438))
+    
+
+
+    // 117 com_cc_input_buffer 1 0 
+    let value_id440 = load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 440, U1 (value_id440))
+    store(#SIMULATION_STATE + 441, U1 (value_id440))
+    
+
+
+    // 16 com_nor_bit 2 4464411260387098868 
+    let value_id442 = ~(load(<U1>, #SIMULATION_STATE + 276) | load(<U1>, #SIMULATION_STATE + 294))
+    store(#SIMULATION_STATE + 442, U1 (value_id442))
+    store(#SIMULATION_STATE + 443, U1 (value_id442))
+    
+
+
+    // 15 com_and_bit 2 2751414797364498838 
+    let value_id444 = load(<U1>, #SIMULATION_STATE + 294) & load(<U1>, #SIMULATION_STATE + 276)
+    store(#SIMULATION_STATE + 444, U1 (value_id444))
+    store(#SIMULATION_STATE + 445, U1 (value_id444))
+    
+
+
+    // 314 com_cc_input_buffer 1 0 
+    let value_id446 = load(<U1>, #SIMULATION_STATE + 444)
+    store(#SIMULATION_STATE + 446, U1 (value_id446))
+    store(#SIMULATION_STATE + 447, U1 (value_id446))
+    
+
+
+    // 313 com_and_bit 2 1920924780408112781 
+    let value_id448 = load(<U1>, #SIMULATION_STATE + 322) & load(<U1>, #SIMULATION_STATE + 446)
+    store(#SIMULATION_STATE + 448, U1 (value_id448))
+    store(#SIMULATION_STATE + 449, U1 (value_id448))
+    
+
+
+    // 312 com_and_bit 2 8431418670666255006 
+    let value_id450 = load(<U1>, #SIMULATION_STATE + 400) & load(<U1>, #SIMULATION_STATE + 448)
+    store(#SIMULATION_STATE + 450, U1 (value_id450))
+    store(#SIMULATION_STATE + 451, U1 (value_id450))
+    
+
+
+    // 323 com_cc_input_buffer 1 0 
+    let value_id452 = load(<U1>, #SIMULATION_STATE + 450)
+    store(#SIMULATION_STATE + 452, U1 (value_id452))
+    store(#SIMULATION_STATE + 453, U1 (value_id452))
+    
+
+
+    // 327 com_switch_bit 2 6594061243071175896 
+    if load(<U1>, #SIMULATION_STATE + 452) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 327)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 801, value)
+        component_id_id789 = 327
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 800, U8 1)
+    }
+    
+
+
+    // 287 com_cc_input_buffer 1 0 
+    let value_id454 = load(<U1>, #SIMULATION_STATE + 444)
+    store(#SIMULATION_STATE + 454, U1 (value_id454))
+    store(#SIMULATION_STATE + 455, U1 (value_id454))
+    
+
+
+    // 289 com_and_bit 2 5788614412713850768 
+    let value_id456 = load(<U1>, #SIMULATION_STATE + 404) & load(<U1>, #SIMULATION_STATE + 454)
+    store(#SIMULATION_STATE + 456, U1 (value_id456))
+    store(#SIMULATION_STATE + 457, U1 (value_id456))
+    
+
+
+    // 293 com_cc_input_buffer 1 0 
+    let value_id458 = load(<U1>, #SIMULATION_STATE + 456)
+    store(#SIMULATION_STATE + 458, U1 (value_id458))
+    store(#SIMULATION_STATE + 459, U1 (value_id458))
+    
+
+
+    // 297 com_switch_bit 2 6060172705298989590 
+    if load(<U1>, #SIMULATION_STATE + 458) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 297)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 835, value)
+        component_id_id825 = 297
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 834, U8 1)
+    }
+    
+
+
+    // 229 com_cc_input_buffer 1 0 
+    let value_id460 = load(<U1>, #SIMULATION_STATE + 444)
+    store(#SIMULATION_STATE + 460, U1 (value_id460))
+    store(#SIMULATION_STATE + 461, U1 (value_id460))
+    
+
+
+    // 230 com_switch_bit 2 8963716173381596976 
+    store(#SIMULATION_STATE + 895, U1  0)
+    store(#SIMULATION_STATE + 894, U1 0)
+    store(#SIMULATION_STATE + 904, U1 0)
+    var vid895 = U1  0
+    var and_field_id895 = ~vid895
+    var component_id_id895 = 0
+    var component_top_id_id895 = 0
+    var pin_index_id895 = 0
+    if load(<U1>, #SIMULATION_STATE + 460) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 262)))
+        if component_id_id895 != 0 && vid895 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id895)
+            set_setting(sim_short_circuit_component_id_2, U64 230)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id895)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id895)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 4471823326507498895)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 72)
+            set_setting(sim_short_circuit_value_1, U64 vid895)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid895 |= value
+        and_field_id895 &= value
+        store(#SIMULATION_STATE + 895, value)
+        store(#SIMULATION_STATE + 905, value)
+        component_id_id895 = 230
+        component_top_id_id895 = 4471823326507498895
+        pin_index_id895 = 0
+        store(#SIMULATION_STATE + 894, U8 1)
+        store(#SIMULATION_STATE + 904, U8 1)
+    }
+    
+
+
+    // 61 com_and_bit 2 4469286278846631954 
+    let value_id462 = load(<U1>, #SIMULATION_STATE + 396) & load(<U1>, #SIMULATION_STATE + 444)
+    store(#SIMULATION_STATE + 462, U1 (value_id462))
+    store(#SIMULATION_STATE + 463, U1 (value_id462))
+    
+
+
+    // 232 com_cc_input_buffer 1 0 
+    let value_id464 = load(<U1>, #SIMULATION_STATE + 462)
+    store(#SIMULATION_STATE + 464, U1 (value_id464))
+    store(#SIMULATION_STATE + 465, U1 (value_id464))
+    
+
+
+    // 236 com_switch_bit 2 6820155166153597746 
+    if load(<U1>, #SIMULATION_STATE + 464) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 260)))
+        if component_id_id851 != 0 && vid851 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id851)
+            set_setting(sim_short_circuit_component_id_2, U64 236)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id851)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id851)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2303825524766011723)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 74)
+            set_setting(sim_short_circuit_value_1, U64 vid851)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid851 |= value
+        and_field_id851 &= value
+        store(#SIMULATION_STATE + 851, value)
+        store(#SIMULATION_STATE + 855, value)
+        component_id_id851 = 236
+        component_top_id_id851 = 2303825524766011723
+        pin_index_id851 = 0
+        store(#SIMULATION_STATE + 850, U8 1)
+        store(#SIMULATION_STATE + 854, U8 1)
+    }
+    
+
+
+    // 17 com_nor_bit 2 5137116139792490014 
+    let value_id466 = ~(load(<U1>, #SIMULATION_STATE + 442) | load(<U1>, #SIMULATION_STATE + 444))
+    store(#SIMULATION_STATE + 466, U1 (value_id466))
+    store(#SIMULATION_STATE + 467, U1 (value_id466))
+    
+
+
+    // 277 com_cc_input_buffer 1 0 
+    let value_id468 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 468, U1 (value_id468))
+    store(#SIMULATION_STATE + 469, U1 (value_id468))
+    
+
+
+    // 271 com_cc_input_buffer 1 0 
+    let value_id470 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 470, U1 (value_id470))
+    store(#SIMULATION_STATE + 471, U1 (value_id470))
+    
+
+
+    // 262 com_cc_input_buffer 1 0 
+    let value_id472 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 472, U1 (value_id472))
+    store(#SIMULATION_STATE + 473, U1 (value_id472))
+    
+
+
+    // 249 com_cc_input_buffer 1 0 
+    let value_id474 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 474, U1 (value_id474))
+    store(#SIMULATION_STATE + 475, U1 (value_id474))
+    
+
+
+    // 244 com_cc_input_buffer 1 0 
+    let value_id476 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 476, U1 (value_id476))
+    store(#SIMULATION_STATE + 477, U1 (value_id476))
+    
+
+
+    // 217 com_cc_input_buffer 1 0 
+    let value_id478 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 478, U1 (value_id478))
+    store(#SIMULATION_STATE + 479, U1 (value_id478))
+    
+
+
+    // 212 com_cc_input_buffer 1 0 
+    let value_id480 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 480, U1 (value_id480))
+    store(#SIMULATION_STATE + 481, U1 (value_id480))
+    
+
+
+    // 179 com_cc_input_buffer 1 0 
+    let value_id482 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 482, U1 (value_id482))
+    store(#SIMULATION_STATE + 483, U1 (value_id482))
+    
+
+
+    // 163 com_cc_input_buffer 1 0 
+    let value_id484 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 484, U1 (value_id484))
+    store(#SIMULATION_STATE + 485, U1 (value_id484))
+    
+
+
+    // 167 com_and_bit 2 8406268167204970510 
+    let value_id486 = load(<U1>, #SIMULATION_STATE + 426) & load(<U1>, #SIMULATION_STATE + 484)
+    store(#SIMULATION_STATE + 486, U1 (value_id486))
+    store(#SIMULATION_STATE + 487, U1 (value_id486))
+    
+
+
+    // 177 com_and_bit 2 1196166164322804821 
+    let value_id488 = load(<U1>, #SIMULATION_STATE + 370) & load(<U1>, #SIMULATION_STATE + 486)
+    store(#SIMULATION_STATE + 488, U1 (value_id488))
+    store(#SIMULATION_STATE + 489, U1 (value_id488))
+    
+
+
+    // 150 com_cc_input_buffer 1 0 
+    let value_id490 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 490, U1 (value_id490))
+    store(#SIMULATION_STATE + 491, U1 (value_id490))
+    
+
+
+    // 138 com_cc_input_buffer 1 0 
+    let value_id492 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 492, U1 (value_id492))
+    store(#SIMULATION_STATE + 493, U1 (value_id492))
+    
+
+
+    // 141 com_and_bit 2 1730462349856507365 
+    let value_id494 = load(<U1>, #SIMULATION_STATE + 434) & load(<U1>, #SIMULATION_STATE + 492)
+    store(#SIMULATION_STATE + 494, U1 (value_id494))
+    store(#SIMULATION_STATE + 495, U1 (value_id494))
+    
+
+
+    // 130 com_cc_input_buffer 1 0 
+    let value_id496 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 496, U1 (value_id496))
+    store(#SIMULATION_STATE + 497, U1 (value_id496))
+    
+
+
+    // 121 com_cc_input_buffer 1 0 
+    let value_id498 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 498, U1 (value_id498))
+    store(#SIMULATION_STATE + 499, U1 (value_id498))
+    
+
+
+    // 111 com_cc_input_buffer 1 0 
+    let value_id500 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 500, U1 (value_id500))
+    store(#SIMULATION_STATE + 501, U1 (value_id500))
+    
+
+
+    // 118 com_and_bit 2 2870870753000220364 
+    let value_id502 = load(<U1>, #SIMULATION_STATE + 440) & load(<U1>, #SIMULATION_STATE + 500)
+    store(#SIMULATION_STATE + 502, U1 (value_id502))
+    store(#SIMULATION_STATE + 503, U1 (value_id502))
+    
+
+
+    // 88 com_cc_input_buffer 1 0 
+    let value_id504 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 504, U1 (value_id504))
+    store(#SIMULATION_STATE + 505, U1 (value_id504))
+    
+
+
+    // 85 com_cc_input_buffer 1 0 
+    let value_id506 = load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 506, U1 (value_id506))
+    store(#SIMULATION_STATE + 507, U1 (value_id506))
+    
+
+
+    // 14 com_and_bit 2 2955638682631912821 
+    let value_id508 = load(<U1>, #SIMULATION_STATE + 292) & load(<U1>, #SIMULATION_STATE + 274)
+    store(#SIMULATION_STATE + 508, U1 (value_id508))
+    store(#SIMULATION_STATE + 509, U1 (value_id508))
+    
+
+
+    // 275 com_cc_input_buffer 1 0 
+    let value_id510 = load(<U1>, #SIMULATION_STATE + 508)
+    store(#SIMULATION_STATE + 510, U1 (value_id510))
+    store(#SIMULATION_STATE + 511, U1 (value_id510))
+    
+
+
+    // 274 com_and_bit 2 6667706625488196066 
+    let value_id512 = load(<U1>, #SIMULATION_STATE + 470) & load(<U1>, #SIMULATION_STATE + 510)
+    store(#SIMULATION_STATE + 512, U1 (value_id512))
+    store(#SIMULATION_STATE + 513, U1 (value_id512))
+    
+
+
+    // 273 com_and_bit 2 3684621434772921841 
+    let value_id514 = load(<U1>, #SIMULATION_STATE + 410) & load(<U1>, #SIMULATION_STATE + 512)
+    store(#SIMULATION_STATE + 514, U1 (value_id514))
+    store(#SIMULATION_STATE + 515, U1 (value_id514))
+    
+
+
+    // 295 com_cc_input_buffer 1 0 
+    let value_id516 = load(<U1>, #SIMULATION_STATE + 514)
+    store(#SIMULATION_STATE + 516, U1 (value_id516))
+    store(#SIMULATION_STATE + 517, U1 (value_id516))
+    
+
+
+    // 296 com_switch_bit 2 2517208786066986722 
+    if load(<U1>, #SIMULATION_STATE + 516) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 296)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 829, value)
+        component_id_id825 = 296
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 828, U8 1)
+    }
+    
+
+
+    // 266 com_cc_input_buffer 1 0 
+    let value_id518 = load(<U1>, #SIMULATION_STATE + 508)
+    store(#SIMULATION_STATE + 518, U1 (value_id518))
+    store(#SIMULATION_STATE + 519, U1 (value_id518))
+    
+
+
+    // 265 com_and_bit 2 8764445406723418163 
+    let value_id520 = load(<U1>, #SIMULATION_STATE + 472) & load(<U1>, #SIMULATION_STATE + 518)
+    store(#SIMULATION_STATE + 520, U1 (value_id520))
+    store(#SIMULATION_STATE + 521, U1 (value_id520))
+    
+
+
+    // 264 com_and_bit 2 542773453521796977 
+    let value_id522 = load(<U1>, #SIMULATION_STATE + 414) & load(<U1>, #SIMULATION_STATE + 520)
+    store(#SIMULATION_STATE + 522, U1 (value_id522))
+    store(#SIMULATION_STATE + 523, U1 (value_id522))
+    
+
+
+    // 330 com_cc_input_buffer 1 0 
+    let value_id524 = load(<U1>, #SIMULATION_STATE + 522)
+    store(#SIMULATION_STATE + 524, U1 (value_id524))
+    store(#SIMULATION_STATE + 525, U1 (value_id524))
+    
+
+
+    // 331 com_switch_bit 2 7610274612413776226 
+    if load(<U1>, #SIMULATION_STATE + 524) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 331)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 795, value)
+        component_id_id789 = 331
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 794, U8 1)
+    }
+    
+
+
+    // 245 com_cc_input_buffer 1 0 
+    let value_id526 = load(<U1>, #SIMULATION_STATE + 508)
+    store(#SIMULATION_STATE + 526, U1 (value_id526))
+    store(#SIMULATION_STATE + 527, U1 (value_id526))
+    
+
+
+    // 247 com_and_bit 2 5520587686703518746 
+    let value_id528 = load(<U1>, #SIMULATION_STATE + 526) & load(<U1>, #SIMULATION_STATE + 476)
+    store(#SIMULATION_STATE + 528, U1 (value_id528))
+    store(#SIMULATION_STATE + 529, U1 (value_id528))
+    
+
+
+    // 248 com_and_bit 2 6040304318860099375 
+    let value_id530 = load(<U1>, #SIMULATION_STATE + 528) & load(<U1>, #SIMULATION_STATE + 420)
+    store(#SIMULATION_STATE + 530, U1 (value_id530))
+    store(#SIMULATION_STATE + 531, U1 (value_id530))
+    
+
+
+    // 231 com_cc_input_buffer 1 0 
+    let value_id532 = load(<U1>, #SIMULATION_STATE + 530)
+    store(#SIMULATION_STATE + 532, U1 (value_id532))
+    store(#SIMULATION_STATE + 533, U1 (value_id532))
+    
+
+
+    // 235 com_switch_bit 2 158893144626937381 
+    if load(<U1>, #SIMULATION_STATE + 532) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 260)))
+        if component_id_id851 != 0 && vid851 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id851)
+            set_setting(sim_short_circuit_component_id_2, U64 235)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id851)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id851)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2303825524766011723)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 74)
+            set_setting(sim_short_circuit_value_1, U64 vid851)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid851 |= value
+        and_field_id851 &= value
+        store(#SIMULATION_STATE + 851, value)
+        store(#SIMULATION_STATE + 859, value)
+        component_id_id851 = 235
+        component_top_id_id851 = 2303825524766011723
+        pin_index_id851 = 0
+        store(#SIMULATION_STATE + 850, U8 1)
+        store(#SIMULATION_STATE + 858, U8 1)
+    }
+    
+
+
+    // 218 com_cc_input_buffer 1 0 
+    let value_id534 = load(<U1>, #SIMULATION_STATE + 508)
+    store(#SIMULATION_STATE + 534, U1 (value_id534))
+    store(#SIMULATION_STATE + 535, U1 (value_id534))
+    
+
+
+    // 219 com_and_bit 2 7085884000949960097 
+    let value_id536 = load(<U1>, #SIMULATION_STATE + 478) & load(<U1>, #SIMULATION_STATE + 534)
+    store(#SIMULATION_STATE + 536, U1 (value_id536))
+    store(#SIMULATION_STATE + 537, U1 (value_id536))
+    
+
+
+    // 221 com_cc_input_buffer 1 0 
+    let value_id538 = load(<U1>, #SIMULATION_STATE + 536)
+    store(#SIMULATION_STATE + 538, U1 (value_id538))
+    store(#SIMULATION_STATE + 539, U1 (value_id538))
+    
+
+
+    // 225 com_switch_bit 2 8637904456720373919 
+    if load(<U1>, #SIMULATION_STATE + 538) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 262)))
+        if component_id_id895 != 0 && vid895 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id895)
+            set_setting(sim_short_circuit_component_id_2, U64 225)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id895)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id895)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 4471823326507498895)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 72)
+            set_setting(sim_short_circuit_value_1, U64 vid895)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid895 |= value
+        and_field_id895 &= value
+        store(#SIMULATION_STATE + 895, value)
+        store(#SIMULATION_STATE + 901, value)
+        component_id_id895 = 225
+        component_top_id_id895 = 4471823326507498895
+        pin_index_id895 = 0
+        store(#SIMULATION_STATE + 894, U8 1)
+        store(#SIMULATION_STATE + 900, U8 1)
+    }
+    
+
+
+    // 101 com_cc_input_buffer 1 0 
+    let value_id540 = load(<U1>, #SIMULATION_STATE + 508)
+    store(#SIMULATION_STATE + 540, U1 (value_id540))
+    store(#SIMULATION_STATE + 541, U1 (value_id540))
+    
+
+
+    // 102 com_switch_bit 2 4954781236290207598 
+    store(#SIMULATION_STATE + 875, U1  0)
+    store(#SIMULATION_STATE + 874, U1 0)
+    store(#SIMULATION_STATE + 880, U1 0)
+    var vid875 = U1  0
+    var and_field_id875 = ~vid875
+    var component_id_id875 = 0
+    var component_top_id_id875 = 0
+    var pin_index_id875 = 0
+    if load(<U1>, #SIMULATION_STATE + 540) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 266)))
+        if component_id_id875 != 0 && vid875 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id875)
+            set_setting(sim_short_circuit_component_id_2, U64 102)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id875)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id875)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 8002516609073995301)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 525)
+            set_setting(sim_short_circuit_value_1, U64 vid875)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid875 |= value
+        and_field_id875 &= value
+        store(#SIMULATION_STATE + 875, value)
+        store(#SIMULATION_STATE + 881, value)
+        component_id_id875 = 102
+        component_top_id_id875 = 8002516609073995301
+        pin_index_id875 = 0
+        store(#SIMULATION_STATE + 874, U8 1)
+        store(#SIMULATION_STATE + 880, U8 1)
+    }
+    
+
+
+    // 12 com_nor_bit 2 205664184713889292 
+    let value_id542 = ~(load(<U1>, #SIMULATION_STATE + 274) | load(<U1>, #SIMULATION_STATE + 292))
+    store(#SIMULATION_STATE + 542, U1 (value_id542))
+    store(#SIMULATION_STATE + 543, U1 (value_id542))
+    
+
+
+    // 13 com_nor_bit 2 4900709066968779259 
+    let value_id544 = ~(load(<U1>, #SIMULATION_STATE + 542) | load(<U1>, #SIMULATION_STATE + 508))
+    store(#SIMULATION_STATE + 544, U1 (value_id544))
+    store(#SIMULATION_STATE + 545, U1 (value_id544))
+    
+
+
+    // 283 com_cc_input_buffer 1 0 
+    let value_id546 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 546, U1 (value_id546))
+    store(#SIMULATION_STATE + 547, U1 (value_id546))
+    
+
+
+    // 284 com_and_bit 2 1954433519730276046 
+    let value_id548 = load(<U1>, #SIMULATION_STATE + 546) & load(<U1>, #SIMULATION_STATE + 468)
+    store(#SIMULATION_STATE + 548, U1 (value_id548))
+    store(#SIMULATION_STATE + 549, U1 (value_id548))
+    
+
+
+    // 279 com_and_bit 2 8949616270037847607 
+    let value_id550 = load(<U1>, #SIMULATION_STATE + 548) & load(<U1>, #SIMULATION_STATE + 406)
+    store(#SIMULATION_STATE + 550, U1 (value_id550))
+    store(#SIMULATION_STATE + 551, U1 (value_id550))
+    
+
+
+    // 251 com_cc_input_buffer 1 0 
+    let value_id552 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 552, U1 (value_id552))
+    store(#SIMULATION_STATE + 553, U1 (value_id552))
+    
+
+
+    // 252 com_and_bit 2 1304105972544571053 
+    let value_id554 = load(<U1>, #SIMULATION_STATE + 474) & load(<U1>, #SIMULATION_STATE + 552)
+    store(#SIMULATION_STATE + 554, U1 (value_id554))
+    store(#SIMULATION_STATE + 555, U1 (value_id554))
+    
+
+
+    // 253 com_and_bit 2 3724203624228048153 
+    let value_id556 = load(<U1>, #SIMULATION_STATE + 418) & load(<U1>, #SIMULATION_STATE + 554)
+    store(#SIMULATION_STATE + 556, U1 (value_id556))
+    store(#SIMULATION_STATE + 557, U1 (value_id556))
+    
+
+
+    // 213 com_cc_input_buffer 1 0 
+    let value_id558 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 558, U1 (value_id558))
+    store(#SIMULATION_STATE + 559, U1 (value_id558))
+    
+
+
+    // 215 com_and_bit 2 77496255762268575 
+    let value_id560 = load(<U1>, #SIMULATION_STATE + 558) & load(<U1>, #SIMULATION_STATE + 480)
+    store(#SIMULATION_STATE + 560, U1 (value_id560))
+    store(#SIMULATION_STATE + 561, U1 (value_id560))
+    
+
+
+    // 208 com_cc_input_buffer 1 0 
+    let value_id562 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 562, U1 (value_id562))
+    store(#SIMULATION_STATE + 563, U1 (value_id562))
+    
+
+
+    // 185 com_cc_input_buffer 1 0 
+    let value_id564 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 564, U1 (value_id564))
+    store(#SIMULATION_STATE + 565, U1 (value_id564))
+    
+
+
+    // 186 com_and_bit 2 7449607112616058820 
+    let value_id566 = load(<U1>, #SIMULATION_STATE + 564) & load(<U1>, #SIMULATION_STATE + 482)
+    store(#SIMULATION_STATE + 566, U1 (value_id566))
+    store(#SIMULATION_STATE + 567, U1 (value_id566))
+    
+
+
+    // 182 com_and_bit 2 305259254351034291 
+    let value_id568 = load(<U1>, #SIMULATION_STATE + 566) & load(<U1>, #SIMULATION_STATE + 424)
+    store(#SIMULATION_STATE + 568, U1 (value_id568))
+    store(#SIMULATION_STATE + 569, U1 (value_id568))
+    
+
+
+    // 165 com_cc_input_buffer 1 0 
+    let value_id570 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 570, U1 (value_id570))
+    store(#SIMULATION_STATE + 571, U1 (value_id570))
+    
+
+
+    // 152 com_cc_input_buffer 1 0 
+    let value_id572 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 572, U1 (value_id572))
+    store(#SIMULATION_STATE + 573, U1 (value_id572))
+    
+
+
+    // 153 com_and_bit 2 4715887857977618150 
+    let value_id574 = load(<U1>, #SIMULATION_STATE + 490) & load(<U1>, #SIMULATION_STATE + 572)
+    store(#SIMULATION_STATE + 574, U1 (value_id574))
+    store(#SIMULATION_STATE + 575, U1 (value_id574))
+    
+
+
+    // 137 com_cc_input_buffer 1 0 
+    let value_id576 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 576, U1 (value_id576))
+    store(#SIMULATION_STATE + 577, U1 (value_id576))
+    
+
+
+    // 131 com_cc_input_buffer 1 0 
+    let value_id578 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 578, U1 (value_id578))
+    store(#SIMULATION_STATE + 579, U1 (value_id578))
+    
+
+
+    // 133 com_and_bit 2 9203815857565807519 
+    let value_id580 = load(<U1>, #SIMULATION_STATE + 578) & load(<U1>, #SIMULATION_STATE + 496)
+    store(#SIMULATION_STATE + 580, U1 (value_id580))
+    store(#SIMULATION_STATE + 581, U1 (value_id580))
+    
+
+
+    // 123 com_cc_input_buffer 1 0 
+    let value_id582 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 582, U1 (value_id582))
+    store(#SIMULATION_STATE + 583, U1 (value_id582))
+    
+
+
+    // 110 com_cc_input_buffer 1 0 
+    let value_id584 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 584, U1 (value_id584))
+    store(#SIMULATION_STATE + 585, U1 (value_id584))
+    
+
+
+    // 109 com_cc_input_buffer 1 0 
+    let value_id586 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 586, U1 (value_id586))
+    store(#SIMULATION_STATE + 587, U1 (value_id586))
+    
+
+
+    // 87 com_cc_input_buffer 1 0 
+    let value_id588 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 588, U1 (value_id588))
+    store(#SIMULATION_STATE + 589, U1 (value_id588))
+    
+
+
+    // 90 com_and_bit 2 3692320441478646434 
+    let value_id590 = load(<U1>, #SIMULATION_STATE + 504) & load(<U1>, #SIMULATION_STATE + 588)
+    store(#SIMULATION_STATE + 590, U1 (value_id590))
+    store(#SIMULATION_STATE + 591, U1 (value_id590))
+    
+
+
+    // 79 com_cc_input_buffer 1 0 
+    let value_id592 = load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 592, U1 (value_id592))
+    store(#SIMULATION_STATE + 593, U1 (value_id592))
+    
+
+
+    // 86 com_and_bit 2 7365857753563631190 
+    let value_id594 = load(<U1>, #SIMULATION_STATE + 506) & load(<U1>, #SIMULATION_STATE + 592)
+    store(#SIMULATION_STATE + 594, U1 (value_id594))
+    store(#SIMULATION_STATE + 595, U1 (value_id594))
+    
+
+
+    // 51 com_nor_bit 2 5290238725739139051 
+    let value_id596 = ~(load(<U1>, #SIMULATION_STATE + 272) | load(<U1>, #SIMULATION_STATE + 290))
+    store(#SIMULATION_STATE + 596, U1 (value_id596))
+    store(#SIMULATION_STATE + 597, U1 (value_id596))
+    
+
+
+    // 48 com_and_bit 2 4839015373502151168 
+    let value_id598 = load(<U1>, #SIMULATION_STATE + 290) & load(<U1>, #SIMULATION_STATE + 272)
+    store(#SIMULATION_STATE + 598, U1 (value_id598))
+    store(#SIMULATION_STATE + 599, U1 (value_id598))
+    
+
+
+    // 282 com_cc_input_buffer 1 0 
+    let value_id600 = load(<U1>, #SIMULATION_STATE + 598)
+    store(#SIMULATION_STATE + 600, U1 (value_id600))
+    store(#SIMULATION_STATE + 601, U1 (value_id600))
+    
+
+
+    // 281 com_and_bit 2 6470882599799201471 
+    let value_id602 = load(<U1>, #SIMULATION_STATE + 356) & load(<U1>, #SIMULATION_STATE + 600)
+    store(#SIMULATION_STATE + 602, U1 (value_id602))
+    store(#SIMULATION_STATE + 603, U1 (value_id602))
+    
+
+
+    // 280 com_and_bit 2 2874686677348616701 
+    let value_id604 = load(<U1>, #SIMULATION_STATE + 550) & load(<U1>, #SIMULATION_STATE + 602)
+    store(#SIMULATION_STATE + 604, U1 (value_id604))
+    store(#SIMULATION_STATE + 605, U1 (value_id604))
+    
+
+
+    // 302 com_cc_input_buffer 1 0 
+    let value_id606 = load(<U1>, #SIMULATION_STATE + 604)
+    store(#SIMULATION_STATE + 606, U1 (value_id606))
+    store(#SIMULATION_STATE + 607, U1 (value_id606))
+    
+
+
+    // 303 com_switch_bit 2 123943850342988801 
+    if load(<U1>, #SIMULATION_STATE + 606) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 303)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 837, value)
+        component_id_id825 = 303
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 836, U8 1)
+    }
+    
+
+
+    // 214 com_cc_input_buffer 1 0 
+    let value_id608 = load(<U1>, #SIMULATION_STATE + 598)
+    store(#SIMULATION_STATE + 608, U1 (value_id608))
+    store(#SIMULATION_STATE + 609, U1 (value_id608))
+    
+
+
+    // 216 com_and_bit 2 2187970865911573162 
+    let value_id610 = load(<U1>, #SIMULATION_STATE + 560) & load(<U1>, #SIMULATION_STATE + 608)
+    store(#SIMULATION_STATE + 610, U1 (value_id610))
+    store(#SIMULATION_STATE + 611, U1 (value_id610))
+    
+
+
+    // 220 com_cc_input_buffer 1 0 
+    let value_id612 = load(<U1>, #SIMULATION_STATE + 610)
+    store(#SIMULATION_STATE + 612, U1 (value_id612))
+    store(#SIMULATION_STATE + 613, U1 (value_id612))
+    
+
+
+    // 224 com_switch_bit 2 3095860454726035317 
+    if load(<U1>, #SIMULATION_STATE + 612) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 262)))
+        if component_id_id895 != 0 && vid895 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id895)
+            set_setting(sim_short_circuit_component_id_2, U64 224)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id895)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id895)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 4471823326507498895)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 72)
+            set_setting(sim_short_circuit_value_1, U64 vid895)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid895 |= value
+        and_field_id895 &= value
+        store(#SIMULATION_STATE + 895, value)
+        store(#SIMULATION_STATE + 903, value)
+        component_id_id895 = 224
+        component_top_id_id895 = 4471823326507498895
+        pin_index_id895 = 0
+        store(#SIMULATION_STATE + 894, U8 1)
+        store(#SIMULATION_STATE + 902, U8 1)
+    }
+    
+
+
+    // 200 com_cc_input_buffer 1 0 
+    let value_id614 = load(<U1>, #SIMULATION_STATE + 598)
+    store(#SIMULATION_STATE + 614, U1 (value_id614))
+    store(#SIMULATION_STATE + 615, U1 (value_id614))
+    
+
+
+    // 204 com_switch_bit 2 3689389443649922347 
+    store(#SIMULATION_STATE + 759, U1  0)
+    store(#SIMULATION_STATE + 758, U1 0)
+    store(#SIMULATION_STATE + 764, U1 0)
+    var vid759 = U1  0
+    var and_field_id759 = ~vid759
+    var component_id_id759 = 0
+    var component_top_id_id759 = 0
+    var pin_index_id759 = 0
+    if load(<U1>, #SIMULATION_STATE + 614) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 264)))
+        if component_id_id759 != 0 && vid759 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id759)
+            set_setting(sim_short_circuit_component_id_2, U64 204)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id759)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id759)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7014202477797746760)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 477)
+            set_setting(sim_short_circuit_value_1, U64 vid759)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid759 |= value
+        and_field_id759 &= value
+        store(#SIMULATION_STATE + 759, value)
+        store(#SIMULATION_STATE + 765, value)
+        component_id_id759 = 204
+        component_top_id_id759 = 7014202477797746760
+        pin_index_id759 = 0
+        store(#SIMULATION_STATE + 758, U8 1)
+        store(#SIMULATION_STATE + 764, U8 1)
+    }
+    
+
+
+    // 184 com_cc_input_buffer 1 0 
+    let value_id616 = load(<U1>, #SIMULATION_STATE + 598)
+    store(#SIMULATION_STATE + 616, U1 (value_id616))
+    store(#SIMULATION_STATE + 617, U1 (value_id616))
+    
+
+
+    // 183 com_and_bit 2 7413293774647510178 
+    let value_id618 = load(<U1>, #SIMULATION_STATE + 616) & load(<U1>, #SIMULATION_STATE + 326)
+    store(#SIMULATION_STATE + 618, U1 (value_id618))
+    store(#SIMULATION_STATE + 619, U1 (value_id618))
+    
+
+
+    // 188 com_and_bit 2 8000210428468625446 
+    let value_id620 = load(<U1>, #SIMULATION_STATE + 568) & load(<U1>, #SIMULATION_STATE + 618)
+    store(#SIMULATION_STATE + 620, U1 (value_id620))
+    store(#SIMULATION_STATE + 621, U1 (value_id620))
+    
+
+
+    // 332 com_cc_input_buffer 1 0 
+    let value_id622 = load(<U1>, #SIMULATION_STATE + 620)
+    store(#SIMULATION_STATE + 622, U1 (value_id622))
+    store(#SIMULATION_STATE + 623, U1 (value_id622))
+    
+
+
+    // 333 com_switch_bit 2 520027862417043679 
+    if load(<U1>, #SIMULATION_STATE + 622) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 333)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 803, value)
+        component_id_id789 = 333
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 802, U8 1)
+    }
+    
+
+
+    // 136 com_cc_input_buffer 1 0 
+    let value_id624 = load(<U1>, #SIMULATION_STATE + 598)
+    store(#SIMULATION_STATE + 624, U1 (value_id624))
+    store(#SIMULATION_STATE + 625, U1 (value_id624))
+    
+
+
+    // 135 com_and_bit 2 3879220765802304926 
+    let value_id626 = load(<U1>, #SIMULATION_STATE + 436) & load(<U1>, #SIMULATION_STATE + 624)
+    store(#SIMULATION_STATE + 626, U1 (value_id626))
+    store(#SIMULATION_STATE + 627, U1 (value_id626))
+    
+
+
+    // 134 com_and_bit 2 6521166969182820749 
+    let value_id628 = load(<U1>, #SIMULATION_STATE + 580) & load(<U1>, #SIMULATION_STATE + 626)
+    store(#SIMULATION_STATE + 628, U1 (value_id628))
+    store(#SIMULATION_STATE + 629, U1 (value_id628))
+    
+
+
+    // 240 com_cc_input_buffer 1 0 
+    let value_id630 = load(<U1>, #SIMULATION_STATE + 628)
+    store(#SIMULATION_STATE + 630, U1 (value_id630))
+    store(#SIMULATION_STATE + 631, U1 (value_id630))
+    
+
+
+    // 241 com_switch_bit 2 1169593227414579529 
+    if load(<U1>, #SIMULATION_STATE + 630) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 260)))
+        if component_id_id851 != 0 && vid851 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id851)
+            set_setting(sim_short_circuit_component_id_2, U64 241)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id851)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id851)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2303825524766011723)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 74)
+            set_setting(sim_short_circuit_value_1, U64 vid851)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid851 |= value
+        and_field_id851 &= value
+        store(#SIMULATION_STATE + 851, value)
+        store(#SIMULATION_STATE + 863, value)
+        component_id_id851 = 241
+        component_top_id_id851 = 2303825524766011723
+        pin_index_id851 = 0
+        store(#SIMULATION_STATE + 850, U8 1)
+        store(#SIMULATION_STATE + 862, U8 1)
+    }
+    
+
+
+    // 57 com_and_bit 2 4695104334951081398 
+    let value_id632 = load(<U1>, #SIMULATION_STATE + 544) & load(<U1>, #SIMULATION_STATE + 598)
+    store(#SIMULATION_STATE + 632, U1 (value_id632))
+    store(#SIMULATION_STATE + 633, U1 (value_id632))
+    
+
+
+    // 96 com_cc_input_buffer 1 0 
+    let value_id634 = load(<U1>, #SIMULATION_STATE + 632)
+    store(#SIMULATION_STATE + 634, U1 (value_id634))
+    store(#SIMULATION_STATE + 635, U1 (value_id634))
+    
+
+
+    // 97 com_switch_bit 2 6532953389066917036 
+    if load(<U1>, #SIMULATION_STATE + 634) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 266)))
+        if component_id_id875 != 0 && vid875 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id875)
+            set_setting(sim_short_circuit_component_id_2, U64 97)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id875)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id875)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 8002516609073995301)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 525)
+            set_setting(sim_short_circuit_value_1, U64 vid875)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid875 |= value
+        and_field_id875 &= value
+        store(#SIMULATION_STATE + 875, value)
+        store(#SIMULATION_STATE + 877, value)
+        component_id_id875 = 97
+        component_top_id_id875 = 8002516609073995301
+        pin_index_id875 = 0
+        store(#SIMULATION_STATE + 874, U8 1)
+        store(#SIMULATION_STATE + 876, U8 1)
+    }
+    
+
+
+    // 52 com_nor_bit 2 6648568842306350349 
+    let value_id636 = ~(load(<U1>, #SIMULATION_STATE + 596) | load(<U1>, #SIMULATION_STATE + 598))
+    store(#SIMULATION_STATE + 636, U1 (value_id636))
+    store(#SIMULATION_STATE + 637, U1 (value_id636))
+    
+
+
+    // 255 com_cc_input_buffer 1 0 
+    let value_id638 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 638, U1 (value_id638))
+    store(#SIMULATION_STATE + 639, U1 (value_id638))
+    
+
+
+    // 207 com_cc_input_buffer 1 0 
+    let value_id640 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 640, U1 (value_id640))
+    store(#SIMULATION_STATE + 641, U1 (value_id640))
+    
+
+
+    // 210 com_and_bit 2 7823802583925825656 
+    let value_id642 = load(<U1>, #SIMULATION_STATE + 562) & load(<U1>, #SIMULATION_STATE + 640)
+    store(#SIMULATION_STATE + 642, U1 (value_id642))
+    store(#SIMULATION_STATE + 643, U1 (value_id642))
+    
+
+
+    // 197 com_cc_input_buffer 1 0 
+    let value_id644 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 644, U1 (value_id644))
+    store(#SIMULATION_STATE + 645, U1 (value_id644))
+    
+
+
+    // 193 com_cc_input_buffer 1 0 
+    let value_id646 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 646, U1 (value_id646))
+    store(#SIMULATION_STATE + 647, U1 (value_id646))
+    
+
+
+    // 169 com_cc_input_buffer 1 0 
+    let value_id648 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 648, U1 (value_id648))
+    store(#SIMULATION_STATE + 649, U1 (value_id648))
+    
+
+
+    // 166 com_and_bit 2 6455162617087803909 
+    let value_id650 = load(<U1>, #SIMULATION_STATE + 570) & load(<U1>, #SIMULATION_STATE + 648)
+    store(#SIMULATION_STATE + 650, U1 (value_id650))
+    store(#SIMULATION_STATE + 651, U1 (value_id650))
+    
+
+
+    // 156 com_cc_input_buffer 1 0 
+    let value_id652 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 652, U1 (value_id652))
+    store(#SIMULATION_STATE + 653, U1 (value_id652))
+    
+
+
+    // 139 com_cc_input_buffer 1 0 
+    let value_id654 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 654, U1 (value_id654))
+    store(#SIMULATION_STATE + 655, U1 (value_id654))
+    
+
+
+    // 140 com_and_bit 2 8832310463995423294 
+    let value_id656 = load(<U1>, #SIMULATION_STATE + 576) & load(<U1>, #SIMULATION_STATE + 654)
+    store(#SIMULATION_STATE + 656, U1 (value_id656))
+    store(#SIMULATION_STATE + 657, U1 (value_id656))
+    
+
+
+    // 127 com_cc_input_buffer 1 0 
+    let value_id658 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 658, U1 (value_id658))
+    store(#SIMULATION_STATE + 659, U1 (value_id658))
+    
+
+
+    // 126 com_and_bit 2 7973994531279402641 
+    let value_id660 = load(<U1>, #SIMULATION_STATE + 582) & load(<U1>, #SIMULATION_STATE + 658)
+    store(#SIMULATION_STATE + 660, U1 (value_id660))
+    store(#SIMULATION_STATE + 661, U1 (value_id660))
+    
+
+
+    // 112 com_cc_input_buffer 1 0 
+    let value_id662 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 662, U1 (value_id662))
+    store(#SIMULATION_STATE + 663, U1 (value_id662))
+    
+
+
+    // 113 com_and_bit 2 7295644672758727951 
+    let value_id664 = load(<U1>, #SIMULATION_STATE + 584) & load(<U1>, #SIMULATION_STATE + 662)
+    store(#SIMULATION_STATE + 664, U1 (value_id664))
+    store(#SIMULATION_STATE + 665, U1 (value_id664))
+    
+
+
+    // 114 com_and_bit 2 4938562179879702203 
+    let value_id666 = load(<U1>, #SIMULATION_STATE + 502) & load(<U1>, #SIMULATION_STATE + 664)
+    store(#SIMULATION_STATE + 666, U1 (value_id666))
+    store(#SIMULATION_STATE + 667, U1 (value_id666))
+    
+
+
+    // 105 com_cc_input_buffer 1 0 
+    let value_id668 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 668, U1 (value_id668))
+    store(#SIMULATION_STATE + 669, U1 (value_id668))
+    
+
+
+    // 108 com_and_bit 2 7652998419033139272 
+    let value_id670 = load(<U1>, #SIMULATION_STATE + 668) & load(<U1>, #SIMULATION_STATE + 586)
+    store(#SIMULATION_STATE + 670, U1 (value_id670))
+    store(#SIMULATION_STATE + 671, U1 (value_id670))
+    
+
+
+    // 89 com_cc_input_buffer 1 0 
+    let value_id672 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 672, U1 (value_id672))
+    store(#SIMULATION_STATE + 673, U1 (value_id672))
+    
+
+
+    // 78 com_cc_input_buffer 1 0 
+    let value_id674 = load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 674, U1 (value_id674))
+    store(#SIMULATION_STATE + 675, U1 (value_id674))
+    
+
+
+    // 81 com_and_bit 2 77738646739728047 
+    let value_id676 = load(<U1>, #SIMULATION_STATE + 594) & load(<U1>, #SIMULATION_STATE + 674)
+    store(#SIMULATION_STATE + 676, U1 (value_id676))
+    store(#SIMULATION_STATE + 677, U1 (value_id676))
+    
+
+
+    // 26 com_nor_bit 2 6777355454665652214 
+    let value_id678 = ~(load(<U1>, #SIMULATION_STATE + 270) | load(<U1>, #SIMULATION_STATE + 288))
+    store(#SIMULATION_STATE + 678, U1 (value_id678))
+    store(#SIMULATION_STATE + 679, U1 (value_id678))
+    
+
+
+    // 23 com_and_bit 2 6535357450599210745 
+    let value_id680 = load(<U1>, #SIMULATION_STATE + 288) & load(<U1>, #SIMULATION_STATE + 270)
+    store(#SIMULATION_STATE + 680, U1 (value_id680))
+    store(#SIMULATION_STATE + 681, U1 (value_id680))
+    
+
+
+    // 342 com_cc_input_buffer 1 0 
+    let value_id682 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 682, U1 (value_id682))
+    store(#SIMULATION_STATE + 683, U1 (value_id682))
+    
+
+
+    // 258 com_cc_input_buffer 1 0 
+    let value_id684 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 684, U1 (value_id684))
+    store(#SIMULATION_STATE + 685, U1 (value_id684))
+    
+
+
+    // 254 com_and_bit 2 5868814508030524936 
+    let value_id686 = load(<U1>, #SIMULATION_STATE + 638) & load(<U1>, #SIMULATION_STATE + 684)
+    store(#SIMULATION_STATE + 686, U1 (value_id686))
+    store(#SIMULATION_STATE + 687, U1 (value_id686))
+    
+
+
+    // 259 com_and_bit 2 6383021400652003980 
+    let value_id688 = load(<U1>, #SIMULATION_STATE + 556) & load(<U1>, #SIMULATION_STATE + 686)
+    store(#SIMULATION_STATE + 688, U1 (value_id688))
+    store(#SIMULATION_STATE + 689, U1 (value_id688))
+    
+
+
+    // 300 com_cc_input_buffer 1 0 
+    let value_id690 = load(<U1>, #SIMULATION_STATE + 688)
+    store(#SIMULATION_STATE + 690, U1 (value_id690))
+    store(#SIMULATION_STATE + 691, U1 (value_id690))
+    
+
+
+    // 301 com_switch_bit 2 2153406394998216938 
+    if load(<U1>, #SIMULATION_STATE + 690) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 301)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 827, value)
+        component_id_id825 = 301
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 826, U8 1)
+    }
+    
+
+
+    // 209 com_cc_input_buffer 1 0 
+    let value_id692 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 692, U1 (value_id692))
+    store(#SIMULATION_STATE + 693, U1 (value_id692))
+    
+
+
+    // 211 com_and_bit 2 8349061802773744461 
+    let value_id694 = load(<U1>, #SIMULATION_STATE + 642) & load(<U1>, #SIMULATION_STATE + 692)
+    store(#SIMULATION_STATE + 694, U1 (value_id694))
+    store(#SIMULATION_STATE + 695, U1 (value_id694))
+    
+
+
+    // 95 com_cc_input_buffer 1 0 
+    let value_id696 = load(<U1>, #SIMULATION_STATE + 694)
+    store(#SIMULATION_STATE + 696, U1 (value_id696))
+    store(#SIMULATION_STATE + 697, U1 (value_id696))
+    
+
+
+    // 99 com_switch_bit 2 1855523903376928781 
+    if load(<U1>, #SIMULATION_STATE + 696) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 266)))
+        if component_id_id875 != 0 && vid875 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id875)
+            set_setting(sim_short_circuit_component_id_2, U64 99)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id875)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id875)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 8002516609073995301)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 525)
+            set_setting(sim_short_circuit_value_1, U64 vid875)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid875 |= value
+        and_field_id875 &= value
+        store(#SIMULATION_STATE + 875, value)
+        store(#SIMULATION_STATE + 879, value)
+        component_id_id875 = 99
+        component_top_id_id875 = 8002516609073995301
+        pin_index_id875 = 0
+        store(#SIMULATION_STATE + 874, U8 1)
+        store(#SIMULATION_STATE + 878, U8 1)
+    }
+    
+
+
+    // 198 com_cc_input_buffer 1 0 
+    let value_id698 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 698, U1 (value_id698))
+    store(#SIMULATION_STATE + 699, U1 (value_id698))
+    
+
+
+    // 199 com_and_bit 2 647358764915338109 
+    let value_id700 = load(<U1>, #SIMULATION_STATE + 644) & load(<U1>, #SIMULATION_STATE + 698)
+    store(#SIMULATION_STATE + 700, U1 (value_id700))
+    store(#SIMULATION_STATE + 701, U1 (value_id700))
+    
+
+
+    // 201 com_cc_input_buffer 1 0 
+    let value_id702 = load(<U1>, #SIMULATION_STATE + 700)
+    store(#SIMULATION_STATE + 702, U1 (value_id702))
+    store(#SIMULATION_STATE + 703, U1 (value_id702))
+    
+
+
+    // 205 com_switch_bit 2 3776053707357915735 
+    if load(<U1>, #SIMULATION_STATE + 702) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 264)))
+        if component_id_id759 != 0 && vid759 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id759)
+            set_setting(sim_short_circuit_component_id_2, U64 205)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id759)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id759)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7014202477797746760)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 477)
+            set_setting(sim_short_circuit_value_1, U64 vid759)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid759 |= value
+        and_field_id759 &= value
+        store(#SIMULATION_STATE + 759, value)
+        store(#SIMULATION_STATE + 763, value)
+        component_id_id759 = 205
+        component_top_id_id759 = 7014202477797746760
+        pin_index_id759 = 0
+        store(#SIMULATION_STATE + 758, U8 1)
+        store(#SIMULATION_STATE + 762, U8 1)
+    }
+    
+
+
+    // 159 com_cc_input_buffer 1 0 
+    let value_id704 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 704, U1 (value_id704))
+    store(#SIMULATION_STATE + 705, U1 (value_id704))
+    
+
+
+    // 155 com_and_bit 2 5457791322383004365 
+    let value_id706 = load(<U1>, #SIMULATION_STATE + 652) & load(<U1>, #SIMULATION_STATE + 704)
+    store(#SIMULATION_STATE + 706, U1 (value_id706))
+    store(#SIMULATION_STATE + 707, U1 (value_id706))
+    
+
+
+    // 160 com_and_bit 2 8015669224533142843 
+    let value_id708 = load(<U1>, #SIMULATION_STATE + 574) & load(<U1>, #SIMULATION_STATE + 706)
+    store(#SIMULATION_STATE + 708, U1 (value_id708))
+    store(#SIMULATION_STATE + 709, U1 (value_id708))
+    
+
+
+    // 162 com_and_bit 2 8996103950317417377 
+    let value_id710 = load(<U1>, #SIMULATION_STATE + 430) & load(<U1>, #SIMULATION_STATE + 708)
+    store(#SIMULATION_STATE + 710, U1 (value_id710))
+    store(#SIMULATION_STATE + 711, U1 (value_id710))
+    
+
+
+    // 334 com_cc_input_buffer 1 0 
+    let value_id712 = load(<U1>, #SIMULATION_STATE + 710)
+    store(#SIMULATION_STATE + 712, U1 (value_id712))
+    store(#SIMULATION_STATE + 713, U1 (value_id712))
+    
+
+
+    // 335 com_switch_bit 2 6723166815294530504 
+    if load(<U1>, #SIMULATION_STATE + 712) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 335)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 793, value)
+        component_id_id789 = 335
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 792, U8 1)
+    }
+    
+
+
+    // 128 com_cc_input_buffer 1 0 
+    let value_id714 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 714, U1 (value_id714))
+    store(#SIMULATION_STATE + 715, U1 (value_id714))
+    
+
+
+    // 129 com_and_bit 2 3205413231757287136 
+    let value_id716 = load(<U1>, #SIMULATION_STATE + 714) & load(<U1>, #SIMULATION_STATE + 438)
+    store(#SIMULATION_STATE + 716, U1 (value_id716))
+    store(#SIMULATION_STATE + 717, U1 (value_id716))
+    
+
+
+    // 124 com_and_bit 2 5428821220654114329 
+    let value_id718 = load(<U1>, #SIMULATION_STATE + 716) & load(<U1>, #SIMULATION_STATE + 498)
+    store(#SIMULATION_STATE + 718, U1 (value_id718))
+    store(#SIMULATION_STATE + 719, U1 (value_id718))
+    
+
+
+    // 125 com_and_bit 2 1189109709042409939 
+    let value_id720 = load(<U1>, #SIMULATION_STATE + 718) & load(<U1>, #SIMULATION_STATE + 660)
+    store(#SIMULATION_STATE + 720, U1 (value_id720))
+    store(#SIMULATION_STATE + 721, U1 (value_id720))
+    
+
+
+    // 238 com_cc_input_buffer 1 0 
+    let value_id722 = load(<U1>, #SIMULATION_STATE + 720)
+    store(#SIMULATION_STATE + 722, U1 (value_id722))
+    store(#SIMULATION_STATE + 723, U1 (value_id722))
+    
+
+
+    // 239 com_switch_bit 2 5750028300158034938 
+    if load(<U1>, #SIMULATION_STATE + 722) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 260)))
+        if component_id_id851 != 0 && vid851 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id851)
+            set_setting(sim_short_circuit_component_id_2, U64 239)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id851)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id851)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2303825524766011723)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 74)
+            set_setting(sim_short_circuit_value_1, U64 vid851)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid851 |= value
+        and_field_id851 &= value
+        store(#SIMULATION_STATE + 851, value)
+        store(#SIMULATION_STATE + 857, value)
+        component_id_id851 = 239
+        component_top_id_id851 = 2303825524766011723
+        pin_index_id851 = 0
+        store(#SIMULATION_STATE + 850, U8 1)
+        store(#SIMULATION_STATE + 856, U8 1)
+    }
+    
+
+
+    // 93 com_cc_input_buffer 1 0 
+    let value_id724 = load(<U1>, #SIMULATION_STATE + 680)
+    store(#SIMULATION_STATE + 724, U1 (value_id724))
+    store(#SIMULATION_STATE + 725, U1 (value_id724))
+    
+
+
+    // 92 com_and_bit 2 8742197818394520739 
+    let value_id726 = load(<U1>, #SIMULATION_STATE + 672) & load(<U1>, #SIMULATION_STATE + 724)
+    store(#SIMULATION_STATE + 726, U1 (value_id726))
+    store(#SIMULATION_STATE + 727, U1 (value_id726))
+    
+
+
+    // 91 com_and_bit 2 1655234405507637424 
+    let value_id728 = load(<U1>, #SIMULATION_STATE + 590) & load(<U1>, #SIMULATION_STATE + 726)
+    store(#SIMULATION_STATE + 728, U1 (value_id728))
+    store(#SIMULATION_STATE + 729, U1 (value_id728))
+    
+
+
+    // 222 com_cc_input_buffer 1 0 
+    let value_id730 = load(<U1>, #SIMULATION_STATE + 728)
+    store(#SIMULATION_STATE + 730, U1 (value_id730))
+    store(#SIMULATION_STATE + 731, U1 (value_id730))
+    
+
+
+    // 223 com_switch_bit 2 8660132059130947052 
+    if load(<U1>, #SIMULATION_STATE + 730) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 262)))
+        if component_id_id895 != 0 && vid895 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id895)
+            set_setting(sim_short_circuit_component_id_2, U64 223)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id895)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id895)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 4471823326507498895)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 72)
+            set_setting(sim_short_circuit_value_1, U64 vid895)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid895 |= value
+        and_field_id895 &= value
+        store(#SIMULATION_STATE + 895, value)
+        store(#SIMULATION_STATE + 897, value)
+        component_id_id895 = 223
+        component_top_id_id895 = 4471823326507498895
+        pin_index_id895 = 0
+        store(#SIMULATION_STATE + 894, U8 1)
+        store(#SIMULATION_STATE + 896, U8 1)
+    }
+    
+
+
+    // 24 com_nor_bit 2 1303152609358998913 
+    let value_id732 = ~(load(<U1>, #SIMULATION_STATE + 678) | load(<U1>, #SIMULATION_STATE + 680))
+    store(#SIMULATION_STATE + 732, U1 (value_id732))
+    store(#SIMULATION_STATE + 733, U1 (value_id732))
+    
+
+
+    // 192 com_cc_input_buffer 1 0 
+    let value_id734 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 734, U1 (value_id734))
+    store(#SIMULATION_STATE + 735, U1 (value_id734))
+    
+
+
+    // 195 com_and_bit 2 3215600844430334798 
+    let value_id736 = load(<U1>, #SIMULATION_STATE + 646) & load(<U1>, #SIMULATION_STATE + 734)
+    store(#SIMULATION_STATE + 736, U1 (value_id736))
+    store(#SIMULATION_STATE + 737, U1 (value_id736))
+    
+
+
+    // 190 com_cc_input_buffer 1 0 
+    let value_id738 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 738, U1 (value_id738))
+    store(#SIMULATION_STATE + 739, U1 (value_id738))
+    
+
+
+    // 172 com_cc_input_buffer 1 0 
+    let value_id740 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 740, U1 (value_id740))
+    store(#SIMULATION_STATE + 741, U1 (value_id740))
+    
+
+
+    // 143 com_cc_input_buffer 1 0 
+    let value_id742 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 742, U1 (value_id742))
+    store(#SIMULATION_STATE + 743, U1 (value_id742))
+    
+
+
+    // 116 com_cc_input_buffer 1 0 
+    let value_id744 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 744, U1 (value_id744))
+    store(#SIMULATION_STATE + 745, U1 (value_id744))
+    
+
+
+    // 103 com_cc_input_buffer 1 0 
+    let value_id746 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 746, U1 (value_id746))
+    store(#SIMULATION_STATE + 747, U1 (value_id746))
+    
+
+
+    // 80 com_cc_input_buffer 1 0 
+    let value_id748 = load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 748, U1 (value_id748))
+    store(#SIMULATION_STATE + 749, U1 (value_id748))
+    
+
+
+    // 194 com_cc_input_buffer 1 0 
+    let value_id752 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 752, U1 (value_id752))
+    store(#SIMULATION_STATE + 753, U1 (value_id752))
+    
+
+
+    // 196 com_and_bit 2 3742054132635496571 
+    let value_id754 = load(<U1>, #SIMULATION_STATE + 736) & load(<U1>, #SIMULATION_STATE + 752)
+    store(#SIMULATION_STATE + 754, U1 (value_id754))
+    store(#SIMULATION_STATE + 755, U1 (value_id754))
+    
+
+
+    // 202 com_cc_input_buffer 1 0 
+    let value_id756 = load(<U1>, #SIMULATION_STATE + 754)
+    store(#SIMULATION_STATE + 756, U1 (value_id756))
+    store(#SIMULATION_STATE + 757, U1 (value_id756))
+    
+
+
+    // 203 com_switch_bit 2 5461677082816799752 
+    if load(<U1>, #SIMULATION_STATE + 756) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 264)))
+        if component_id_id759 != 0 && vid759 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id759)
+            set_setting(sim_short_circuit_component_id_2, U64 203)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id759)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id759)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7014202477797746760)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 477)
+            set_setting(sim_short_circuit_value_1, U64 vid759)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid759 |= value
+        and_field_id759 &= value
+        store(#SIMULATION_STATE + 759, value)
+        store(#SIMULATION_STATE + 761, value)
+        component_id_id759 = 203
+        component_top_id_id759 = 7014202477797746760
+        pin_index_id759 = 0
+        store(#SIMULATION_STATE + 758, U8 1)
+        store(#SIMULATION_STATE + 760, U8 1)
+    }
+    
+
+
+    // 11 com_xor_bit 2 5754242804844214502 
+    let value_id766 = load(<U1>, #SIMULATION_STATE + 759) ^ load(<U1>, #SIMULATION_STATE + 544)
+    store(#SIMULATION_STATE + 766, U1 (value_id766))
+    store(#SIMULATION_STATE + 767, U1 (value_id766))
+    
+
+
+    // 189 com_cc_input_buffer 1 0 
+    let value_id768 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 768, U1 (value_id768))
+    store(#SIMULATION_STATE + 769, U1 (value_id768))
+    
+
+
+    // 191 com_and_bit 2 2586345496692462065 
+    let value_id770 = load(<U1>, #SIMULATION_STATE + 768) & load(<U1>, #SIMULATION_STATE + 738)
+    store(#SIMULATION_STATE + 770, U1 (value_id770))
+    store(#SIMULATION_STATE + 771, U1 (value_id770))
+    
+
+
+    // 341 com_cc_input_buffer 1 0 
+    let value_id772 = load(<U1>, #SIMULATION_STATE + 770)
+    store(#SIMULATION_STATE + 772, U1 (value_id772))
+    store(#SIMULATION_STATE + 773, U1 (value_id772))
+    
+
+
+    // 340 com_or_bit 2 4155999221393236652 
+    let value_id774 = load(<U1>, #SIMULATION_STATE + 772) | load(<U1>, #SIMULATION_STATE + 682)
+    store(#SIMULATION_STATE + 774, U1 (value_id774))
+    store(#SIMULATION_STATE + 775, U1 (value_id774))
+    
+
+
+    // 35 com_xor_bit 2 868395922919864608 
+    let value_id776 = load(<U1>, #SIMULATION_STATE + 774) ^ load(<U1>, #SIMULATION_STATE + 636)
+    store(#SIMULATION_STATE + 776, U1 (value_id776))
+    store(#SIMULATION_STATE + 777, U1 (value_id776))
+    
+
+
+    // 175 com_cc_input_buffer 1 0 
+    let value_id778 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 778, U1 (value_id778))
+    store(#SIMULATION_STATE + 779, U1 (value_id778))
+    
+
+
+    // 168 com_and_bit 2 3493556968745539824 
+    let value_id780 = load(<U1>, #SIMULATION_STATE + 740) & load(<U1>, #SIMULATION_STATE + 778)
+    store(#SIMULATION_STATE + 780, U1 (value_id780))
+    store(#SIMULATION_STATE + 781, U1 (value_id780))
+    
+
+
+    // 176 com_and_bit 2 1123189913462282796 
+    let value_id782 = load(<U1>, #SIMULATION_STATE + 650) & load(<U1>, #SIMULATION_STATE + 780)
+    store(#SIMULATION_STATE + 782, U1 (value_id782))
+    store(#SIMULATION_STATE + 783, U1 (value_id782))
+    
+
+
+    // 173 com_and_bit 2 6932186008970357916 
+    let value_id784 = load(<U1>, #SIMULATION_STATE + 488) & load(<U1>, #SIMULATION_STATE + 782)
+    store(#SIMULATION_STATE + 784, U1 (value_id784))
+    store(#SIMULATION_STATE + 785, U1 (value_id784))
+    
+
+
+    // 338 com_cc_input_buffer 1 0 
+    let value_id786 = load(<U1>, #SIMULATION_STATE + 784)
+    store(#SIMULATION_STATE + 786, U1 (value_id786))
+    store(#SIMULATION_STATE + 787, U1 (value_id786))
+    
+
+
+    // 339 com_switch_bit 2 750329714646777166 
+    if load(<U1>, #SIMULATION_STATE + 786) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 256)))
+        if component_id_id789 != 0 && vid789 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id789)
+            set_setting(sim_short_circuit_component_id_2, U64 339)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id789)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id789)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 7385400359604595589)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 528)
+            set_setting(sim_short_circuit_value_1, U64 vid789)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid789 |= value
+        and_field_id789 &= value
+        store(#SIMULATION_STATE + 789, value)
+        store(#SIMULATION_STATE + 791, value)
+        component_id_id789 = 339
+        component_top_id_id789 = 7385400359604595589
+        pin_index_id789 = 0
+        store(#SIMULATION_STATE + 788, U8 1)
+        store(#SIMULATION_STATE + 790, U8 1)
+    }
+    
+
+
+    // 77 com_switch_bit 2 9125716930767495652 
+    if load(<U1>, #SIMULATION_STATE + 308) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 789)))
+        if component_id_id807 != 0 && vid807 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id807)
+            set_setting(sim_short_circuit_component_id_2, U64 77)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id807)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id807)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 0)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 532)
+            set_setting(sim_short_circuit_value_1, U64 vid807)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid807 |= value
+        and_field_id807 &= value
+        store(#SIMULATION_STATE + 807, value)
+        store(#SIMULATION_STATE + 809, value)
+        component_id_id807 = 77
+        component_top_id_id807 = 0
+        pin_index_id807 = 0
+        store(#SIMULATION_STATE + 806, U8 1)
+        store(#SIMULATION_STATE + 808, U8 1)
+    }
+    
+
+
+    // 47 com_xor_bit 2 297053530334840454 
+    let value_id812 = load(<U1>, #SIMULATION_STATE + 789) ^ load(<U1>, #SIMULATION_STATE + 308)
+    store(#SIMULATION_STATE + 812, U1 (value_id812))
+    store(#SIMULATION_STATE + 813, U1 (value_id812))
+    
+
+
+    // 146 com_cc_input_buffer 1 0 
+    let value_id814 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 814, U1 (value_id814))
+    store(#SIMULATION_STATE + 815, U1 (value_id814))
+    
+
+
+    // 142 com_and_bit 2 8096734209867380245 
+    let value_id816 = load(<U1>, #SIMULATION_STATE + 742) & load(<U1>, #SIMULATION_STATE + 814)
+    store(#SIMULATION_STATE + 816, U1 (value_id816))
+    store(#SIMULATION_STATE + 817, U1 (value_id816))
+    
+
+
+    // 147 com_and_bit 2 6115316718822287843 
+    let value_id818 = load(<U1>, #SIMULATION_STATE + 656) & load(<U1>, #SIMULATION_STATE + 816)
+    store(#SIMULATION_STATE + 818, U1 (value_id818))
+    store(#SIMULATION_STATE + 819, U1 (value_id818))
+    
+
+
+    // 149 com_and_bit 2 5131865477241681785 
+    let value_id820 = load(<U1>, #SIMULATION_STATE + 494) & load(<U1>, #SIMULATION_STATE + 818)
+    store(#SIMULATION_STATE + 820, U1 (value_id820))
+    store(#SIMULATION_STATE + 821, U1 (value_id820))
+    
+
+
+    // 304 com_cc_input_buffer 1 0 
+    let value_id822 = load(<U1>, #SIMULATION_STATE + 820)
+    store(#SIMULATION_STATE + 822, U1 (value_id822))
+    store(#SIMULATION_STATE + 823, U1 (value_id822))
+    
+
+
+    // 305 com_switch_bit 2 6686184761574295034 
+    if load(<U1>, #SIMULATION_STATE + 822) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 258)))
+        if component_id_id825 != 0 && vid825 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id825)
+            set_setting(sim_short_circuit_component_id_2, U64 305)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id825)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id825)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2433384593751225502)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 76)
+            set_setting(sim_short_circuit_value_1, U64 vid825)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid825 |= value
+        and_field_id825 &= value
+        store(#SIMULATION_STATE + 825, value)
+        store(#SIMULATION_STATE + 831, value)
+        component_id_id825 = 305
+        component_top_id_id825 = 2433384593751225502
+        pin_index_id825 = 0
+        store(#SIMULATION_STATE + 824, U8 1)
+        store(#SIMULATION_STATE + 830, U8 1)
+    }
+    
+
+
+    // 46 com_xor_bit 2 3709352739083247023 
+    let value_id840 = load(<U1>, #SIMULATION_STATE + 825) ^ load(<U1>, #SIMULATION_STATE + 316)
+    store(#SIMULATION_STATE + 840, U1 (value_id840))
+    store(#SIMULATION_STATE + 841, U1 (value_id840))
+    
+
+
+    // 119 com_cc_input_buffer 1 0 
+    let value_id842 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 842, U1 (value_id842))
+    store(#SIMULATION_STATE + 843, U1 (value_id842))
+    
+
+
+    // 115 com_and_bit 2 2761969801427172778 
+    let value_id844 = load(<U1>, #SIMULATION_STATE + 744) & load(<U1>, #SIMULATION_STATE + 842)
+    store(#SIMULATION_STATE + 844, U1 (value_id844))
+    store(#SIMULATION_STATE + 845, U1 (value_id844))
+    
+
+
+    // 120 com_and_bit 2 3437169490568771886 
+    let value_id846 = load(<U1>, #SIMULATION_STATE + 666) & load(<U1>, #SIMULATION_STATE + 844)
+    store(#SIMULATION_STATE + 846, U1 (value_id846))
+    store(#SIMULATION_STATE + 847, U1 (value_id846))
+    
+
+
+    // 242 com_cc_input_buffer 1 0 
+    let value_id848 = load(<U1>, #SIMULATION_STATE + 846)
+    store(#SIMULATION_STATE + 848, U1 (value_id848))
+    store(#SIMULATION_STATE + 849, U1 (value_id848))
+    
+
+
+    // 243 com_switch_bit 2 7885656643940416854 
+    if load(<U1>, #SIMULATION_STATE + 848) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 260)))
+        if component_id_id851 != 0 && vid851 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id851)
+            set_setting(sim_short_circuit_component_id_2, U64 243)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id851)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id851)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 2303825524766011723)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 74)
+            set_setting(sim_short_circuit_value_1, U64 vid851)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid851 |= value
+        and_field_id851 &= value
+        store(#SIMULATION_STATE + 851, value)
+        store(#SIMULATION_STATE + 861, value)
+        component_id_id851 = 243
+        component_top_id_id851 = 2303825524766011723
+        pin_index_id851 = 0
+        store(#SIMULATION_STATE + 850, U8 1)
+        store(#SIMULATION_STATE + 860, U8 1)
+    }
+    
+
+
+    // 43 com_xor_bit 2 4132056912288279101 
+    let value_id864 = load(<U1>, #SIMULATION_STATE + 851) ^ load(<U1>, #SIMULATION_STATE + 344)
+    store(#SIMULATION_STATE + 864, U1 (value_id864))
+    store(#SIMULATION_STATE + 865, U1 (value_id864))
+    
+
+
+    // 104 com_cc_input_buffer 1 0 
+    let value_id866 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 866, U1 (value_id866))
+    store(#SIMULATION_STATE + 867, U1 (value_id866))
+    
+
+
+    // 106 com_and_bit 2 2331649621928873545 
+    let value_id868 = load(<U1>, #SIMULATION_STATE + 866) & load(<U1>, #SIMULATION_STATE + 746)
+    store(#SIMULATION_STATE + 868, U1 (value_id868))
+    store(#SIMULATION_STATE + 869, U1 (value_id868))
+    
+
+
+    // 107 com_and_bit 2 405040252748080219 
+    let value_id870 = load(<U1>, #SIMULATION_STATE + 868) & load(<U1>, #SIMULATION_STATE + 670)
+    store(#SIMULATION_STATE + 870, U1 (value_id870))
+    store(#SIMULATION_STATE + 871, U1 (value_id870))
+    
+
+
+    // 94 com_cc_input_buffer 1 0 
+    let value_id872 = load(<U1>, #SIMULATION_STATE + 870)
+    store(#SIMULATION_STATE + 872, U1 (value_id872))
+    store(#SIMULATION_STATE + 873, U1 (value_id872))
+    
+
+
+    // 98 com_switch_bit 2 981062655521456832 
+    if load(<U1>, #SIMULATION_STATE + 872) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 266)))
+        if component_id_id875 != 0 && vid875 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id875)
+            set_setting(sim_short_circuit_component_id_2, U64 98)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id875)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id875)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 8002516609073995301)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 525)
+            set_setting(sim_short_circuit_value_1, U64 vid875)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid875 |= value
+        and_field_id875 &= value
+        store(#SIMULATION_STATE + 875, value)
+        store(#SIMULATION_STATE + 883, value)
+        component_id_id875 = 98
+        component_top_id_id875 = 8002516609073995301
+        pin_index_id875 = 0
+        store(#SIMULATION_STATE + 874, U8 1)
+        store(#SIMULATION_STATE + 882, U8 1)
+    }
+    
+
+
+    // 38 com_xor_bit 2 9104710471873691546 
+    let value_id884 = load(<U1>, #SIMULATION_STATE + 875) ^ load(<U1>, #SIMULATION_STATE + 466)
+    store(#SIMULATION_STATE + 884, U1 (value_id884))
+    store(#SIMULATION_STATE + 885, U1 (value_id884))
+    
+
+
+    // 84 com_cc_input_buffer 1 0 
+    let value_id886 = load(<U1>, #SIMULATION_STATE + 750)
+    store(#SIMULATION_STATE + 886, U1 (value_id886))
+    store(#SIMULATION_STATE + 887, U1 (value_id886))
+    
+
+
+    // 83 com_and_bit 2 2660065004016739879 
+    let value_id888 = load(<U1>, #SIMULATION_STATE + 748) & load(<U1>, #SIMULATION_STATE + 886)
+    store(#SIMULATION_STATE + 888, U1 (value_id888))
+    store(#SIMULATION_STATE + 889, U1 (value_id888))
+    
+
+
+    // 82 com_and_bit 2 6540267049547837797 
+    let value_id890 = load(<U1>, #SIMULATION_STATE + 676) & load(<U1>, #SIMULATION_STATE + 888)
+    store(#SIMULATION_STATE + 890, U1 (value_id890))
+    store(#SIMULATION_STATE + 891, U1 (value_id890))
+    
+
+
+    // 227 com_cc_input_buffer 1 0 
+    let value_id892 = load(<U1>, #SIMULATION_STATE + 890)
+    store(#SIMULATION_STATE + 892, U1 (value_id892))
+    store(#SIMULATION_STATE + 893, U1 (value_id892))
+    
+
+
+    // 228 com_switch_bit 2 523306181087843952 
+    if load(<U1>, #SIMULATION_STATE + 892) != 0 {
+        let value = U1 (U1 (load(<U1>, #SIMULATION_STATE + 262)))
+        if component_id_id895 != 0 && vid895 != value {
+            set_setting(sim_short_circuit_component_id_1, U64 component_id_id895)
+            set_setting(sim_short_circuit_component_id_2, U64 228)
+            set_setting(sim_short_circuit_pin_1, U64 pin_index_id895)
+            set_setting(sim_short_circuit_pin_2, U64 0)
+            set_setting(sim_short_circuit_top_level_permanent_id_1, U64 component_top_id_id895)
+            set_setting(sim_short_circuit_top_level_permanent_id_2, U64 4471823326507498895)
+            set_setting(sim_short_circuit_any_top_level_wire_id, U64 72)
+            set_setting(sim_short_circuit_value_1, U64 vid895)
+            set_setting(sim_short_circuit_value_2, U64 value)
+        }
+        vid895 |= value
+        and_field_id895 &= value
+        store(#SIMULATION_STATE + 895, value)
+        store(#SIMULATION_STATE + 899, value)
+        component_id_id895 = 228
+        component_top_id_id895 = 4471823326507498895
+        pin_index_id895 = 0
+        store(#SIMULATION_STATE + 894, U8 1)
+        store(#SIMULATION_STATE + 898, U8 1)
+    }
+    
+
+
+    // 40 com_xor_bit 2 1725081959076785582 
+    let value_id906 = load(<U1>, #SIMULATION_STATE + 895) ^ load(<U1>, #SIMULATION_STATE + 396)
+    store(#SIMULATION_STATE + 906, U1 (value_id906))
+    store(#SIMULATION_STATE + 907, U1 (value_id906))
+    
+
+
+    // 50 com_xor_bit 2 5334583541180452230 
+    let value_id908 = load(<U1>, #SIMULATION_STATE + 750) ^ load(<U1>, #SIMULATION_STATE + 732)
+    store(#SIMULATION_STATE + 908, U1 (value_id908))
+    store(#SIMULATION_STATE + 909, U1 (value_id908))
+    
+
+
+    // 9 com_maker_bit_8 2 3423911319983141590 
+    let value_id910 = (U8 load(<U1>, #SIMULATION_STATE + 908) | (((U8 (load(<U1>, #SIMULATION_STATE + 776))) & 1) << 1) | (((U8 (load(<U1>, #SIMULATION_STATE + 766))) & 1) << 2) | (((U8 (load(<U1>, #SIMULATION_STATE + 884))) & 1) << 3) | (((U8 (load(<U1>, #SIMULATION_STATE + 906))) & 1) << 4) | (((U8 (load(<U1>, #SIMULATION_STATE + 864))) & 1) << 5) | (((U8 (load(<U1>, #SIMULATION_STATE + 840))) & 1) << 6) | (((U8 (load(<U1>, #SIMULATION_STATE + 812))) & 1) << 7))
+    store(#SIMULATION_STATE + 910, U8 (value_id910))
+    store(#SIMULATION_STATE + 911, U8 (value_id910))
+    
+
+
+    // 0 com_none 2 0 
+    
+
+
+    // 1 com_level_output_word 8 3 Output
+    
+
+
+    // 5 com_level_output_word 1 2340322686578998678 Carry out
+
+}
+
+def mode_run(target_cycle: Int) None {
+
+    if get_setting(sim_test_result) == U64 win { return }
+    if (get_setting(sim_test_result) == U64 fail && cycle + 1 >= #CYCLE_PAST_FAIL) { return }
+    if get_setting(sim_short_circuit_component_id_1) != 0 { return }
+
+    var halt_run = false
+
+    var original_start_time = Time 0
+    var orig_start_cycle = U64 cycle
+    var last_time = original_start_time
+
+    var burst_cycles = 1
+
+    var nanos_per_cycle = U64 0
+
+    var i = 0
+    var last_target_speed = U64 0
+    var speed = U64 1
+
+    while get_command(ctl_command_id) == last_command_id && !halt_run && target_cycle > cycle {
+        i += 1
+
+        let target_speed = max(1, get_command(ctl_cycle_speed_ms))
+
+        if target_speed != last_target_speed {
+
+            original_start_time = get_time()
+            orig_start_cycle = U64 cycle
+            last_time = original_start_time
+
+            speed = min(U64 get_command(ctl_cycle_speed_ms), 10000000000000) // Cap at 10 ghz to avoid overflow
+            last_target_speed = target_speed
+
+        }
+
+        let cycles_at_start = cycle
+        let burst_target = cycle + burst_cycles
+
+        var burst_target_cycle = min(target_cycle, burst_target)
+
+        def halt() None {
+
+            burst_target_cycle = cycle
+            halt_run = true
+
+        }
+
+        def handle_test_result(result: TestResult) None {
+
+            if result != pass {
+
+                var res = result
+
+                halt() // Halt regardless of wether we are above '#CYCLE_PAST_FAIL'
+
+                set_setting(sim_test_result, max(get_setting(sim_test_result), U64 res))
+
+            }
+
+        }
+
+        while cycle < burst_target_cycle {
+
+            if in_scope("get_input") {
+                level_input = get_input(cycle + 1)
+            }
+            
+
+            
+
+
+            // 2 com_level_input_word 1 2 Carry in
+            var vid750 = U1 level_input.carry_in
+            input_replay[0] = U64 level_input.carry_in
+            
+
+
+            // 3 com_level_input_word 8 1 A
+            var vid286 = U8 level_input.a
+            input_replay[1] = U64 level_input.a
+            
+
+
+            // 4 com_level_input_word 8 4257300573296473173 B
+            var vid268 = U8 level_input.b
+            input_replay[2] = U64 level_input.b
+            
+
+
+            // 329 com_on 2 3272659222695817418 
+            var vid256 = U1 1
+            
+
+
+            // 299 com_on 2 3039292497902327038 
+            var vid258 = U1 1
+            
+
+
+            // 237 com_on 2 6741894066158890901 
+            var vid260 = U1 1
+            
+
+
+            // 226 com_on 2 3990101100463026256 
+            var vid262 = U1 1
+            
+
+
+            // 206 com_on 2 751394407524233464 
+            var vid264 = U1 1
+            
+
+
+            // 100 com_on 2 506109882556767892 
+            var vid266 = U1 1
+            
+
+
+            // 75 com_custom 8 5508864567531640846 
+            
+
+
+            // 74 com_custom 8 7385400359604595589 
+            
+
+
+            // 73 com_custom 8 4558334013969882168 
+            
+
+
+            // 72 com_custom 8 3067039436593061942 
+            
+
+
+            // 71 com_custom 8 5448160051714240898 
+            
+
+
+            // 70 com_custom 8 2433384593751225502 
+            
+
+
+            // 69 com_custom 8 1979237387421410526 
+            
+
+
+            // 68 com_custom 8 4178200028260564754 
+            
+
+
+            // 67 com_custom 8 8621001470008076056 
+            
+
+
+            // 66 com_custom 8 989610509271574253 
+            
+
+
+            // 65 com_custom 8 6327367195893928340 
+            
+
+
+            // 64 com_custom 8 8346973097772036783 
+            
+
+
+            // 63 com_custom 8 4214736121962526637 
+            
+
+
+            // 62 com_custom 8 2303825524766011723 
+            
+
+
+            // 60 com_custom 8 4471823326507498895 
+            
+
+
+            // 59 com_custom 8 2868583028852990215 
+            
+
+
+            // 58 com_custom 8 8643396160757473832 
+            
+
+
+            // 56 com_custom 8 1905985346502394831 
+            
+
+
+            // 55 com_custom 8 7014202477797746760 
+            
+
+
+            // 54 com_custom 8 5576227894633592795 
+            
+
+
+            // 53 com_custom 8 6503420522648959225 
+            
+
+
+            // 49 com_custom 8 7385295782071029079 
+            
+
+
+            // 45 com_custom 8 4919372341631911941 
+            
+
+
+            // 44 com_custom 8 9022749570453452880 
+            
+
+
+            // 42 com_custom 8 6840680076926126151 
+            
+
+
+            // 41 com_custom 8 7281866354208722079 
+            
+
+
+            // 39 com_custom 8 7270635955846455953 
+            
+
+
+            // 37 com_custom 8 4667861848801595190 
+            
+
+
+            // 36 com_custom 8 355833415193129229 
+            
+
+
+            // 34 com_custom 8 4253464963945242439 
+            
+
+
+            // 33 com_custom 8 8002516609073995301 
+            
+
+
+            // 10 com_custom 8 2909669246978464684 
+            
+
+
+            // 8 com_custom 8 757925656744402816 
+            
+
+
+            // 7 com_splitter_bit_8 2 8691470194311084254 
+            let input_7 = (U8 vid268)
+            var vid270 = U1 input_7
+            var vid272 = U1 (input_7 >> 1) & 1
+            var vid274 = U1 (input_7 >> 2) & 1
+            var vid276 = U1 (input_7 >> 3) & 1
+            var vid278 = U1 (input_7 >> 4) & 1
+            var vid280 = U1 (input_7 >> 5) & 1
+            var vid282 = U1 (input_7 >> 6) & 1
+            var vid284 = U1 (input_7 >> 7) & 1
+            
+
+
+            // 6 com_splitter_bit_8 2 3073349938438526925 
+            let input_6 = (U8 vid286)
+            var vid288 = U1 input_6
+            var vid290 = U1 (input_6 >> 1) & 1
+            var vid292 = U1 (input_6 >> 2) & 1
+            var vid294 = U1 (input_6 >> 3) & 1
+            var vid296 = U1 (input_6 >> 4) & 1
+            var vid298 = U1 (input_6 >> 5) & 1
+            var vid300 = U1 (input_6 >> 6) & 1
+            var vid302 = U1 (input_6 >> 7) & 1
+            
+
+
+            // 32 com_and_bit 2 7953982506024152637 
+            var vid304 = U1 (U1 vid302) & (U1 vid284)
+            
+
+
+            // 76 com_switch_bit 2 1925694734027706735 
+            var vid807 = U1 0
+            var and_field_id807 = ~vid807
+            if (U1 vid304) != 0 {
+                vid807 |= U1  (U1 ((U1 vid304)))
+                and_field_id807 &= U1  (U1 ((U1 vid304)))
+            }
+            
+
+
+            // 31 com_nor_bit 2 9149931116012712290 
+            var vid306 = U1 ~((U1 vid284) | (U1 vid302))
+            
+
+
+            // 30 com_nor_bit 2 8795941894907070935 
+            var vid308 = U1 ~((U1 vid306) | (U1 vid304))
+            
+
+
+            // 29 com_and_bit 2 3728548360692591518 
+            var vid310 = U1 (U1 vid300) & (U1 vid282)
+            
+
+
+            // 336 com_cc_input_buffer 1 0 
+            var vid312 = U1 (U1 vid310)
+            
+
+
+            // 337 com_switch_bit 2 2782707272472093186 
+            var vid789 = U1 0
+            var and_field_id789 = ~vid789
+            if (U1 vid312) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 28 com_nor_bit 2 3000539084310774889 
+            var vid314 = U1 ~((U1 vid282) | (U1 vid300))
+            
+
+
+            // 27 com_nor_bit 2 4821902706089047440 
+            var vid316 = U1 ~((U1 vid314) | (U1 vid310))
+            
+
+
+            // 320 com_cc_input_buffer 1 0 
+            var vid318 = U1 (U1 vid316)
+            
+
+
+            // 316 com_cc_input_buffer 1 0 
+            var vid320 = U1 (U1 vid316)
+            
+
+
+            // 310 com_cc_input_buffer 1 0 
+            var vid322 = U1 (U1 vid316)
+            
+
+
+            // 267 com_cc_input_buffer 1 0 
+            var vid324 = U1 (U1 vid316)
+            
+
+
+            // 187 com_cc_input_buffer 1 0 
+            var vid326 = U1 (U1 vid316)
+            
+
+
+            // 174 com_cc_input_buffer 1 0 
+            var vid328 = U1 (U1 vid316)
+            
+
+
+            // 161 com_cc_input_buffer 1 0 
+            var vid330 = U1 (U1 vid316)
+            
+
+
+            // 25 com_and_bit 2 5797632620196728202 
+            var vid332 = U1 (U1 vid298) & (U1 vid280)
+            
+
+
+            // 321 com_cc_input_buffer 1 0 
+            var vid334 = U1 (U1 vid332)
+            
+
+
+            // 322 com_and_bit 2 8852713774730215582 
+            var vid336 = U1 (U1 vid318) & (U1 vid334)
+            
+
+
+            // 324 com_cc_input_buffer 1 0 
+            var vid338 = U1 (U1 vid336)
+            
+
+
+            // 328 com_switch_bit 2 294286609714413644 
+            if (U1 vid338) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 306 com_cc_input_buffer 1 0 
+            var vid340 = U1 (U1 vid332)
+            
+
+
+            // 307 com_switch_bit 2 3003954067454508106 
+            var vid825 = U1 0
+            var and_field_id825 = ~vid825
+            if (U1 vid340) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            
+
+
+            // 22 com_nor_bit 2 4844103648165599852 
+            var vid342 = U1 ~((U1 vid280) | (U1 vid298))
+            
+
+
+            // 21 com_nor_bit 2 6757871003368058233 
+            var vid344 = U1 ~((U1 vid342) | (U1 vid332))
+            
+
+
+            // 315 com_cc_input_buffer 1 0 
+            var vid346 = U1 (U1 vid344)
+            
+
+
+            // 318 com_and_bit 2 6660966176730956673 
+            var vid348 = U1 (U1 vid320) & (U1 vid346)
+            
+
+
+            // 308 com_cc_input_buffer 1 0 
+            var vid350 = U1 (U1 vid344)
+            
+
+
+            // 291 com_cc_input_buffer 1 0 
+            var vid352 = U1 (U1 vid344)
+            
+
+
+            // 285 com_cc_input_buffer 1 0 
+            var vid354 = U1 (U1 vid344)
+            
+
+
+            // 278 com_cc_input_buffer 1 0 
+            var vid356 = U1 (U1 vid344)
+            
+
+
+            // 270 com_cc_input_buffer 1 0 
+            var vid358 = U1 (U1 vid344)
+            
+
+
+            // 261 com_cc_input_buffer 1 0 
+            var vid360 = U1 (U1 vid344)
+            
+
+
+            // 268 com_and_bit 2 4283815188096319554 
+            var vid362 = U1 (U1 vid324) & (U1 vid360)
+            
+
+
+            // 256 com_cc_input_buffer 1 0 
+            var vid364 = U1 (U1 vid344)
+            
+
+
+            // 180 com_cc_input_buffer 1 0 
+            var vid366 = U1 (U1 vid344)
+            
+
+
+            // 170 com_cc_input_buffer 1 0 
+            var vid368 = U1 (U1 vid344)
+            
+
+
+            // 171 com_and_bit 2 3655103148258055937 
+            var vid370 = U1 (U1 vid328) & (U1 vid368)
+            
+
+
+            // 157 com_cc_input_buffer 1 0 
+            var vid372 = U1 (U1 vid344)
+            
+
+
+            // 158 com_and_bit 2 4302586722040349860 
+            var vid374 = U1 (U1 vid330) & (U1 vid372)
+            
+
+
+            // 148 com_cc_input_buffer 1 0 
+            var vid376 = U1 (U1 vid344)
+            
+
+
+            // 20 com_and_bit 2 12636642320324533 
+            var vid378 = U1 (U1 vid296) & (U1 vid278)
+            
+
+
+            // 317 com_cc_input_buffer 1 0 
+            var vid380 = U1 (U1 vid378)
+            
+
+
+            // 319 com_and_bit 2 4845566385197344948 
+            var vid382 = U1 (U1 vid348) & (U1 vid380)
+            
+
+
+            // 325 com_cc_input_buffer 1 0 
+            var vid384 = U1 (U1 vid382)
+            
+
+
+            // 326 com_switch_bit 2 5857829065542404626 
+            if (U1 vid384) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 290 com_cc_input_buffer 1 0 
+            var vid386 = U1 (U1 vid378)
+            
+
+
+            // 292 com_and_bit 2 6840674328463095928 
+            var vid388 = U1 (U1 vid386) & (U1 vid352)
+            
+
+
+            // 294 com_cc_input_buffer 1 0 
+            var vid390 = U1 (U1 vid388)
+            
+
+
+            // 298 com_switch_bit 2 7628024749180082734 
+            if (U1 vid390) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            
+
+
+            // 233 com_cc_input_buffer 1 0 
+            var vid392 = U1 (U1 vid378)
+            
+
+
+            // 234 com_switch_bit 2 601045178860081094 
+            var vid851 = U1 0
+            var and_field_id851 = ~vid851
+            if (U1 vid392) != 0 {
+                vid851 |= U1  (U1 ((U1 vid260)))
+                and_field_id851 &= U1  (U1 ((U1 vid260)))
+            }
+            
+
+
+            // 19 com_nor_bit 2 7422356026595846976 
+            var vid394 = U1 ~((U1 vid278) | (U1 vid296))
+            
+
+
+            // 18 com_nor_bit 2 4343000998468322500 
+            var vid396 = U1 ~((U1 vid394) | (U1 vid378))
+            
+
+
+            // 309 com_cc_input_buffer 1 0 
+            var vid398 = U1 (U1 vid396)
+            
+
+
+            // 311 com_and_bit 2 5820684338313732236 
+            var vid400 = U1 (U1 vid398) & (U1 vid350)
+            
+
+
+            // 286 com_cc_input_buffer 1 0 
+            var vid402 = U1 (U1 vid396)
+            
+
+
+            // 288 com_and_bit 2 5700188947329703077 
+            var vid404 = U1 (U1 vid402) & (U1 vid354)
+            
+
+
+            // 276 com_cc_input_buffer 1 0 
+            var vid406 = U1 (U1 vid396)
+            
+
+
+            // 269 com_cc_input_buffer 1 0 
+            var vid408 = U1 (U1 vid396)
+            
+
+
+            // 272 com_and_bit 2 1650345653342582755 
+            var vid410 = U1 (U1 vid358) & (U1 vid408)
+            
+
+
+            // 260 com_cc_input_buffer 1 0 
+            var vid412 = U1 (U1 vid396)
+            
+
+
+            // 263 com_and_bit 2 6656264506801240251 
+            var vid414 = U1 (U1 vid362) & (U1 vid412)
+            
+
+
+            // 250 com_cc_input_buffer 1 0 
+            var vid416 = U1 (U1 vid396)
+            
+
+
+            // 257 com_and_bit 2 5832490171448141166 
+            var vid418 = U1 (U1 vid364) & (U1 vid416)
+            
+
+
+            // 246 com_cc_input_buffer 1 0 
+            var vid420 = U1 (U1 vid396)
+            
+
+
+            // 178 com_cc_input_buffer 1 0 
+            var vid422 = U1 (U1 vid396)
+            
+
+
+            // 181 com_and_bit 2 2705086275808377863 
+            var vid424 = U1 (U1 vid422) & (U1 vid366)
+            
+
+
+            // 164 com_cc_input_buffer 1 0 
+            var vid426 = U1 (U1 vid396)
+            
+
+
+            // 151 com_cc_input_buffer 1 0 
+            var vid428 = U1 (U1 vid396)
+            
+
+
+            // 154 com_and_bit 2 2585997204751532349 
+            var vid430 = U1 (U1 vid374) & (U1 vid428)
+            
+
+
+            // 144 com_cc_input_buffer 1 0 
+            var vid432 = U1 (U1 vid396)
+            
+
+
+            // 145 com_and_bit 2 23999335741767804 
+            var vid434 = U1 (U1 vid376) & (U1 vid432)
+            
+
+
+            // 132 com_cc_input_buffer 1 0 
+            var vid436 = U1 (U1 vid396)
+            
+
+
+            // 122 com_cc_input_buffer 1 0 
+            var vid438 = U1 (U1 vid396)
+            
+
+
+            // 117 com_cc_input_buffer 1 0 
+            var vid440 = U1 (U1 vid396)
+            
+
+
+            // 16 com_nor_bit 2 4464411260387098868 
+            var vid442 = U1 ~((U1 vid276) | (U1 vid294))
+            
+
+
+            // 15 com_and_bit 2 2751414797364498838 
+            var vid444 = U1 (U1 vid294) & (U1 vid276)
+            
+
+
+            // 314 com_cc_input_buffer 1 0 
+            var vid446 = U1 (U1 vid444)
+            
+
+
+            // 313 com_and_bit 2 1920924780408112781 
+            var vid448 = U1 (U1 vid322) & (U1 vid446)
+            
+
+
+            // 312 com_and_bit 2 8431418670666255006 
+            var vid450 = U1 (U1 vid400) & (U1 vid448)
+            
+
+
+            // 323 com_cc_input_buffer 1 0 
+            var vid452 = U1 (U1 vid450)
+            
+
+
+            // 327 com_switch_bit 2 6594061243071175896 
+            if (U1 vid452) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 287 com_cc_input_buffer 1 0 
+            var vid454 = U1 (U1 vid444)
+            
+
+
+            // 289 com_and_bit 2 5788614412713850768 
+            var vid456 = U1 (U1 vid404) & (U1 vid454)
+            
+
+
+            // 293 com_cc_input_buffer 1 0 
+            var vid458 = U1 (U1 vid456)
+            
+
+
+            // 297 com_switch_bit 2 6060172705298989590 
+            if (U1 vid458) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            
+
+
+            // 229 com_cc_input_buffer 1 0 
+            var vid460 = U1 (U1 vid444)
+            
+
+
+            // 230 com_switch_bit 2 8963716173381596976 
+            var vid895 = U1 0
+            var and_field_id895 = ~vid895
+            if (U1 vid460) != 0 {
+                vid895 |= U1  (U1 ((U1 vid262)))
+                and_field_id895 &= U1  (U1 ((U1 vid262)))
+            }
+            
+
+
+            // 61 com_and_bit 2 4469286278846631954 
+            var vid462 = U1 (U1 vid396) & (U1 vid444)
+            
+
+
+            // 232 com_cc_input_buffer 1 0 
+            var vid464 = U1 (U1 vid462)
+            
+
+
+            // 236 com_switch_bit 2 6820155166153597746 
+            if (U1 vid464) != 0 {
+                vid851 |= U1  (U1 ((U1 vid260)))
+                and_field_id851 &= U1  (U1 ((U1 vid260)))
+            }
+            
+
+
+            // 17 com_nor_bit 2 5137116139792490014 
+            var vid466 = U1 ~((U1 vid442) | (U1 vid444))
+            
+
+
+            // 277 com_cc_input_buffer 1 0 
+            var vid468 = U1 (U1 vid466)
+            
+
+
+            // 271 com_cc_input_buffer 1 0 
+            var vid470 = U1 (U1 vid466)
+            
+
+
+            // 262 com_cc_input_buffer 1 0 
+            var vid472 = U1 (U1 vid466)
+            
+
+
+            // 249 com_cc_input_buffer 1 0 
+            var vid474 = U1 (U1 vid466)
+            
+
+
+            // 244 com_cc_input_buffer 1 0 
+            var vid476 = U1 (U1 vid466)
+            
+
+
+            // 217 com_cc_input_buffer 1 0 
+            var vid478 = U1 (U1 vid466)
+            
+
+
+            // 212 com_cc_input_buffer 1 0 
+            var vid480 = U1 (U1 vid466)
+            
+
+
+            // 179 com_cc_input_buffer 1 0 
+            var vid482 = U1 (U1 vid466)
+            
+
+
+            // 163 com_cc_input_buffer 1 0 
+            var vid484 = U1 (U1 vid466)
+            
+
+
+            // 167 com_and_bit 2 8406268167204970510 
+            var vid486 = U1 (U1 vid426) & (U1 vid484)
+            
+
+
+            // 177 com_and_bit 2 1196166164322804821 
+            var vid488 = U1 (U1 vid370) & (U1 vid486)
+            
+
+
+            // 150 com_cc_input_buffer 1 0 
+            var vid490 = U1 (U1 vid466)
+            
+
+
+            // 138 com_cc_input_buffer 1 0 
+            var vid492 = U1 (U1 vid466)
+            
+
+
+            // 141 com_and_bit 2 1730462349856507365 
+            var vid494 = U1 (U1 vid434) & (U1 vid492)
+            
+
+
+            // 130 com_cc_input_buffer 1 0 
+            var vid496 = U1 (U1 vid466)
+            
+
+
+            // 121 com_cc_input_buffer 1 0 
+            var vid498 = U1 (U1 vid466)
+            
+
+
+            // 111 com_cc_input_buffer 1 0 
+            var vid500 = U1 (U1 vid466)
+            
+
+
+            // 118 com_and_bit 2 2870870753000220364 
+            var vid502 = U1 (U1 vid440) & (U1 vid500)
+            
+
+
+            // 88 com_cc_input_buffer 1 0 
+            var vid504 = U1 (U1 vid466)
+            
+
+
+            // 85 com_cc_input_buffer 1 0 
+            var vid506 = U1 (U1 vid466)
+            
+
+
+            // 14 com_and_bit 2 2955638682631912821 
+            var vid508 = U1 (U1 vid292) & (U1 vid274)
+            
+
+
+            // 275 com_cc_input_buffer 1 0 
+            var vid510 = U1 (U1 vid508)
+            
+
+
+            // 274 com_and_bit 2 6667706625488196066 
+            var vid512 = U1 (U1 vid470) & (U1 vid510)
+            
+
+
+            // 273 com_and_bit 2 3684621434772921841 
+            var vid514 = U1 (U1 vid410) & (U1 vid512)
+            
+
+
+            // 295 com_cc_input_buffer 1 0 
+            var vid516 = U1 (U1 vid514)
+            
+
+
+            // 296 com_switch_bit 2 2517208786066986722 
+            if (U1 vid516) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            
+
+
+            // 266 com_cc_input_buffer 1 0 
+            var vid518 = U1 (U1 vid508)
+            
+
+
+            // 265 com_and_bit 2 8764445406723418163 
+            var vid520 = U1 (U1 vid472) & (U1 vid518)
+            
+
+
+            // 264 com_and_bit 2 542773453521796977 
+            var vid522 = U1 (U1 vid414) & (U1 vid520)
+            
+
+
+            // 330 com_cc_input_buffer 1 0 
+            var vid524 = U1 (U1 vid522)
+            
+
+
+            // 331 com_switch_bit 2 7610274612413776226 
+            if (U1 vid524) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 245 com_cc_input_buffer 1 0 
+            var vid526 = U1 (U1 vid508)
+            
+
+
+            // 247 com_and_bit 2 5520587686703518746 
+            var vid528 = U1 (U1 vid526) & (U1 vid476)
+            
+
+
+            // 248 com_and_bit 2 6040304318860099375 
+            var vid530 = U1 (U1 vid528) & (U1 vid420)
+            
+
+
+            // 231 com_cc_input_buffer 1 0 
+            var vid532 = U1 (U1 vid530)
+            
+
+
+            // 235 com_switch_bit 2 158893144626937381 
+            if (U1 vid532) != 0 {
+                vid851 |= U1  (U1 ((U1 vid260)))
+                and_field_id851 &= U1  (U1 ((U1 vid260)))
+            }
+            
+
+
+            // 218 com_cc_input_buffer 1 0 
+            var vid534 = U1 (U1 vid508)
+            
+
+
+            // 219 com_and_bit 2 7085884000949960097 
+            var vid536 = U1 (U1 vid478) & (U1 vid534)
+            
+
+
+            // 221 com_cc_input_buffer 1 0 
+            var vid538 = U1 (U1 vid536)
+            
+
+
+            // 225 com_switch_bit 2 8637904456720373919 
+            if (U1 vid538) != 0 {
+                vid895 |= U1  (U1 ((U1 vid262)))
+                and_field_id895 &= U1  (U1 ((U1 vid262)))
+            }
+            
+
+
+            // 101 com_cc_input_buffer 1 0 
+            var vid540 = U1 (U1 vid508)
+            
+
+
+            // 102 com_switch_bit 2 4954781236290207598 
+            var vid875 = U1 0
+            var and_field_id875 = ~vid875
+            if (U1 vid540) != 0 {
+                vid875 |= U1  (U1 ((U1 vid266)))
+                and_field_id875 &= U1  (U1 ((U1 vid266)))
+            }
+            
+
+
+            // 12 com_nor_bit 2 205664184713889292 
+            var vid542 = U1 ~((U1 vid274) | (U1 vid292))
+            
+
+
+            // 13 com_nor_bit 2 4900709066968779259 
+            var vid544 = U1 ~((U1 vid542) | (U1 vid508))
+            
+
+
+            // 283 com_cc_input_buffer 1 0 
+            var vid546 = U1 (U1 vid544)
+            
+
+
+            // 284 com_and_bit 2 1954433519730276046 
+            var vid548 = U1 (U1 vid546) & (U1 vid468)
+            
+
+
+            // 279 com_and_bit 2 8949616270037847607 
+            var vid550 = U1 (U1 vid548) & (U1 vid406)
+            
+
+
+            // 251 com_cc_input_buffer 1 0 
+            var vid552 = U1 (U1 vid544)
+            
+
+
+            // 252 com_and_bit 2 1304105972544571053 
+            var vid554 = U1 (U1 vid474) & (U1 vid552)
+            
+
+
+            // 253 com_and_bit 2 3724203624228048153 
+            var vid556 = U1 (U1 vid418) & (U1 vid554)
+            
+
+
+            // 213 com_cc_input_buffer 1 0 
+            var vid558 = U1 (U1 vid544)
+            
+
+
+            // 215 com_and_bit 2 77496255762268575 
+            var vid560 = U1 (U1 vid558) & (U1 vid480)
+            
+
+
+            // 208 com_cc_input_buffer 1 0 
+            var vid562 = U1 (U1 vid544)
+            
+
+
+            // 185 com_cc_input_buffer 1 0 
+            var vid564 = U1 (U1 vid544)
+            
+
+
+            // 186 com_and_bit 2 7449607112616058820 
+            var vid566 = U1 (U1 vid564) & (U1 vid482)
+            
+
+
+            // 182 com_and_bit 2 305259254351034291 
+            var vid568 = U1 (U1 vid566) & (U1 vid424)
+            
+
+
+            // 165 com_cc_input_buffer 1 0 
+            var vid570 = U1 (U1 vid544)
+            
+
+
+            // 152 com_cc_input_buffer 1 0 
+            var vid572 = U1 (U1 vid544)
+            
+
+
+            // 153 com_and_bit 2 4715887857977618150 
+            var vid574 = U1 (U1 vid490) & (U1 vid572)
+            
+
+
+            // 137 com_cc_input_buffer 1 0 
+            var vid576 = U1 (U1 vid544)
+            
+
+
+            // 131 com_cc_input_buffer 1 0 
+            var vid578 = U1 (U1 vid544)
+            
+
+
+            // 133 com_and_bit 2 9203815857565807519 
+            var vid580 = U1 (U1 vid578) & (U1 vid496)
+            
+
+
+            // 123 com_cc_input_buffer 1 0 
+            var vid582 = U1 (U1 vid544)
+            
+
+
+            // 110 com_cc_input_buffer 1 0 
+            var vid584 = U1 (U1 vid544)
+            
+
+
+            // 109 com_cc_input_buffer 1 0 
+            var vid586 = U1 (U1 vid544)
+            
+
+
+            // 87 com_cc_input_buffer 1 0 
+            var vid588 = U1 (U1 vid544)
+            
+
+
+            // 90 com_and_bit 2 3692320441478646434 
+            var vid590 = U1 (U1 vid504) & (U1 vid588)
+            
+
+
+            // 79 com_cc_input_buffer 1 0 
+            var vid592 = U1 (U1 vid544)
+            
+
+
+            // 86 com_and_bit 2 7365857753563631190 
+            var vid594 = U1 (U1 vid506) & (U1 vid592)
+            
+
+
+            // 51 com_nor_bit 2 5290238725739139051 
+            var vid596 = U1 ~((U1 vid272) | (U1 vid290))
+            
+
+
+            // 48 com_and_bit 2 4839015373502151168 
+            var vid598 = U1 (U1 vid290) & (U1 vid272)
+            
+
+
+            // 282 com_cc_input_buffer 1 0 
+            var vid600 = U1 (U1 vid598)
+            
+
+
+            // 281 com_and_bit 2 6470882599799201471 
+            var vid602 = U1 (U1 vid356) & (U1 vid600)
+            
+
+
+            // 280 com_and_bit 2 2874686677348616701 
+            var vid604 = U1 (U1 vid550) & (U1 vid602)
+            
+
+
+            // 302 com_cc_input_buffer 1 0 
+            var vid606 = U1 (U1 vid604)
+            
+
+
+            // 303 com_switch_bit 2 123943850342988801 
+            if (U1 vid606) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            
+
+
+            // 214 com_cc_input_buffer 1 0 
+            var vid608 = U1 (U1 vid598)
+            
+
+
+            // 216 com_and_bit 2 2187970865911573162 
+            var vid610 = U1 (U1 vid560) & (U1 vid608)
+            
+
+
+            // 220 com_cc_input_buffer 1 0 
+            var vid612 = U1 (U1 vid610)
+            
+
+
+            // 224 com_switch_bit 2 3095860454726035317 
+            if (U1 vid612) != 0 {
+                vid895 |= U1  (U1 ((U1 vid262)))
+                and_field_id895 &= U1  (U1 ((U1 vid262)))
+            }
+            
+
+
+            // 200 com_cc_input_buffer 1 0 
+            var vid614 = U1 (U1 vid598)
+            
+
+
+            // 204 com_switch_bit 2 3689389443649922347 
+            var vid759 = U1 0
+            var and_field_id759 = ~vid759
+            if (U1 vid614) != 0 {
+                vid759 |= U1  (U1 ((U1 vid264)))
+                and_field_id759 &= U1  (U1 ((U1 vid264)))
+            }
+            
+
+
+            // 184 com_cc_input_buffer 1 0 
+            var vid616 = U1 (U1 vid598)
+            
+
+
+            // 183 com_and_bit 2 7413293774647510178 
+            var vid618 = U1 (U1 vid616) & (U1 vid326)
+            
+
+
+            // 188 com_and_bit 2 8000210428468625446 
+            var vid620 = U1 (U1 vid568) & (U1 vid618)
+            
+
+
+            // 332 com_cc_input_buffer 1 0 
+            var vid622 = U1 (U1 vid620)
+            
+
+
+            // 333 com_switch_bit 2 520027862417043679 
+            if (U1 vid622) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 136 com_cc_input_buffer 1 0 
+            var vid624 = U1 (U1 vid598)
+            
+
+
+            // 135 com_and_bit 2 3879220765802304926 
+            var vid626 = U1 (U1 vid436) & (U1 vid624)
+            
+
+
+            // 134 com_and_bit 2 6521166969182820749 
+            var vid628 = U1 (U1 vid580) & (U1 vid626)
+            
+
+
+            // 240 com_cc_input_buffer 1 0 
+            var vid630 = U1 (U1 vid628)
+            
+
+
+            // 241 com_switch_bit 2 1169593227414579529 
+            if (U1 vid630) != 0 {
+                vid851 |= U1  (U1 ((U1 vid260)))
+                and_field_id851 &= U1  (U1 ((U1 vid260)))
+            }
+            
+
+
+            // 57 com_and_bit 2 4695104334951081398 
+            var vid632 = U1 (U1 vid544) & (U1 vid598)
+            
+
+
+            // 96 com_cc_input_buffer 1 0 
+            var vid634 = U1 (U1 vid632)
+            
+
+
+            // 97 com_switch_bit 2 6532953389066917036 
+            if (U1 vid634) != 0 {
+                vid875 |= U1  (U1 ((U1 vid266)))
+                and_field_id875 &= U1  (U1 ((U1 vid266)))
+            }
+            
+
+
+            // 52 com_nor_bit 2 6648568842306350349 
+            var vid636 = U1 ~((U1 vid596) | (U1 vid598))
+            
+
+
+            // 255 com_cc_input_buffer 1 0 
+            var vid638 = U1 (U1 vid636)
+            
+
+
+            // 207 com_cc_input_buffer 1 0 
+            var vid640 = U1 (U1 vid636)
+            
+
+
+            // 210 com_and_bit 2 7823802583925825656 
+            var vid642 = U1 (U1 vid562) & (U1 vid640)
+            
+
+
+            // 197 com_cc_input_buffer 1 0 
+            var vid644 = U1 (U1 vid636)
+            
+
+
+            // 193 com_cc_input_buffer 1 0 
+            var vid646 = U1 (U1 vid636)
+            
+
+
+            // 169 com_cc_input_buffer 1 0 
+            var vid648 = U1 (U1 vid636)
+            
+
+
+            // 166 com_and_bit 2 6455162617087803909 
+            var vid650 = U1 (U1 vid570) & (U1 vid648)
+            
+
+
+            // 156 com_cc_input_buffer 1 0 
+            var vid652 = U1 (U1 vid636)
+            
+
+
+            // 139 com_cc_input_buffer 1 0 
+            var vid654 = U1 (U1 vid636)
+            
+
+
+            // 140 com_and_bit 2 8832310463995423294 
+            var vid656 = U1 (U1 vid576) & (U1 vid654)
+            
+
+
+            // 127 com_cc_input_buffer 1 0 
+            var vid658 = U1 (U1 vid636)
+            
+
+
+            // 126 com_and_bit 2 7973994531279402641 
+            var vid660 = U1 (U1 vid582) & (U1 vid658)
+            
+
+
+            // 112 com_cc_input_buffer 1 0 
+            var vid662 = U1 (U1 vid636)
+            
+
+
+            // 113 com_and_bit 2 7295644672758727951 
+            var vid664 = U1 (U1 vid584) & (U1 vid662)
+            
+
+
+            // 114 com_and_bit 2 4938562179879702203 
+            var vid666 = U1 (U1 vid502) & (U1 vid664)
+            
+
+
+            // 105 com_cc_input_buffer 1 0 
+            var vid668 = U1 (U1 vid636)
+            
+
+
+            // 108 com_and_bit 2 7652998419033139272 
+            var vid670 = U1 (U1 vid668) & (U1 vid586)
+            
+
+
+            // 89 com_cc_input_buffer 1 0 
+            var vid672 = U1 (U1 vid636)
+            
+
+
+            // 78 com_cc_input_buffer 1 0 
+            var vid674 = U1 (U1 vid636)
+            
+
+
+            // 81 com_and_bit 2 77738646739728047 
+            var vid676 = U1 (U1 vid594) & (U1 vid674)
+            
+
+
+            // 26 com_nor_bit 2 6777355454665652214 
+            var vid678 = U1 ~((U1 vid270) | (U1 vid288))
+            
+
+
+            // 23 com_and_bit 2 6535357450599210745 
+            var vid680 = U1 (U1 vid288) & (U1 vid270)
+            
+
+
+            // 342 com_cc_input_buffer 1 0 
+            var vid682 = U1 (U1 vid680)
+            
+
+
+            // 258 com_cc_input_buffer 1 0 
+            var vid684 = U1 (U1 vid680)
+            
+
+
+            // 254 com_and_bit 2 5868814508030524936 
+            var vid686 = U1 (U1 vid638) & (U1 vid684)
+            
+
+
+            // 259 com_and_bit 2 6383021400652003980 
+            var vid688 = U1 (U1 vid556) & (U1 vid686)
+            
+
+
+            // 300 com_cc_input_buffer 1 0 
+            var vid690 = U1 (U1 vid688)
+            
+
+
+            // 301 com_switch_bit 2 2153406394998216938 
+            if (U1 vid690) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            
+
+
+            // 209 com_cc_input_buffer 1 0 
+            var vid692 = U1 (U1 vid680)
+            
+
+
+            // 211 com_and_bit 2 8349061802773744461 
+            var vid694 = U1 (U1 vid642) & (U1 vid692)
+            
+
+
+            // 95 com_cc_input_buffer 1 0 
+            var vid696 = U1 (U1 vid694)
+            
+
+
+            // 99 com_switch_bit 2 1855523903376928781 
+            if (U1 vid696) != 0 {
+                vid875 |= U1  (U1 ((U1 vid266)))
+                and_field_id875 &= U1  (U1 ((U1 vid266)))
+            }
+            
+
+
+            // 198 com_cc_input_buffer 1 0 
+            var vid698 = U1 (U1 vid680)
+            
+
+
+            // 199 com_and_bit 2 647358764915338109 
+            var vid700 = U1 (U1 vid644) & (U1 vid698)
+            
+
+
+            // 201 com_cc_input_buffer 1 0 
+            var vid702 = U1 (U1 vid700)
+            
+
+
+            // 205 com_switch_bit 2 3776053707357915735 
+            if (U1 vid702) != 0 {
+                vid759 |= U1  (U1 ((U1 vid264)))
+                and_field_id759 &= U1  (U1 ((U1 vid264)))
+            }
+            
+
+
+            // 159 com_cc_input_buffer 1 0 
+            var vid704 = U1 (U1 vid680)
+            
+
+
+            // 155 com_and_bit 2 5457791322383004365 
+            var vid706 = U1 (U1 vid652) & (U1 vid704)
+            
+
+
+            // 160 com_and_bit 2 8015669224533142843 
+            var vid708 = U1 (U1 vid574) & (U1 vid706)
+            
+
+
+            // 162 com_and_bit 2 8996103950317417377 
+            var vid710 = U1 (U1 vid430) & (U1 vid708)
+            
+
+
+            // 334 com_cc_input_buffer 1 0 
+            var vid712 = U1 (U1 vid710)
+            
+
+
+            // 335 com_switch_bit 2 6723166815294530504 
+            if (U1 vid712) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            
+
+
+            // 128 com_cc_input_buffer 1 0 
+            var vid714 = U1 (U1 vid680)
+            
+
+
+            // 129 com_and_bit 2 3205413231757287136 
+            var vid716 = U1 (U1 vid714) & (U1 vid438)
+            
+
+
+            // 124 com_and_bit 2 5428821220654114329 
+            var vid718 = U1 (U1 vid716) & (U1 vid498)
+            
+
+
+            // 125 com_and_bit 2 1189109709042409939 
+            var vid720 = U1 (U1 vid718) & (U1 vid660)
+            
+
+
+            // 238 com_cc_input_buffer 1 0 
+            var vid722 = U1 (U1 vid720)
+            
+
+
+            // 239 com_switch_bit 2 5750028300158034938 
+            if (U1 vid722) != 0 {
+                vid851 |= U1  (U1 ((U1 vid260)))
+                and_field_id851 &= U1  (U1 ((U1 vid260)))
+            }
+            
+
+
+            // 93 com_cc_input_buffer 1 0 
+            var vid724 = U1 (U1 vid680)
+            
+
+
+            // 92 com_and_bit 2 8742197818394520739 
+            var vid726 = U1 (U1 vid672) & (U1 vid724)
+            
+
+
+            // 91 com_and_bit 2 1655234405507637424 
+            var vid728 = U1 (U1 vid590) & (U1 vid726)
+            
+
+
+            // 222 com_cc_input_buffer 1 0 
+            var vid730 = U1 (U1 vid728)
+            
+
+
+            // 223 com_switch_bit 2 8660132059130947052 
+            if (U1 vid730) != 0 {
+                vid895 |= U1  (U1 ((U1 vid262)))
+                and_field_id895 &= U1  (U1 ((U1 vid262)))
+            }
+            
+
+
+            // 24 com_nor_bit 2 1303152609358998913 
+            var vid732 = U1 ~((U1 vid678) | (U1 vid680))
+            
+
+
+            // 192 com_cc_input_buffer 1 0 
+            var vid734 = U1 (U1 vid732)
+            
+
+
+            // 195 com_and_bit 2 3215600844430334798 
+            var vid736 = U1 (U1 vid646) & (U1 vid734)
+            
+
+
+            // 190 com_cc_input_buffer 1 0 
+            var vid738 = U1 (U1 vid732)
+            
+
+
+            // 172 com_cc_input_buffer 1 0 
+            var vid740 = U1 (U1 vid732)
+            
+
+
+            // 143 com_cc_input_buffer 1 0 
+            var vid742 = U1 (U1 vid732)
+            
+
+
+            // 116 com_cc_input_buffer 1 0 
+            var vid744 = U1 (U1 vid732)
+            
+
+
+            // 103 com_cc_input_buffer 1 0 
+            var vid746 = U1 (U1 vid732)
+            
+
+
+            // 80 com_cc_input_buffer 1 0 
+            var vid748 = U1 (U1 vid732)
+            
+
+
+            // 194 com_cc_input_buffer 1 0 
+            var vid752 = U1 (U1 vid750)
+            
+
+
+            // 196 com_and_bit 2 3742054132635496571 
+            var vid754 = U1 (U1 vid736) & (U1 vid752)
+            
+
+
+            // 202 com_cc_input_buffer 1 0 
+            var vid756 = U1 (U1 vid754)
+            
+
+
+            // 203 com_switch_bit 2 5461677082816799752 
+            if (U1 vid756) != 0 {
+                vid759 |= U1  (U1 ((U1 vid264)))
+                and_field_id759 &= U1  (U1 ((U1 vid264)))
+            }
+            if vid759 > and_field_id759 {
+                halt()
+            }
+            let zid759 = vid759 >= and_field_id759
+            
+
+
+            // 11 com_xor_bit 2 5754242804844214502 
+            var vid766 = U1 (U1 vid759) ^ (U1 vid544)
+            
+
+
+            // 189 com_cc_input_buffer 1 0 
+            var vid768 = U1 (U1 vid750)
+            
+
+
+            // 191 com_and_bit 2 2586345496692462065 
+            var vid770 = U1 (U1 vid768) & (U1 vid738)
+            
+
+
+            // 341 com_cc_input_buffer 1 0 
+            var vid772 = U1 (U1 vid770)
+            
+
+
+            // 340 com_or_bit 2 4155999221393236652 
+            var vid774 = U1 (U1 vid772) | (U1 vid682)
+            
+
+
+            // 35 com_xor_bit 2 868395922919864608 
+            var vid776 = U1 (U1 vid774) ^ (U1 vid636)
+            
+
+
+            // 175 com_cc_input_buffer 1 0 
+            var vid778 = U1 (U1 vid750)
+            
+
+
+            // 168 com_and_bit 2 3493556968745539824 
+            var vid780 = U1 (U1 vid740) & (U1 vid778)
+            
+
+
+            // 176 com_and_bit 2 1123189913462282796 
+            var vid782 = U1 (U1 vid650) & (U1 vid780)
+            
+
+
+            // 173 com_and_bit 2 6932186008970357916 
+            var vid784 = U1 (U1 vid488) & (U1 vid782)
+            
+
+
+            // 338 com_cc_input_buffer 1 0 
+            var vid786 = U1 (U1 vid784)
+            
+
+
+            // 339 com_switch_bit 2 750329714646777166 
+            if (U1 vid786) != 0 {
+                vid789 |= U1  (U1 ((U1 vid256)))
+                and_field_id789 &= U1  (U1 ((U1 vid256)))
+            }
+            if vid789 > and_field_id789 {
+                halt()
+            }
+            let zid789 = vid789 >= and_field_id789
+            
+
+
+            // 77 com_switch_bit 2 9125716930767495652 
+            if (U1 vid308) != 0 {
+                vid807 |= U1  (U1 ((U1 vid789)))
+                and_field_id807 &= U1  (U1 ((U1 vid789)))
+            }
+            if vid807 > and_field_id807 {
+                halt()
+            }
+            let zid807 = vid807 >= and_field_id807
+            
+
+
+            // 47 com_xor_bit 2 297053530334840454 
+            var vid812 = U1 (U1 vid789) ^ (U1 vid308)
+            
+
+
+            // 146 com_cc_input_buffer 1 0 
+            var vid814 = U1 (U1 vid750)
+            
+
+
+            // 142 com_and_bit 2 8096734209867380245 
+            var vid816 = U1 (U1 vid742) & (U1 vid814)
+            
+
+
+            // 147 com_and_bit 2 6115316718822287843 
+            var vid818 = U1 (U1 vid656) & (U1 vid816)
+            
+
+
+            // 149 com_and_bit 2 5131865477241681785 
+            var vid820 = U1 (U1 vid494) & (U1 vid818)
+            
+
+
+            // 304 com_cc_input_buffer 1 0 
+            var vid822 = U1 (U1 vid820)
+            
+
+
+            // 305 com_switch_bit 2 6686184761574295034 
+            if (U1 vid822) != 0 {
+                vid825 |= U1  (U1 ((U1 vid258)))
+                and_field_id825 &= U1  (U1 ((U1 vid258)))
+            }
+            if vid825 > and_field_id825 {
+                halt()
+            }
+            let zid825 = vid825 >= and_field_id825
+            
+
+
+            // 46 com_xor_bit 2 3709352739083247023 
+            var vid840 = U1 (U1 vid825) ^ (U1 vid316)
+            
+
+
+            // 119 com_cc_input_buffer 1 0 
+            var vid842 = U1 (U1 vid750)
+            
+
+
+            // 115 com_and_bit 2 2761969801427172778 
+            var vid844 = U1 (U1 vid744) & (U1 vid842)
+            
+
+
+            // 120 com_and_bit 2 3437169490568771886 
+            var vid846 = U1 (U1 vid666) & (U1 vid844)
+            
+
+
+            // 242 com_cc_input_buffer 1 0 
+            var vid848 = U1 (U1 vid846)
+            
+
+
+            // 243 com_switch_bit 2 7885656643940416854 
+            if (U1 vid848) != 0 {
+                vid851 |= U1  (U1 ((U1 vid260)))
+                and_field_id851 &= U1  (U1 ((U1 vid260)))
+            }
+            if vid851 > and_field_id851 {
+                halt()
+            }
+            let zid851 = vid851 >= and_field_id851
+            
+
+
+            // 43 com_xor_bit 2 4132056912288279101 
+            var vid864 = U1 (U1 vid851) ^ (U1 vid344)
+            
+
+
+            // 104 com_cc_input_buffer 1 0 
+            var vid866 = U1 (U1 vid750)
+            
+
+
+            // 106 com_and_bit 2 2331649621928873545 
+            var vid868 = U1 (U1 vid866) & (U1 vid746)
+            
+
+
+            // 107 com_and_bit 2 405040252748080219 
+            var vid870 = U1 (U1 vid868) & (U1 vid670)
+            
+
+
+            // 94 com_cc_input_buffer 1 0 
+            var vid872 = U1 (U1 vid870)
+            
+
+
+            // 98 com_switch_bit 2 981062655521456832 
+            if (U1 vid872) != 0 {
+                vid875 |= U1  (U1 ((U1 vid266)))
+                and_field_id875 &= U1  (U1 ((U1 vid266)))
+            }
+            if vid875 > and_field_id875 {
+                halt()
+            }
+            let zid875 = vid875 >= and_field_id875
+            
+
+
+            // 38 com_xor_bit 2 9104710471873691546 
+            var vid884 = U1 (U1 vid875) ^ (U1 vid466)
+            
+
+
+            // 84 com_cc_input_buffer 1 0 
+            var vid886 = U1 (U1 vid750)
+            
+
+
+            // 83 com_and_bit 2 2660065004016739879 
+            var vid888 = U1 (U1 vid748) & (U1 vid886)
+            
+
+
+            // 82 com_and_bit 2 6540267049547837797 
+            var vid890 = U1 (U1 vid676) & (U1 vid888)
+            
+
+
+            // 227 com_cc_input_buffer 1 0 
+            var vid892 = U1 (U1 vid890)
+            
+
+
+            // 228 com_switch_bit 2 523306181087843952 
+            if (U1 vid892) != 0 {
+                vid895 |= U1  (U1 ((U1 vid262)))
+                and_field_id895 &= U1  (U1 ((U1 vid262)))
+            }
+            if vid895 > and_field_id895 {
+                halt()
+            }
+            let zid895 = vid895 >= and_field_id895
+            
+
+
+            // 40 com_xor_bit 2 1725081959076785582 
+            var vid906 = U1 (U1 vid895) ^ (U1 vid396)
+            
+
+
+            // 50 com_xor_bit 2 5334583541180452230 
+            var vid908 = U1 (U1 vid750) ^ (U1 vid732)
+            
+
+
+            // 9 com_maker_bit_8 2 3423911319983141590 
+            var vid910 = U8 (U8 (U1 vid908) | (((U8 ((U1 vid776))) & 1) << 1) | (((U8 ((U1 vid766))) & 1) << 2) | (((U8 ((U1 vid884))) & 1) << 3) | (((U8 ((U1 vid906))) & 1) << 4) | (((U8 ((U1 vid864))) & 1) << 5) | (((U8 ((U1 vid840))) & 1) << 6) | (((U8 ((U1 vid812))) & 1) << 7))
+            
+
+
+            // 0 com_none 2 0 
+            
+
+
+            // 1 com_level_output_word 8 3 Output
+            level_output.output = U8 ((U8 vid910))
+            level_output.output_is_z = false
+            
+
+
+            // 5 com_level_output_word 1 2340322686578998678 Carry out
+            level_output.carry_out = U1 ((U1 vid807))
+            level_output.carry_out_is_z = !zid807
+
+    
+
+
+
+            if in_scope("check_output") {
+                let result = check_output(cycle + 1, level_input, level_output)
+                handle_test_result(result)
+            }
+
+            
+            cycle += 1 // Do this late as it signals to the front end that it can update
+
+        }
+
+        set_setting(sim_cycle, U64 cycle)
+
+        let time_now = get_time()
+
+        let time_diff = U64 (time_now - last_time)
+
+        nanos_per_cycle = time_diff / U64 burst_cycles
+
+        if time_now - last_time > 33.ms() {
+
+            // Burst took too long
+            burst_cycles = max(1, burst_cycles - 1)
+
+        } else {
+
+            // Burst was too fast
+            burst_cycles = burst_cycles + 1
+
+        }
+
+        #if in_scope("on_ui_update"){
+
+            on_ui_update(level_input, level_output)
+
+        }
+
+        last_time = time_now
+
+
+        def get_target_cycle(time_now: Time) U64 {
+            let time_diff = U64 (time_now - original_start_time)
+            return orig_start_cycle + ((time_diff / 1000000) * speed) / 1000000 // Double divide to prevent overflow
+        }
+
+        var run_target_cycle = get_target_cycle(time_now)
+
+        // Sleep any ahead of time away
+        while cycle > Int run_target_cycle && get_command(ctl_command_id) == last_command_id {
+
+            sleep(1.ms())
+            cycle -= 1
+            mode_refresh()
+            cycle += 1
+
+            run_target_cycle = get_target_cycle(get_time())
+
+        }
+
+    }
+
+}
+
+var manual_input_seen = false
+
+run_sim: while true {
+
+    reset_sim()
+
+    
+    def get_binary_repr(value: Int, size: Int) Str {
+        var text = ""
+        var i = size - 1
+        while i >= 0 {
+            if ((value >> i) & 1) == 0 {
+                text += "[F]"
+            } else {
+                text += "[T]"
+            }
+            i -= 1
+        }
+        return text
+    }
+    
+    def get_input(cycle: Int) Input {
+    
+    
+        // 17 bit RNG
+        var x = cycle
+        x ^= x << 6
+        x ^= x >> 11
+        x ^= x << 9
+    
+        let input = Input {
+            a: U8 (x & 0xff),
+            b: U8 ((x >> 8) & 0xff),
+            carry_in: U1 (x >> 16) & 1,
+        }
+    
+        ui_set_text("table[0][1]", `{input.a}`)
+        ui_set_text("table[0][2]", `[right]{get_binary_repr(Int input.a, 8)}[/right]`)
+    
+        ui_set_text("table[1][1]", `{input.b}`)
+        ui_set_text("table[1][2]", `[right]{get_binary_repr(Int input.b, 8)}[/right]`)
+    
+        ui_set_text("table[2][1]", `{input.carry_in}`)
+        ui_set_text("table[2][2]", `[right]{get_binary_repr(Int input.carry_in, 1)}[/right]`)
+    
+        let value = Int (U64 input.a + U64 input.b + U64 input.carry_in)
+        ui_set_text("table[3][1]", `{value}`)
+        ui_set_text("table[3][2]", `[right]    {get_binary_repr(value >> 8, 1)}    {get_binary_repr(value, 8)}[/right]`)
+    
+        return input
+    }
+    
+    def check_output(cycle: Int, input: Input, output: Output) TestResult {
+    
+        if output.output_is_z {
+            ui_set_text("table[4][1]", `[Z]`)
+            ui_set_text("table[4][2]", `[right]    [Z]    [Z][Z][Z][Z][Z][Z][Z][Z][/right]`)
+            set_error(`输出不应为空（高阻态）`)
+            return fail
+        }
+    
+        ui_set_text("table[4][1]", `{Int output.carry_out << 8 | Int output.output}`)
+        ui_set_text("table[4][2]", `[right]    {get_binary_repr(Int output.carry_out, 1)}    {get_binary_repr(Int output.output, 8)}[/right]`)
+    
+        var sum = Int input.a + Int input.b + Int input.carry_in
+        var car = Int (U64 (sum > 0xff))
+    
+        if Int output.output != (Int sum & 0xff) {
+            return fail
+        }
+    
+        if Int output.carry_out != car {
+            return fail
+        }
+    
+        if cycle == 0x1ffff {
+            return win
+        }
+    
+    }
+    
+    while true {
+
+        mode_refresh()
+
+        #if in_scope("on_ui_update"){
+
+            on_ui_update(level_input, level_output)
+
+        }
+
+        while get_command(ctl_command_id) == last_command_id {
+
+            #if in_scope("on_manual_input"){
+
+                if last_level_manual_input != get_command(ctl_level_manual_input_id) {
+
+                    last_level_manual_input = get_command(ctl_level_manual_input_id)
+                    on_manual_input(Int get_command(ctl_level_manual_input))
+                    manual_input_seen = true
+
+                }
+
+            }
+
+            sleep(1.ms())
+
+        }
+
+        if manual_input_seen {
+
+            manual_input_seen = false
+            break
+
+        }
+
+        last_command_id = get_command(ctl_command_id) // Read this before the command in case of race condition
+        set_setting(sim_last_command_id, last_command_id)
+        var command = SimCommand get_command(ctl_command)
+
+        switch command
+
+            case run {
+
+                var target_cycle = Int get_setting(sim_target_cycle)
+
+                set_setting(sim_running, U64 1)
+                mode_run(target_cycle)
+                set_setting(sim_running, U64 0)
+
+            }
+
+            case refresh {}
+
+            case mode_reset {
+
+                var i = 0
+                while i < 1024 {
+                    input_replay[i] = ctl_input_replay_reset[i]
+                    i += 1
+                }
+
+                break
+
+            }
+
+            case quit_simulation {
+
+                break run_sim // We need to break out instead of thread_exit() to make sure everything is cleaned up
+
+            }
+
+    }
+
+}
+

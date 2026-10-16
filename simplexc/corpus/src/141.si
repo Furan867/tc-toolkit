@@ -1,0 +1,686 @@
+
+
+var commands                          = Ptr 2416573349888
+var settings                          = Ptr 2416573415424
+var input_replay                      = raw_cast(<Arr[U64]>, 2416573480960)
+var output_history_pins               = Ptr 2416576167936
+var error_buffer                      = Ptr 2416633315328
+var ui_buffer                         = Ptr 2416633380864
+var ctl_input_replay_reset            = raw_cast(<Arr[U64]>, 2416636067840)
+
+const #SIMULATION_STATE               = Ptr 2416623026176
+const #SIMULATION_KEYBOARD_CHARACTER  = Ptr 2416635478064
+const #SIMULATION_KEYBOARD_COORDINATE = Ptr 2416635490352
+const #SIMULATION_PUSH_BUTTON         = Ptr 2416635502640
+
+type SimCommand Enum[run, refresh, mode_reset, quit_simulation]
+type CommandIndex Enum[ctl_command, ctl_command_id, ctl_cycle_speed_ms, ctl_exit, ctl_level_manual_input, ctl_level_manual_input_id, ctl_test]
+type StateIndex Enum[sim_cycle, sim_target_cycle, sim_test_result, sim_last_command_id, sim_error_component, sim_short_circuit_component_id_1, sim_short_circuit_component_id_2, sim_short_circuit_pin_1, sim_short_circuit_pin_2, sim_short_circuit_top_level_permanent_id_1, sim_short_circuit_top_level_permanent_id_2, sim_short_circuit_value_1, sim_short_circuit_value_2, sim_short_circuit_any_top_level_wire_id, sim_running]
+
+def get_command(idx: CommandIndex) U64 {
+    return load(<U64>, commands + (Int idx) * 8)
+}
+
+def get_setting(idx: StateIndex) U64 {
+    return load(<U64>, settings + (Int idx) * 8)
+}
+
+def set_setting(idx: StateIndex, value: U64) None {
+    store(settings + (Int idx) * 8, value)
+}
+
+type TestResult Enum[pass, win, fail]
+
+
+def set_text(text: Str, offset: Int) None {
+    let length = text.len()
+    store(ui_buffer + offset, length)
+    var i = 0
+    while i < length {
+        store(ui_buffer + offset + 8 + i, U8 text[i])
+        i += 1
+    }
+}
+
+type ComponentType Enum[com_off, com_on, com_not_bit, com_and_bit, com_and_3_bit, com_nand_bit, com_or_bit, com_or_3_bit, com_nor_bit, com_xor_bit, com_xnor_bit, com_switch_bit, com_delay_line_bit, com_register_bit, com_full_adder, com_maker_bit_8, com_splitter_bit_8, com_not_word, com_or_word, com_and_word, com_nand_word, com_nor_word, com_xor_word, com_xnor_word, com_switch_word, com_equal, com_less_u, com_less_s, com_neg, com_add, com_mul, com_div, com_lsl, com_lsr, com_rol, com_ror, com_asr, com_counter, com_register_word, com_level_output_8_pin, com_level_delay_gate, com_mux, com_decoder_1, com_decoder_2, com_decoder_3, com_constant, com_splitter_word_2, com_maker_word_2, com_clz, com_register_word_config, com_probe_wire_asm, com_push_button, com_load_port, com_delay_line_word, com_store_port, com_ctz, com_cc_level_output, com_level_gate, com_level_input_1_pin, com_level_input_word, com_level_input_switched, com_level_input_2_pin, com_level_input_3_pin, com_level_input_4_pin, com_level_output_1_pin, com_level_output_word, com_level_output_switched, com_level_output_2_pin, com_level_output_3_pin, com_level_output_4_pin, com_level_output_counter, com_custom, com_cc_input, com_cc_output, com_probe_memory_bit, com_probe_memory_word, com_probe_wire_bit, com_probe_wire_word, com_halt, com_segment_display, com_static_value, com_screen, com_time, com_keyboard, com_static_eval, com_verilog_input, com_verilog_output, com_maker_word_4, com_maker_word_8, com_splitter_word_4, com_splitter_word_8, com_static_indexer, com_inc, com_cc_level_input, com_mod, com_splitter_bit_2, com_splitter_bit_4, com_maker_bit_2, com_maker_bit_4, com_concatenator_2, com_concatenator_4, com_concatenator_8, com_static_indexer_config, com_ram, com_delay_line_word_config]
+
+def get_cycle() Int { return cycle }
+def get_test() Int { return Int get_command(ctl_test) }
+def get_gate_score() Int { return 0}
+def get_delay_score() Int { return 0 }
+def get_component_count() Int { return 15 }
+def get_component_count(component_type: ComponentType) Int {
+    const #COUNTS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    return #COUNTS[Int component_type]
+}
+
+def ui_set_position(id: Str, x: Int, y: Int) None {
+    switch id
+        case "description" { store(ui_buffer + 8, U64 (x << 16 | (y & 0xffff))) }
+}
+
+def ui_set_width(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_hidden(id: Str, value: Bool) None {
+    switch id
+        case "description" { store(ui_buffer + 0, U64 value) }
+}
+
+def ui_set_size(id: Str, value: Int) None {
+    switch id
+        case "description" { store(ui_buffer + 32, U64 value) }
+}
+
+def ui_set_column_header_size(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_row_header_size(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_color(id: Str, value: Int) None {
+    switch id
+        case "description" { store(ui_buffer + 40, U64 value) }
+}
+
+def ui_set_address_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_instruction_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_description_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_column_header_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_row_header_color(id: Str, value: Int) None {
+    switch id
+}
+
+def ui_set_text(id: Str, text: Str) None {
+    switch id
+        case "description" { set_text(text, 10000) }
+}
+
+def ui_set_image_name(id: Str, text: Str) None {
+    switch id
+}
+
+def ui_set_instruction(index: Int, code: Int, pointer: Int) None {
+    switch index
+}
+def add_keyboard_value(key_down: Bool, key: U8) None {
+    let value = U16 key_down | (U16 key) << 8
+    var index = load(<U16>, #SIMULATION_KEYBOARD_CHARACTER + 4098)
+    store(#SIMULATION_KEYBOARD_CHARACTER + index, value)
+    store(#SIMULATION_KEYBOARD_CHARACTER + 4098, (index + 8) % 4096)
+
+}
+def get_last_time() Int { return Int time_component_last }
+def get_screen_connection(screen_name: Str) Str {
+}
+def get_memory(label: Str) Int { 
+}
+def get_load_port_input(label: Str) Int { 
+}
+def get_screen_settings(label: Str, index: Int) Int { 
+}
+def get_output(user_label: Str, index: Int) Int { 
+    if user_label == "Instruction" && index == 0 { return Int (U64 load(<U32>, #SIMULATION_STATE + 1)) }
+}
+def get_ram_value(label: Str, address: Int, size: @Size) @Size {
+}
+def set_ram_value(label: Str, offset: Int, value: @Type) None {
+}
+
+const #CYCLE_PAST_FAIL = 0
+def max(a: TestResult, b: TestResult) TestResult {
+    return TestResult max(U64 a, U64 b)
+}
+
+def set_error(input: Str) None {
+
+    let len = input.len()
+
+    store(error_buffer, U16 len)
+
+    var i = 0
+    while i < len {
+        store(error_buffer + i + 2, U8 input[i])
+        i += 1
+    }
+}
+
+
+var cycle = -1
+var last_command_id = U64 0
+var last_level_manual_input = U64 0
+var time_component_last = U64 0
+
+def reset_sim() None {
+
+    time_component_last = U64 0
+
+    set_error("")
+
+    global_seed = Seed (get_command(ctl_test) + 1) // 0 can't be seed
+
+    last_level_manual_input = 0
+    set_setting(sim_cycle, #U64_HIGH) // -1
+    set_setting(sim_short_circuit_component_id_1, U64 0)
+    set_setting(sim_short_circuit_component_id_2, U64 0)
+    set_setting(sim_test_result, U64 pass)
+    cycle = -1
+
+  
+    memory_clear(#SIMULATION_KEYBOARD_CHARACTER, 8192)
+    memory_clear(#SIMULATION_KEYBOARD_COORDINATE, 8192)
+    memory_clear(#SIMULATION_STATE, 281)
+
+
+}
+
+type Input Struct {
+    instruction: U32,
+}
+
+type Output Struct {
+    mode: U32,
+    mode_is_z: Bool,
+    opcode: U32,
+    opcode_is_z: Bool,
+    destination: U32,
+    destination_is_z: Bool,
+    argument_a: U32,
+    argument_a_is_z: Bool,
+    argument_b: U32,
+    argument_b_is_z: Bool,
+    is_immediate: U32,
+    is_immediate_is_z: Bool,
+    immediate_value: U32,
+    immediate_value_is_z: Bool,
+}
+
+var level_input = Input {}
+var level_output = Output {}
+
+def mode_refresh() None {
+
+        
+
+
+    // 8 com_cc_level_input 32 2857925993101657787 Instruction
+    let value_id256 = input_replay[0]
+    store(#SIMULATION_STATE + 256, U32 (value_id256))
+    store(#SIMULATION_STATE + 260, U32 (value_id256))
+    
+
+
+    // 15 com_static_indexer 4 6036280416598283364 
+    let value_id264 = (U4 (load(<U32>, #SIMULATION_STATE + 256) >> 16))
+    store(#SIMULATION_STATE + 264, U4 (value_id264))
+    store(#SIMULATION_STATE + 265, U4 (value_id264))
+    
+
+
+    // 14 com_static_indexer 16 6859277610052586171 
+    let value_id266 = (U16 (load(<U32>, #SIMULATION_STATE + 256)) << 0)
+    store(#SIMULATION_STATE + 266, U16 (value_id266))
+    store(#SIMULATION_STATE + 268, U16 (value_id266))
+    
+
+
+    // 13 com_static_indexer 4 2211871955133031198 
+    let value_id270 = (U4 (load(<U32>, #SIMULATION_STATE + 256) >> 20))
+    store(#SIMULATION_STATE + 270, U4 (value_id270))
+    store(#SIMULATION_STATE + 271, U4 (value_id270))
+    
+
+
+    // 12 com_static_indexer 2 5891832703321341333 
+    let value_id272 = (U2 (load(<U32>, #SIMULATION_STATE + 256) >> 29))
+    store(#SIMULATION_STATE + 272, U2 (value_id272))
+    store(#SIMULATION_STATE + 273, U2 (value_id272))
+    
+
+
+    // 11 com_static_indexer 4 2582612331954894822 
+    let value_id274 = (U4 (load(<U32>, #SIMULATION_STATE + 256) >> 24))
+    store(#SIMULATION_STATE + 274, U4 (value_id274))
+    store(#SIMULATION_STATE + 275, U4 (value_id274))
+    
+
+
+    // 10 com_static_indexer 1 5230978298178574149 
+    let value_id276 = (U1 (load(<U32>, #SIMULATION_STATE + 256) >> 28))
+    store(#SIMULATION_STATE + 276, U1 (value_id276))
+    store(#SIMULATION_STATE + 277, U1 (value_id276))
+    
+
+
+    // 9 com_static_indexer 4 6416451403841227166 
+    let value_id278 = (U4 (load(<U32>, #SIMULATION_STATE + 256) >> 8))
+    store(#SIMULATION_STATE + 278, U4 (value_id278))
+    store(#SIMULATION_STATE + 279, U4 (value_id278))
+    
+
+
+    // 0 com_none 2 0 
+    
+
+
+    // 1 com_cc_level_output 32 2266912573537829424 Mode
+    
+
+
+    // 2 com_cc_level_output 32 7392833150014471023 Opcode
+    
+
+
+    // 3 com_cc_level_output 32 8100261680818564506 Destination
+    
+
+
+    // 4 com_cc_level_output 32 1886102874238571044 Argument A
+    
+
+
+    // 5 com_cc_level_output 32 8308268625781988215 Argument B
+    
+
+
+    // 6 com_cc_level_output 32 3182908653800951534 Is Immediate
+    
+
+
+    // 7 com_cc_level_output 32 2091231291333357983 Immediate Value
+
+}
+
+def mode_run(target_cycle: Int) None {
+
+    if get_setting(sim_test_result) == U64 win { return }
+    if (get_setting(sim_test_result) == U64 fail && cycle + 1 >= #CYCLE_PAST_FAIL) { return }
+    if get_setting(sim_short_circuit_component_id_1) != 0 { return }
+
+    var halt_run = false
+
+    var original_start_time = Time 0
+    var orig_start_cycle = U64 cycle
+    var last_time = original_start_time
+
+    var burst_cycles = 1
+
+    var nanos_per_cycle = U64 0
+
+    var i = 0
+    var last_target_speed = U64 0
+    var speed = U64 1
+
+    while get_command(ctl_command_id) == last_command_id && !halt_run && target_cycle > cycle {
+        i += 1
+
+        let target_speed = max(1, get_command(ctl_cycle_speed_ms))
+
+        if target_speed != last_target_speed {
+
+            original_start_time = get_time()
+            orig_start_cycle = U64 cycle
+            last_time = original_start_time
+
+            speed = min(U64 get_command(ctl_cycle_speed_ms), 10000000000000) // Cap at 10 ghz to avoid overflow
+            last_target_speed = target_speed
+
+        }
+
+        let cycles_at_start = cycle
+        let burst_target = cycle + burst_cycles
+
+        var burst_target_cycle = min(target_cycle, burst_target)
+
+        def halt() None {
+
+            burst_target_cycle = cycle
+            halt_run = true
+
+        }
+
+        def handle_test_result(result: TestResult) None {
+
+            if result != pass {
+
+                var res = result
+
+                halt() // Halt regardless of wether we are above '#CYCLE_PAST_FAIL'
+
+                set_setting(sim_test_result, max(get_setting(sim_test_result), U64 res))
+
+            }
+
+        }
+
+        while cycle < burst_target_cycle {
+
+            if in_scope("get_input") {
+                level_input = get_input(cycle + 1)
+            }
+            
+
+            
+
+
+            // 8 com_cc_level_input 32 2857925993101657787 Instruction
+            var vid256 = U32 level_input.instruction
+            input_replay[0] = U64 level_input.instruction
+            
+
+
+            // 15 com_static_indexer 4 6036280416598283364 
+            var vid264 = U4 (U4 ((U32 vid256) >> 16))
+            
+
+
+            // 14 com_static_indexer 16 6859277610052586171 
+            var vid266 = U16 (U16 ((U32 vid256)) << 0)
+            
+
+
+            // 13 com_static_indexer 4 2211871955133031198 
+            var vid270 = U4 (U4 ((U32 vid256) >> 20))
+            
+
+
+            // 12 com_static_indexer 2 5891832703321341333 
+            var vid272 = U2 (U2 ((U32 vid256) >> 29))
+            
+
+
+            // 11 com_static_indexer 4 2582612331954894822 
+            var vid274 = U4 (U4 ((U32 vid256) >> 24))
+            
+
+
+            // 10 com_static_indexer 1 5230978298178574149 
+            var vid276 = U1 (U1 ((U32 vid256) >> 28))
+            
+
+
+            // 9 com_static_indexer 4 6416451403841227166 
+            var vid278 = U4 (U4 ((U32 vid256) >> 8))
+            
+
+
+            // 0 com_none 2 0 
+            
+
+
+            // 1 com_cc_level_output 32 2266912573537829424 Mode
+            level_output.mode = U32 ((U32 ((U2 vid272))))
+            level_output.mode_is_z = false
+            
+
+
+            // 2 com_cc_level_output 32 7392833150014471023 Opcode
+            level_output.opcode = U32 ((U32 ((U4 vid274))))
+            level_output.opcode_is_z = false
+            
+
+
+            // 3 com_cc_level_output 32 8100261680818564506 Destination
+            level_output.destination = U32 ((U32 ((U4 vid270))))
+            level_output.destination_is_z = false
+            
+
+
+            // 4 com_cc_level_output 32 1886102874238571044 Argument A
+            level_output.argument_a = U32 ((U32 ((U4 vid264))))
+            level_output.argument_a_is_z = false
+            
+
+
+            // 5 com_cc_level_output 32 8308268625781988215 Argument B
+            level_output.argument_b = U32 ((U32 ((U4 vid278))))
+            level_output.argument_b_is_z = false
+            
+
+
+            // 6 com_cc_level_output 32 3182908653800951534 Is Immediate
+            level_output.is_immediate = U32 ((U32 ((U1 vid276))))
+            level_output.is_immediate_is_z = false
+            
+
+
+            // 7 com_cc_level_output 32 2091231291333357983 Immediate Value
+            level_output.immediate_value = U32 ((U32 ((U16 vid266))))
+            level_output.immediate_value_is_z = false
+
+    
+
+
+
+            if in_scope("check_output") {
+                let result = check_output(cycle + 1, level_input, level_output)
+                handle_test_result(result)
+            }
+
+            
+            cycle += 1 // Do this late as it signals to the front end that it can update
+
+        }
+
+        set_setting(sim_cycle, U64 cycle)
+
+        let time_now = get_time()
+
+        let time_diff = U64 (time_now - last_time)
+
+        nanos_per_cycle = time_diff / U64 burst_cycles
+
+        if time_now - last_time > 33.ms() {
+
+            // Burst took too long
+            burst_cycles = max(1, burst_cycles - 1)
+
+        } else {
+
+            // Burst was too fast
+            burst_cycles = burst_cycles + 1
+
+        }
+
+        #if in_scope("on_ui_update"){
+
+            on_ui_update(level_input, level_output)
+
+        }
+
+        last_time = time_now
+
+
+        def get_target_cycle(time_now: Time) U64 {
+            let time_diff = U64 (time_now - original_start_time)
+            return orig_start_cycle + ((time_diff / 1000000) * speed) / 1000000 // Double divide to prevent overflow
+        }
+
+        var run_target_cycle = get_target_cycle(time_now)
+
+        // Sleep any ahead of time away
+        while cycle > Int run_target_cycle && get_command(ctl_command_id) == last_command_id {
+
+            sleep(1.ms())
+            cycle -= 1
+            mode_refresh()
+            cycle += 1
+
+            run_target_cycle = get_target_cycle(get_time())
+
+        }
+
+    }
+
+}
+
+var manual_input_seen = false
+
+run_sim: while true {
+
+    reset_sim()
+
+    def get_input(cycle: Int) Input {
+    
+        return Input {instruction: U32 random(0xffffffff)}
+    
+    }
+    
+    def check_output(cycle: Int, input: Input, output: Output) TestResult {
+    
+        let instruction     =  Int input.instruction
+        let mode            = (instruction >> 29) & 0b11
+        let opcode          = (instruction >> 24) & 0b1111
+        let dest            = (instruction >> 20) & 0b1111
+        let a               = (instruction >> 16) & 0b1111
+        let b               = (instruction >>  8) & 0b1111
+        let immediate       = (instruction >> 28) & 1
+        let immediate_value =  instruction & 0xffff
+    
+        if output.mode_is_z || Int output.mode != mode {
+    
+            set_error(`运行模式（Mode）应为 {mode}。`)
+            return fail
+    
+        }
+    
+        if output.opcode_is_z || Int output.opcode != opcode {
+    
+            let actual_opcode = output.opcode
+            set_error(`操作码（Opcode）应为 {opcode}，而非 {actual_opcode}。`)
+            return fail
+    
+        }
+    
+        if output.destination_is_z || Int output.destination != dest {
+    
+            set_error(`目标应为 {dest}。`)
+            return fail
+    
+        }
+    
+        if output.argument_a_is_z || Int output.argument_a != a {
+    
+            set_error(`参数 A 应为 {a}。`)
+            return fail
+    
+        }
+    
+        if output.argument_b_is_z || Int output.argument_b != b {
+    
+            set_error(`参数 B 应为 {b}。`)
+            return fail
+    
+        }
+    
+        if output.is_immediate_is_z || Int output.is_immediate != immediate {
+    
+            set_error(`立即数指示位应为 {immediate}。`)
+            return fail
+    
+        }
+    
+        if output.immediate_value_is_z || Int output.immediate_value != immediate_value {
+    
+            set_error(`立即数的值应为 {immediate_value}。`)
+            return fail
+    
+        }
+    
+        if cycle == 0xffff {
+    
+            return win
+    
+        }
+    
+    }
+    while true {
+
+        mode_refresh()
+
+        #if in_scope("on_ui_update"){
+
+            on_ui_update(level_input, level_output)
+
+        }
+
+        while get_command(ctl_command_id) == last_command_id {
+
+            #if in_scope("on_manual_input"){
+
+                if last_level_manual_input != get_command(ctl_level_manual_input_id) {
+
+                    last_level_manual_input = get_command(ctl_level_manual_input_id)
+                    on_manual_input(Int get_command(ctl_level_manual_input))
+                    manual_input_seen = true
+
+                }
+
+            }
+
+            sleep(1.ms())
+
+        }
+
+        if manual_input_seen {
+
+            manual_input_seen = false
+            break
+
+        }
+
+        last_command_id = get_command(ctl_command_id) // Read this before the command in case of race condition
+        set_setting(sim_last_command_id, last_command_id)
+        var command = SimCommand get_command(ctl_command)
+
+        switch command
+
+            case run {
+
+                var target_cycle = Int get_setting(sim_target_cycle)
+
+                set_setting(sim_running, U64 1)
+                mode_run(target_cycle)
+                set_setting(sim_running, U64 0)
+
+            }
+
+            case refresh {}
+
+            case mode_reset {
+
+                var i = 0
+                while i < 1024 {
+                    input_replay[i] = ctl_input_replay_reset[i]
+                    i += 1
+                }
+
+                break
+
+            }
+
+            case quit_simulation {
+
+                break run_sim // We need to break out instead of thread_exit() to make sure everything is cleaned up
+
+            }
+
+    }
+
+}
+

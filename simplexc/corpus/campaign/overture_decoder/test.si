@@ -1,0 +1,114 @@
+def get_input(cycle: Int) Input {
+    var result = Input {}
+    switch cycle
+        case 0 {
+            result.instruction = 0
+        }
+        case 1 {
+            result.instruction = 64
+        }
+        case 2 {
+            result.instruction = 128
+        }
+        case 3 {
+            result.instruction = 192
+        }
+
+    var text = ""
+    if (cycle & 2) == 0 {
+        text += "[F]"
+    } else {
+        text += "[T]"
+    }
+    if (cycle & 1) == 0 {
+        text += "[F]"
+    } else {
+        text += "[T]"
+    }
+    text += "[Z][Z][Z][Z][Z][Z]"
+    ui_set_text("table[0][1]", text)
+
+    return result
+}
+
+def mode_name(value: Int) Str {
+    switch value
+        case 0 {
+            return (31337_71705253055197, `Immediate`)
+        }
+        case 1 {
+            return (31337_23393810721136, `ALU`)
+        }
+        case 2 {
+            return (31337_67613074322431, `Move`)
+        }
+        case 3 {
+            return (31337_41856942338650, `Condition`)
+        }
+
+    return "???"
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    ui_set_text("table[1][1]", mode_name(cycle))
+
+    switch input.instruction
+        case 0 {
+            ui_set_text("table[2][1]", "[T][F][F][F]")
+        }
+        case 64 {
+            ui_set_text("table[2][1]", "[F][T][F][F]")
+        }
+        case 128 {
+            ui_set_text("table[2][1]", "[F][F][T][F]")
+        }
+        case 192 {
+            ui_set_text("table[2][1]", "[F][F][F][T]")
+        }
+
+    var error_seen = false
+    var actual = ""
+
+    if output.immediate_is_z {
+        actual += "[Z]"
+        error_seen = true
+    } else {
+        actual += output.immediate == 1 ? "[T]" : "[F]"
+    }
+
+    if output.alu_is_z {
+        actual += "[Z]"
+        error_seen = true
+    } else {
+        actual += output.alu == 1 ? "[T]" : "[F]"
+    }
+
+    if output.move_is_z {
+        actual += "[Z]"
+        error_seen = true
+    } else {
+        actual += output.move == 1 ? "[T]" : "[F]"
+    }
+
+    if output.condition_is_z {
+        actual += "[Z]"
+        error_seen = true
+    } else {
+        actual += output.condition == 1 ? "[T]" : "[F]"
+    }
+
+    ui_set_text("table[3][1]", actual)
+
+    let test_vec = Int output.immediate | Int output.alu << 1 | Int output.move << 2 | Int output.condition << 3
+
+    if error_seen || test_vec != (1 << cycle) {
+        return fail
+    }
+
+
+    if cycle == 3 {
+        return win
+    }
+
+}

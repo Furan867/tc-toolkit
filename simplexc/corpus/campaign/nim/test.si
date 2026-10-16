@@ -1,0 +1,200 @@
+
+var cards_taken = 0
+var player_choice = 0
+var bot_to_move = false
+
+
+def get_input_switched() Int {
+
+    return 12 - cards_taken
+
+}
+
+def redraw() None {
+
+    let cards_left = 12 - cards_taken
+    let cards_not_raised = cards_left - player_choice
+
+    if cards_left <= 1 {
+
+        if !bot_to_move {
+
+            ui_set_text("description", (31337_27262056315410, `You lost!`))
+
+        } else {
+
+            ui_set_text("description", (31337_42147812867053, `You won!`))
+
+        }
+
+    } else {
+
+        if bot_to_move {
+
+            ui_set_text("description", (31337_64085588225039, `Hit enter to see what the oponent does`))
+
+        } elif player_choice == 0 {
+
+            ui_set_text("description", (31337_79378464416004, `Use the arrow keys to pick cards`))
+
+        } else {
+
+            let card_count = player_choice
+            ui_set_text("description", (31337_49299754864790, `Hit enter to take {card_count} cards`))
+
+        }
+
+    }
+
+    var i = 0
+
+    while i < 12 {
+
+        let name = str(i)
+        ui_set_hidden(name, i >= cards_left)
+
+        if i < cards_not_raised {
+
+            ui_set_position(name, -330 + 60 * i, 0)
+
+        } else {
+
+            ui_set_position(name, -330 + 60 * i, -30)
+
+        }
+
+
+        i += 1
+
+    }
+
+}
+
+def bot_move() None {
+
+    let cards_left = 12 - cards_taken
+    var bot_action = 0
+
+    switch cards_left
+        case 1  { return }
+        case 2  { bot_action = 1 }
+        case 3  { bot_action = 2 }
+        case 4  { bot_action = 3 }
+        case 5  { bot_action = 1 + random(3) }
+        case 6  { bot_action = 1 }
+        case 7  { bot_action = 2 }
+        case 8  { bot_action = 3 }
+        case 9  { bot_action = 1 + random(3) }
+        case 10 { bot_action = 1 }
+        case 11 { bot_action = 2 }
+
+    cards_taken += bot_action
+    bot_to_move = false
+
+}
+
+def on_manual_input(action: Int) None {
+
+    const #ADD_CARD = 0
+    const #REM_CARD = 2
+    const #COMMIT   = 5
+
+    let cards_left = 12 - cards_taken
+
+    if cards_left <= 1 {
+
+        return
+
+    }
+
+    if action != #REM_CARD && action != #ADD_CARD && action != #COMMIT {
+
+        return
+
+    }
+
+    if bot_to_move && action != #COMMIT {
+
+        return
+
+    }
+
+    if !bot_to_move && action == #COMMIT && player_choice == 0 {
+
+        return
+
+    }
+
+    if action == #ADD_CARD {
+
+        if player_choice == 3 || player_choice >= cards_left {
+
+            return
+
+        }
+
+        player_choice = player_choice + 1
+
+    } elif action == #REM_CARD {
+
+        if player_choice <= 1 {
+
+            return
+
+        }
+
+        player_choice = player_choice - 1
+
+    } else {
+
+        if bot_to_move {
+
+            bot_move()
+
+        } else {
+
+            cards_taken += player_choice
+            player_choice = 0
+            bot_to_move = true
+
+        }
+
+    }
+
+    redraw()
+
+}
+
+def check_output_switched(output: Int) TestResult {
+
+    let cards_left = 12 - cards_taken
+
+    if output == 0 || output > 3 || output < 0 {
+
+        set_error((31337_29769682738867, `You may only take 1, 2 or 3 cards`))
+        return fail
+
+    }
+
+    if output >= cards_left {
+
+        cards_taken = 0
+        set_error((31337_90440029783715, `You took the last card`))
+        return fail
+
+    }
+
+    cards_taken += output
+    bot_to_move = true
+
+    bot_move()
+    redraw()
+
+    if cards_taken == 11 {
+
+        return bot_to_move ? win : fail
+
+    }
+
+}
+

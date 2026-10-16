@@ -1,0 +1,64 @@
+
+var input_cursor = 0
+var output_cursor = 0
+var text_len = 0
+
+var text = ""
+
+switch get_test()
+    case 0 { text = "computable numbers are the real numbers whose expressions as a decimal are calculable by finite means" }
+    case 1 { text = "the fundamental problem of communication is that of reproducing at one point a message selected at another point" }
+    case 2 { text = "future users of large data banks must be protected from having to know how the data is organized in the machine" }
+
+ui_set_text("text", text)
+
+def get_input_switched() Int {
+
+    let cursor = input_cursor
+    input_cursor += 1
+
+    let len = text.len()
+
+    var bg = ""
+    var i = 0
+    while i < len {
+        if i == cursor {
+            bg += "█"
+        } else {
+            bg += " "
+        }
+        i += 1
+    }
+
+    ui_set_text("bg", `{bg}`)
+
+    return Int text[cursor]
+
+}
+
+def check_output_switched(output: Int) TestResult {
+    var mask = U8 0b11011111
+
+    if output_cursor > input_cursor {
+        let character = output_cursor
+        set_error((31337_37137490280093, `You did not read character {character} from the string yet`))
+        return fail
+    }
+
+    var char = U8 text[output_cursor]
+    if output_cursor == 0 {
+        char &= mask // Capitalize first char
+    } elif text[output_cursor - 1] == Char 32 {
+        char &= mask // Capitalize
+    }
+
+    if U8 output != char {
+        set_error((31337_52976618691411, `Output should have been {char}, not {output}`))
+        return fail
+    }
+
+    output_cursor += 1
+    if output_cursor == text.len() {
+        return win
+    }
+}

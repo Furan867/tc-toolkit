@@ -1,0 +1,217 @@
+const #INPUT  = U8 0b110_000
+const #OUTPUT = U8 0b000_110
+
+const #IMM    = U8 0b0000_0000
+const #CALC   = U8 0b0100_0000
+const #MOVE   = U8 0b1000_0000
+const #COND   = U8 0b1100_0000
+
+var instructions = array(<U8>, 256)
+var registers    = [0,0,0,0,0,0]
+
+const #NAND = U8 0
+const #OR   = U8 1
+const #AND  = U8 2
+const #NOR  = U8 3
+const #ADD  = U8 4
+const #SUB  = U8 5
+
+var tests = 0
+
+
+var h = 0
+while h < 6 {
+    registers[h] = 0
+    h += 1
+}
+
+var i = 0
+
+while i < 32 {
+    instructions[i] = #IMM | U8 random(64)
+    i += 1
+}
+
+var alu_opp = U8 1
+while alu_opp < 6 {
+    instructions[i] = #MOVE | #INPUT | 1
+    i += 1
+    instructions[i] = #MOVE | #INPUT | 2
+    i += 1
+    instructions[i] = #CALC | alu_opp
+    i += 1
+    instructions[i] = #MOVE | U8 3 << 3 | #OUTPUT
+    i += 1
+    alu_opp += 1
+}
+
+var s = U8 0
+var d = U8 0
+instructions[i] = #MOVE | #INPUT | #OUTPUT
+i += 1
+instructions[i] = #MOVE | #INPUT | 0
+i += 1
+instructions[i] = #MOVE | #INPUT | 1
+i += 1
+instructions[i] = #MOVE | #INPUT | 2
+i += 1
+instructions[i] = #MOVE | #INPUT | 3
+i += 1
+instructions[i] = #MOVE | #INPUT | 4
+i += 1
+instructions[i] = #MOVE | #INPUT | 5
+i += 1
+
+while s <= 6 {
+    d = 0
+    instructions[i] = #MOVE | #INPUT | s
+    i += 1
+    while d <= 6 {
+        instructions[i] = #MOVE | (s << 3) | d
+        i += 1
+        d += 1
+    }
+    s += 1
+}
+
+tests = i
+
+
+def get_input(cycle: Int) Input {
+
+    let instruction = instructions[cycle]
+
+    let opcode      = instruction & 0b1100_0000
+    let operands    = instruction & 0b0011_1111
+
+    switch U8 opcode
+        case #IMM {
+            ui_set_text("description", `imm {operands}`)
+        }
+        case #MOVE {
+            let src = operands >> 3
+            let dst = U8 (operands & 0b111)
+
+            if src == 0b110 && dst == #OUTPUT {
+                ui_set_text("description", `mov in, out`)
+            } elif src == 0b110 {
+                ui_set_text("description", `mov in, r{dst}`)
+            } elif dst == #OUTPUT {
+                ui_set_text("description", `mov r{src} out`)
+            } else {
+                ui_set_text("description", `mov r{dst}, r{src}`)
+            }
+        }
+        case #CALC {
+            let opp = instruction & 0b111
+
+            switch U8 opp
+                case #OR   { ui_set_text("description", "or r1, r2") }
+                case #NAND { ui_set_text("description", "nand r1, r2") }
+                case #NOR  { ui_set_text("description", "nor r1, r2") }
+                case #AND  { ui_set_text("description", "and r1, r2") }
+                case #ADD  { ui_set_text("description", "add r1, r2") }
+                case #SUB  { ui_set_text("description", "sub r1, r2") }
+
+        }
+
+    return Input {instruction: U8 instruction, input: U8 random(256)}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let instruction = Int input.instruction
+    let opcode = U8 (instruction >> 6)
+
+    ui_set_instruction(0, instruction, cycle)
+
+    let to = (instruction >> 3) & 0b111
+
+    if output.output_enabled && (opcode != #MOVE >> 6 || to != 6) {
+        set_error((31337_63497936956369, `Output should not be enabled.`))
+        return fail
+    }
+
+    switch opcode << 6
+
+        case #IMM {
+
+            registers[0] = instruction & 0b111111
+
+        }
+
+        case #CALC {
+
+            let alu_code = instruction & 0b111
+            let r1 = registers[1]
+            let r2 = registers[2]
+
+            switch U8 alu_code
+                case #NAND {
+                    registers[3] = ~(r1 & r2) & 0xff
+                }
+                case #OR {
+                    registers[3] = r1 | r2
+                }
+                case #AND {
+                    registers[3] = r1 & r2
+                }
+                case #NOR {
+                    registers[3] = ~(r1 | r2) & 0xff
+                }
+                case #ADD {
+                    registers[3] = (r1 + r2) & 0xff
+                }
+                case #SUB {
+                    registers[3] = (r1 - r2) & 0xff
+                }
+
+        }
+
+        case #MOVE {
+
+            let from = instruction & 0b111
+            let to   = (instruction >> 3) & 0b111
+
+            var value = 0
+            if from <= 5 {
+                value = registers[from]
+            } elif from == 6 {
+                value = Int input.input
+            }
+
+            if to <= 5 {
+                registers[to] = value
+            } elif to == 6 {
+                if !output.output_enabled {
+                    set_error((31337_82564442776805, `Output not enabled.`))
+                    return fail
+                }
+                if Int output.output != value {
+                    set_error((31337_17793323757435, `Expected output: {value}.`))
+                    return fail
+                }
+            }
+
+        }
+
+    var reg_i = 0
+    while reg_i < 6 {
+        let value = get_memory(`Reg {reg_i}`)
+        if registers[reg_i] != value {
+            let value = registers[reg_i]
+            set_error((31337_73489311755739, `Register {reg_i} should have value {value}.`))
+            return fail
+        }
+
+        reg_i += 1
+    }
+
+    if cycle == tests {
+
+        return win
+
+    }
+
+}

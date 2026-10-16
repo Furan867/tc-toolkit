@@ -1,0 +1,66 @@
+
+def get_binary_repr(value: Int, size: Int) Str {
+    var text = ""
+    var i = size - 1
+    while i >= 0 {
+        if ((value >> i) & 1) == 0 {
+            text += "[F]"
+        } else {
+            text += "[T]"
+        }
+        i -= 1
+    }
+    return text
+}
+
+def get_input(cycle: Int) Input {
+    let input = U3 cycle
+
+    ui_set_text("table[0][1]", `{input}`)
+
+    return Input {input: input}
+
+}
+
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    ui_set_text("table[1][1]", `{get_binary_repr(1 << Int input.input, 8)}`)
+    ui_set_text("table[2][1]", `[Z][Z][Z][Z][Z][Z][Z][Z]`)
+
+    if get_component_count() > 5 {
+
+        set_error((31337_60812617177494, `Do not use more than 3 components.`))
+        return fail
+
+    }
+
+    if output.output_is_z {
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    ui_set_text("table[2][1]", `{get_binary_repr(Int output.output, 8)}`)
+
+    let expected = 1 << cycle
+    // Find difference between expected result and actual output by xoring. If they are the same the result should be 0
+    let result = expected ^ Int output.output
+
+    // If counting leading zeroes is not 64, it gives us the index of the first mistake
+    let zeroes = clz(result)
+
+    if zeroes != 64 {
+
+        let pin = 64 - zeroes
+        set_error((31337_74562193652628, `The output on pin {pin} is wrong.`))
+        return fail
+
+    }
+
+    if cycle == 7 {
+
+        return win
+
+    }
+
+}

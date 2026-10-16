@@ -1,0 +1,92 @@
+const #NUM_TEST = 5
+const #NUM_STATE = 3
+const #NOT_SET = 0
+const #FAIL = 1
+const #WIN = 2
+const #CYCLES_PER_TEST = 1 << 2  // search space for 2 inputs
+
+const #NUM_GATE = 6 // AND, NAND, OR, NOR, XOR, XNOR
+const #AND = 0
+const #NAND = 1
+const #OR = 2
+const #NOR = 3
+const #XOR = 4
+const #XNOR = 5
+
+let gate = get_test() % #NUM_GATE
+let test = get_test() / #NUM_GATE
+def get_expected_output(input: U2) U1 {
+    let input_0 = U1 (input & 1)
+    let input_1 = U1 (input >> 1)
+    switch gate
+        case #AND {
+            return input_0 & input_1
+        }
+        case #NAND {
+            return ~(input_0 & input_1)
+        }
+        case #OR {
+            return input_0 | input_1
+        }
+        case #NOR {
+            return ~(input_0 | input_1)
+        }
+        case #XOR {
+            return input_0 ^ input_1
+        }
+        case #XNOR {
+            return ~(input_0 ^ input_1)
+        }
+}
+
+def update_history_ui(history: Int) None {
+    var i = 0
+    var j = #NUM_TEST - 1
+    var value = history
+    while i < #NUM_TEST {
+        var expected = ""
+        switch value % #NUM_STATE
+            case #NOT_SET { expected = "[Z]" }
+            case #FAIL { expected = "[F]" }
+            case #WIN { expected = "[T]" }
+        ui_set_text(`history[0][{j}]`, expected)
+
+        value /= #NUM_STATE
+        i += 1
+        j -= 1
+    }
+}
+
+{
+    update_history_ui(test)
+
+    var i = 0
+    while i < #CYCLES_PER_TEST {
+        var expected = ""
+        if get_expected_output(U2 i) == 0 {
+            expected = "[F]"
+        } else {
+            expected = "[T]"
+        }
+        ui_set_text(`table[2][{i + 1}]`, expected)
+        ui_set_text(`table[3][{i + 1}]`, "")
+        i += 1
+    }
+}
+
+def get_input(cycle: Int) Input {
+    return Input {input: U2 cycle}
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+    let new_history = test * #NUM_STATE
+    if output.output_is_z || output.output != get_expected_output(input.input) {
+        update_history_ui(new_history + #FAIL)
+        return fail
+    }
+
+    if cycle == #CYCLES_PER_TEST - 1 {
+        update_history_ui(new_history + #WIN)
+        return win
+    }
+}

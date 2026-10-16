@@ -1,0 +1,61 @@
+
+def get_input(cycle: Int) Input {
+    switch cycle
+        case 0 {
+            return Input {input: U1 0}
+        }
+        case 1 {
+            return Input {input: U1 1}
+        }
+        case 2 {
+            return Input {input: U1 0}
+        }
+        case 3 {
+            return Input {input: U1 0}
+        }
+        case 4 {
+            return Input {input: U1 1}
+        }
+        case 5 {
+            return Input {input: U1 1}
+        }
+        case 6 {
+            return Input {input: U1 0}
+        }
+        case 7 {
+            return Input {input: U1 0}
+        }
+        case 8 {
+            return Input {input: U1 0}
+        }
+        case 9 {
+            return Input {input: U1 1}
+        }
+        case 10 {
+            return Input {input: U1 1}
+        }
+        case 11 {
+            return Input {input: U1 1}
+        }
+        case 12 {
+            return Input {input: U1 1}
+        }
+}
+
+const #CORRECT_OUTPUT = [U1 0,0,0,1,0,0,1,1,0,0,0,1,1,1]
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        return fail
+    }
+
+    if #CORRECT_OUTPUT[cycle] != output.output {
+        return fail
+    }
+
+    if cycle == 13 {
+        return win
+    }
+
+}

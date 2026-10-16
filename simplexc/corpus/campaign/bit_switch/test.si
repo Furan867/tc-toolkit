@@ -1,0 +1,20 @@
+const #CORRECT_OUTPUT = [U1 0,1,1,0]
+
+def get_input(cycle: Int) Input {
+    return Input {input: U2 cycle}
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    if output.output != #CORRECT_OUTPUT[cycle] {
+        return fail
+    }
+    if cycle == 3 {
+        return win
+    }
+}

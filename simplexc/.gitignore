@@ -1,0 +1,2 @@
+# 本次离线重编译的产物（几 MB 的机器码，能由 tools/recompile_corpus.py 重新生成）
+corpus/ref/

@@ -1,0 +1,74 @@
+def get_input(cycle: Int) Input {
+
+    return Input {instruction: U32 random(0xffffffff)}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let instruction     =  Int input.instruction
+    let mode            = (instruction >> 29) & 0b11
+    let opcode          = (instruction >> 24) & 0b1111
+    let dest            = (instruction >> 20) & 0b1111
+    let a               = (instruction >> 16) & 0b1111
+    let b               = (instruction >>  8) & 0b1111
+    let immediate       = (instruction >> 28) & 1
+    let immediate_value =  instruction & 0xffff
+
+    if output.mode_is_z || Int output.mode != mode {
+
+        set_error((31337_64926808682290, `Mode should be {mode}.`))
+        return fail
+
+    }
+
+    if output.opcode_is_z || Int output.opcode != opcode {
+
+        let actual_opcode = output.opcode
+        set_error((31337_15174125339458, `Opcode should be {opcode}, not {actual_opcode}.`))
+        return fail
+
+    }
+
+    if output.destination_is_z || Int output.destination != dest {
+
+        set_error((31337_31544476297744, `Destination should be {dest}.`))
+        return fail
+
+    }
+
+    if output.argument_a_is_z || Int output.argument_a != a {
+
+        set_error((31337_82638458430252, `Arg A should be {a}.`))
+        return fail
+
+    }
+
+    if output.argument_b_is_z || Int output.argument_b != b {
+
+        set_error((31337_31942264008156, `Arg B should be {b}.`))
+        return fail
+
+    }
+
+    if output.is_immediate_is_z || Int output.is_immediate != immediate {
+
+        set_error((31337_63089562267538, `'Is immediate' should be {immediate}.`))
+        return fail
+
+    }
+
+    if output.immediate_value_is_z || Int output.immediate_value != immediate_value {
+
+        set_error((31337_45701446129480, `Immediate value should be {immediate_value}.`))
+        return fail
+
+    }
+
+    if cycle == 0xffff {
+
+        return win
+
+    }
+
+}

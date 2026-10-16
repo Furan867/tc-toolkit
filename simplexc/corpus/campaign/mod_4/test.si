@@ -1,0 +1,33 @@
+
+var actual_input = random(256)
+var was_read = false
+
+def get_input_switched() Int {
+    was_read = true
+    return actual_input
+}
+
+def check_output_switched(output: Int) TestResult {
+
+    if !was_read {
+        set_error((31337_59240995307159, `Read the input first.`))
+        return fail
+    }
+
+    if output != actual_input % 4 {
+        let inp = actual_input
+        let result = actual_input % 4
+        set_error((31337_60992625993288, `{inp} mod 4 is {result}.`))
+        return fail
+    }
+
+    if get_cycle() > 8 {
+
+        set_error((31337_13853243145042, `You must output the result before cycle 8!`))
+        return fail
+
+    }
+
+    return win
+
+}

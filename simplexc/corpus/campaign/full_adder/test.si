@@ -1,0 +1,32 @@
+
+def get_input(cycle: Int) Input {
+
+    return Input {input_0: U1 cycle, input_1: U1 (cycle >> 1), input_2: U1 (cycle >> 2) }
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.sum_is_z || output.carry_is_z {
+        return fail
+    }
+
+    let actual_sum = U8 input.input_0 + U8 input.input_1 + U8 input.input_2
+    let given_sum = (U8 output.sum) + (U8 output.carry << U8 1)
+
+    if U8 actual_sum == given_sum {
+
+        if cycle == 7 {
+
+            return win
+
+        }
+
+    } else {
+
+        return fail
+
+    }
+
+}
+

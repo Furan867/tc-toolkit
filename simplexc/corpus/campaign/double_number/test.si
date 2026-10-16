@@ -1,0 +1,52 @@
+def get_binary_repr(value: U8, size: U8) Str {
+    var text = ""
+    var i = size
+    while i > 0 {
+        i -= 1
+        if ((value >> i) & 1) == 0 {
+            text += "[F]"
+        } else {
+            text += "[T]"
+        }
+    }
+    return text
+}
+
+def get_padded_number(value: Str, size: Int) Str {
+    var text = value
+    while text.len() < size {
+        text = " " + text
+    }
+    return "[right]" + text + "[/right]"
+}
+
+def get_input(cycle: Int) Input {
+    let input = U8 random(128)
+    ui_set_text("table[0][1]", get_padded_number(str(input), 3))
+    ui_set_text("table[0][2]", get_binary_repr(input, U8 8))
+    return Input {input: input}
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+    let expected = input.input * 2
+    ui_set_text("table[1][1]", get_padded_number(str(expected), 3))
+    ui_set_text("table[1][2]", get_binary_repr(expected, U8 8))
+
+    if output.output_is_z {
+        ui_set_text("table[2][1]", ` Z `)
+        ui_set_text("table[2][2]", `[Z][Z][Z][Z][Z][Z][Z][Z]`)
+        return fail
+    }
+
+    ui_set_text("table[2][1]", get_padded_number(str(output.output), 3))
+    ui_set_text("table[2][2]", get_binary_repr(output.output, U8 8))
+
+    if expected != output.output {
+        return fail
+    }
+
+    if cycle == 15 {
+        return win
+    }
+
+}

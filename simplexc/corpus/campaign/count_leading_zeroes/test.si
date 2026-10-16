@@ -1,0 +1,42 @@
+
+def get_input(cycle: Int) Input {
+
+    return Input {input: U8 cycle}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let count = clz(input.input)
+
+    if count != output.result {
+
+        let input_value = input.input
+        let binary_value = "0b" + bin(8, Int input.input)
+
+        if output.result_is_z {
+
+            set_error((31337_33181499064044, `Result should never be Z state`))
+
+        } elif count == 1 {
+
+            set_error((31337_46565705342966, `There is 1 leading zero in {input_value} ({binary_value})`))
+
+        } else {
+
+            set_error((31337_10248302990519, `There are {count} leading zeroes in {input_value} ({binary_value})`))
+
+        }
+
+        return fail
+
+    }
+
+
+    if cycle == 0x100 {
+
+        return win
+
+    }
+
+}

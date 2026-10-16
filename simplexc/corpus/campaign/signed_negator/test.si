@@ -1,0 +1,64 @@
+def get_padded_number(value: Str, size: Int) Str {
+    var text = value
+    while text.len() < size {
+        text = " " + text
+    }
+    return text
+}
+
+def get_binary_repr(value: Int) Str {
+    var text = ""
+    var i = 7
+    while i >= 0 {
+        if ((value >> i) & 1) == 0 {
+            text += "[F]"
+        } else {
+            text += "[T]"
+        }
+        i -= 1
+    }
+    return text
+}
+
+def get_input(cycle: Int) Input {
+
+    var x = cycle
+    x ^= x << 1
+    x ^= x >> 1
+    x ^= x << 2
+    let input = Input {input: U8 x}
+
+    var value = asr(Int input.input << 56, 56)
+    ui_set_text("table[0][1]", `[right]{value}[/right]`)
+    ui_set_text("table[0][2]", get_binary_repr(Int value))
+
+    value = asr(- Int input.input << 56, 56)
+    ui_set_text("table[1][1]", `[right]{value}[/right]`)
+    ui_set_text("table[1][2]", get_binary_repr(Int value))
+
+    return input
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        ui_set_text("table[2][1]", `   Z`)
+        ui_set_text("table[2][2]", `[Z][Z][Z][Z][Z][Z][Z][Z]`)
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    var value = asr(Int output.output << 56, 56)
+
+    ui_set_text("table[2][1]", get_padded_number(`{value}`, 4))
+    ui_set_text("table[2][2]", get_binary_repr(Int value))
+
+    if output.output != (~input.input + 1) {
+        return fail
+    }
+    if cycle == 0xff {
+        return win
+    }
+
+}

@@ -1,0 +1,57 @@
+
+var memory = U32 0
+var next_memory = U32 0
+
+
+def get_input(cycle: Int) Input {
+
+    memory = next_memory
+
+    let store = random(2)
+    let value = random(0x10000_0000)
+
+    if store == 1 {
+        next_memory = U32 value
+    } else {
+        next_memory += 4
+    }
+
+    return Input {overwrite: U1 store, value: U32 value}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let memory_value = get_memory("Count") & 0xffffffff
+
+    if memory_value != Int next_memory {
+
+        let expected_memory = next_memory
+        set_error((31337_54301125260332, `Memory is supposed to be {expected_memory}, not {memory_value}`))
+        return fail
+
+    }
+
+    if output.output_is_z {
+
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+
+    }
+
+    if U32 output.output != memory {
+
+        let expected_memory = memory
+
+        set_error((31337_84451713761977, `Output should be {expected_memory}`))
+        return fail
+
+    }
+
+    if cycle == 0xffff {
+
+        return win
+
+    }
+
+}

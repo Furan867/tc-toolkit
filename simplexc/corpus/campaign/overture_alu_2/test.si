@@ -1,0 +1,88 @@
+
+def get_binary_repr(value: Int, size: Int) Str {
+    var text = ""
+    var i = size - 1
+    while i >= 0 {
+        if ((value >> i) & 1) == 0 {
+            text += "[F]"
+        } else {
+            text += "[T]"
+        }
+        i -= 1
+    }
+    return text
+}
+
+def get_input(cycle: Int) Input {
+
+    var code = random(6)
+    var num1 = random(255)
+    var num2 = random(255)
+
+    ui_set_text("table[0][2]", get_binary_repr(code, 3))
+
+    ui_set_text("table[1][1]", `{num1}`)
+    ui_set_text("table[1][2]", get_binary_repr(num1, 8))
+
+    ui_set_text("table[2][1]", `{num2}`)
+    ui_set_text("table[2][2]", get_binary_repr(num2, 8))
+
+    return Input {opcode: U3 code, a: U8 num1, b: U8 num2}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+    var op_text = "    "
+
+    var result = U8 0
+
+    switch input.opcode
+        case 0 {
+            op_text = "NAND"
+            result =   ~(input.a & input.b)
+        }
+        case 1 {
+            op_text = " OR "
+            result = input.a | input.b
+        }
+        case 2 {
+            op_text = " AND"
+            result = input.a & input.b
+        }
+        case 3 {
+            op_text = "NOR "
+            result =  ~(input.a | input.b)
+        }
+        case 4 {
+            op_text = " ADD"
+            result = input.a + input.b
+        }
+        case 5 {
+            op_text = " SUB"
+            result = input.a - input.b
+        }
+
+    result = result & 0xff
+
+    ui_set_text("table[0][1]", `{op_text}`)
+
+    ui_set_text("table[3][1]", `{result}`)
+    ui_set_text("table[3][2]", get_binary_repr(Int result, 8))
+
+    if output.result_is_z {
+        ui_set_text("table[4][1]", "Z")
+        ui_set_text("table[4][2]", "[Z][Z][Z][Z][Z][Z][Z][Z]")
+    } else {
+        ui_set_text("table[4][1]", `{output.result}`)
+        ui_set_text("table[4][2]", get_binary_repr(Int output.result, 8))
+    }
+
+    if output.result != result{
+        return fail
+    }
+
+    if cycle == 0xffff {
+        return win
+    }
+
+}

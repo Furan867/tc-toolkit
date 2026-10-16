@@ -1,0 +1,33 @@
+
+
+def get_input(cycle: Int) Input {
+
+    if cycle == 0 {
+
+        return Input {input: U32 2}
+
+    } elif cycle == 1 {
+
+        return Input {input: U32 5}
+
+    } else {
+
+        return Input {input: U32 1}
+
+    }
+}
+
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let actual_counter = get_load_port_input("Instruction")
+    var instruction = get_ram_value("Main Memory", Int actual_counter, <U32>)
+    ui_set_instruction(0, Int instruction, Int actual_counter)
+
+    if cycle == 136 {
+
+        return win
+
+    }
+
+}

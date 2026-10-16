@@ -1,0 +1,58 @@
+
+def get_input(cycle: Int) Input {
+    var x = cycle
+    x ^= x << 7
+    x ^= x >> 9
+    x ^= x << 8
+
+    let input = Input {
+        select: U1 (x >> 16),
+        a: U8 x,
+        b: U8 (x >> 8),
+    }
+
+    var text = ""
+    if input.select == 0 {
+        text = "[F]"
+    } else {
+        text = "[T]"
+    }
+
+    ui_set_text("table[0][1]", text)
+    ui_set_text("table[1][1]", `{input.a}`)
+    ui_set_text("table[2][1]", `{input.b}`)
+    var select = (31337_25535487507842, `A`)
+    if input.select != 0 {
+        select = (31337_65041743851294, `B`)
+    }
+    ui_set_text("table[3][1]", (31337_15140861344476, `Select {select}`))
+
+    return input
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+    var correct = input.a
+    if input.select == 1 {
+        correct = input.b
+    }
+
+    ui_set_text("table[4][1]", `{correct}`)
+
+    if output.output_is_z {
+        ui_set_text("table[5][1]", "Z")
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    ui_set_text("table[5][1]", `{output.output}`)
+
+    if output.output == correct {
+        if cycle == 0xffff {
+            return win
+        }
+    } else {
+        return fail
+    }
+
+}

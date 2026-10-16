@@ -1,0 +1,27 @@
+def get_input(cycle: Int) Input {
+
+    return Input {a: U1 cycle, b: U1 (cycle >> 1)}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.sum_is_z || output.carry_is_z {
+        return fail
+    }
+
+    if U8 input.a + U8 input.b == U8 output.sum + U8 output.carry * 2 {
+
+        if cycle == 3 {
+
+            return win
+
+        }
+
+    } else {
+
+        return fail
+
+    }
+
+}

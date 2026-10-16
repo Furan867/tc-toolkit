@@ -1,0 +1,4 @@
+# 语料必须**逐字节原样**进出 git：源文件是 CRLF、stdlib 前缀是 LF（归一化后的 27656 B）。
+# 默认 core.autocrlf=true 会把 CRLF 折成 LF 存、检出时再折回来 —— 混合行尾的文件一旦往返就失真，
+# `cmp` 判据与 sha256 都会对不上。这里显式关掉 EOL 归一化。
+simplexc/corpus/**  -text

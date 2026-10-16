@@ -1,0 +1,27 @@
+
+
+ui_set_hidden("note", true)
+
+var size = random(41) + 1
+
+def get_input_switched() Int {
+
+    let radius = size
+    ui_set_text("goal", (31337_18136442036625, `What is 2π × {radius}?`))
+    ui_set_hidden("note", false)
+
+    return size
+}
+
+def check_output_switched(output: Int) TestResult {
+
+    if output != size * 6 {
+        let radius = size
+        let result = size * 6
+        set_error(`2π × {radius} ≈ {result}`)
+        return fail
+    }
+
+    return win
+
+}

@@ -1,0 +1,1503 @@
+
+const #INT_HIGH = Int 0x7fff_ffff_ffff_ffff
+const #U64_HIGH = U64 0xffff_ffff_ffff_ffff
+const #S64_HIGH = Int 0x7fff_ffff_ffff_ffff
+const #U32_HIGH = U32 0xffff_ffff
+const #S32_HIGH = S32 0x7fff_ffff
+const #U16_HIGH = U16 0xffff
+const #S16_HIGH = S16 0x7fff
+const #U8_HIGH  = U8 0xff
+const #S8_HIGH  = S8 0x7f
+
+const #S64_LOW  = 0x8000_0000_0000_0000
+const #S32_LOW  = 0x8000_0000
+const #S16_LOW  = 0x8000
+const #S8_LOW   = 0x80
+
+type Char Enum[
+    ch_null, ch_soh, ch_stx, ch_etx, ch_eot, ch_enq, ch_ack, ch_bel, ch_bs, ch_ht, ch_lf, ch_vt, ch_ff, ch_cr, ch_so, ch_si, ch_dle, ch_dc1, ch_dc2, ch_dc3, ch_dc4, ch_nak, ch_syn, ch_etb, ch_can, ch_em, ch_sub, ch_esc, ch_fs, ch_gs, ch_rs,
+    ch_us,
+
+    // 32
+
+    ch_space, ch_excl, ch_quote, ch_num, ch_dollar, ch_percent, ch_amp, ch_apos, ch_lparen, ch_rparen, ch_ast, ch_plus, ch_comma, ch_minus, ch_dot, ch_sol, ch_0, ch_1, ch_2, ch_3, ch_4, ch_5, ch_6, ch_7, ch_8, ch_9, ch_colon, ch_semi, ch_lt, ch_equals, ch_gt, ch_quest,
+
+    // 64
+
+    ch_at, ch_up_a, ch_up_b, ch_up_c, ch_up_d, ch_up_e, ch_up_f, ch_up_g, ch_up_h, ch_up_i, ch_up_j, ch_up_k, ch_up_l, ch_up_m, ch_up_n, ch_up_o, ch_up_p, ch_up_q, ch_up_r, ch_up_s, ch_up_t, ch_up_u, ch_up_v, ch_up_w, ch_up_x, ch_up_y, ch_up_z, ch_lsqb, ch_bsol, ch_rsqb, ch_caret, ch_lowbar,
+
+    // 96
+
+    ch_grave, ch_a, ch_b, ch_c, ch_d, ch_e, ch_f, ch_g, ch_h, ch_i, ch_j, ch_k, ch_l, ch_m, ch_n, ch_o, ch_p, ch_q, ch_r, ch_s, ch_t, ch_u, ch_v, ch_w, ch_x, ch_y, ch_z, ch_lcub, ch_verbar, ch_rcub, ch_tilde, ch_del,
+
+    // 128
+    ch_128, ch_129, ch_130, ch_131, ch_132, ch_133, ch_134, ch_135, ch_136, ch_137, ch_138, ch_139, ch_140, ch_141, ch_142, ch_143, ch_144, ch_145, ch_146, ch_147, ch_148, ch_149, ch_150, ch_151, ch_152, ch_153, ch_154, ch_155, ch_156, ch_157, ch_158, ch_159, ch_160, ch_161, ch_162, ch_163, ch_164, ch_165, ch_166, ch_167, ch_168, ch_169, ch_170, ch_171, ch_172, ch_173, ch_174, ch_175, ch_176, ch_177, ch_178, ch_179, ch_180, ch_181, ch_182, ch_183, ch_184, ch_185, ch_186, ch_187, ch_188, ch_189, ch_190, ch_191, ch_192, ch_193, ch_194, ch_195, ch_196, ch_197, ch_198, ch_199, ch_200, ch_201, ch_202, ch_203, ch_204, ch_205, ch_206, ch_207, ch_208, ch_209, ch_210, ch_211, ch_212, ch_213, ch_214, ch_215, ch_216, ch_217, ch_218, ch_219, ch_220, ch_221, ch_222, ch_223, ch_224, ch_225, ch_226, ch_227, ch_228, ch_229, ch_230, ch_231, ch_232, ch_233, ch_234, ch_235, ch_236, ch_237, ch_238, ch_239, ch_240, ch_241, ch_242, ch_243, ch_244, ch_245, ch_246, ch_247, ch_248, ch_249, ch_250, ch_251, ch_252, ch_253, ch_254, ch_255
+
+]
+
+type Time U64
+type Seed Int
+type File Int
+type Ptr U64
+type Str Arr[Char]
+type Cstring Arr[Char]
+
+def print_using_stack(value: @Any) None {
+
+    // !!!!!!!!!!!!!!!!!!!!! X86 WINDOWS IS UNSOUND SOMEHOW !!!!!!!!!!!!!!!!!!!!!
+
+    /*
+    asm x86_64 windows {
+
+        define remainder rax
+        define divisor r9
+        define idx r10
+        define mod rdx
+        define mod_byte dl
+        define ascii_offset 48
+        define ascii_letter_offset 39
+
+        mov rdx, 10
+        mov byte [rsp + 16], dl // Newline at the end
+
+        mov remainder, value
+        mov divisor, 16
+        mov idx, 16
+
+        loop:
+            sub idx, 1
+            mov rdx, 0
+            idiv divisor
+
+            mov r8, 0
+            cmp mod, 10
+            setb r8b // only sets lower byte
+            test r8, r8
+
+            jnz skip
+              add mod, 39
+            skip:
+
+            add mod, ascii_offset
+
+            mov byte [rsp + idx], mod_byte // Newline at the end
+
+            test idx, idx
+            jnz loop
+
+        mov r8, rsp
+        sub rsp, 64 // Shadow space
+        mov rcx, r8
+        mov rdx, 17
+        push r11
+        mov rax, _write
+        call rax
+        pop r11
+        add rsp, 64
+
+    }
+    */
+
+    asm aarch64 {
+
+        mov x0, value
+
+        sub x5, sp, 32
+
+        mov x2, 10
+        strb w2, [x5, 16]
+
+        mov x1, 16 // Divisor
+        mov x3, 16
+
+        loop:
+
+          udiv x9, x0, x1
+          msub x4, x9, x1, x0
+          add x2, x4, 48 // Ascii start of numbers
+
+          cmp x2, 58
+          cset x4, lt
+
+          cbnz x4, skip
+            add x2, x2, 39 // Ascii letter offset
+          skip:
+
+
+          sub x3, x3, 1
+          strb w2, [x5, x3]
+
+          lsr x0, x0, 4
+
+        cbnz x3, loop
+
+        mov x0, 1   // 1 = STDOUT
+        mov x1, x5
+        mov x2, 17
+        mov x16, 4
+        svc 0x80
+
+    }
+}
+
+def breakpoint() None {
+
+    asm x86_64 {
+        mov rcx, 0
+        mov rdx, 0
+        idiv rcx
+    }
+
+    asm aarch64 {
+        brk 0xf000
+    }
+
+}
+
+
+def assert(condition: Bool, error_code: Int) None {
+
+    if condition {
+
+        exit(error_code)
+
+    }
+
+}
+
+binary + (a: Ptr, b: AnyInt) Ptr {
+    return Ptr (Int a + Int b)
+}
+
+binary += ($a: Ptr, b: AnyInt) None {
+    a = Ptr (Int a + Int b)
+}
+
+binary - (a: Ptr, b: AnyInt) Ptr {
+    return Ptr (Int a - Int b)
+}
+
+binary -= ($a: Ptr, b: AnyInt) None {
+    a = Ptr (Int a - Int b)
+}
+
+
+
+def memory_copy(source: Ptr, destination: Ptr, length: Int) None {
+
+    asm x86_64 {
+
+        mov rsi, source
+        mov rdi, destination
+        mov rcx, length
+
+        rep movsb
+
+    }
+
+}
+
+def memory_clear(source: Ptr, length: Int) None {
+
+    asm x86_64 {
+
+        mov al, 0
+        mov rdi, source
+        mov rcx, length
+
+        rep stosb
+
+    }
+
+}
+
+def memory_copy_reverse(source: Ptr, destination: Ptr, length: Int) None {
+
+    var length_left = length - 1
+    var i = 0
+
+    /*
+    while length_left >= 8 {
+
+        length_left -= 8
+        let value = load(<U64>, source, length_left)
+        store(value, destination, i)
+        i += 8
+
+    }
+    */
+
+    while length_left > 0 {
+
+        let value = load(<U8>, source, length_left)
+        store(value, destination, i)
+        i += 1
+        length_left -= 1
+
+    }
+
+}
+
+
+
+call_conv x86_64 windows_x64 (
+    arguments: [rcx, rdx, r8, r9],
+    returns: [rax],
+    save_restore: [rax, rcx, rdx, r8, r9, r10, r11],
+    stack_alignment: 16,
+    shadow_space: 40, // 8 extra to align the stack after calls
+)
+
+extern windows_x64 kernel32
+
+def exit(code: Int) None {
+    kernel32.'ExitProcess'(code)
+}
+
+def memory_reserve(length: Int) Ptr {
+
+    return Ptr kernel32.'_virtual_alloc'(
+        0, // Null
+        length,
+        8192, // MEM_RESERVE
+        1 // PAGE_NOACCESS
+    )
+}
+
+def memory_commit(pointer: Ptr, length: Int) None {
+
+    kernel32.'_virtual_alloc'(
+        pointer,
+        length,
+        4096, // MEM_COMMIT
+        4 // PAGE_READWRITE
+    )
+
+}
+
+def memory_free(pointer: Ptr, size: Int) None {
+
+    kernel32.'_virtual_free'(
+        pointer,
+        0,
+        32768, // MEM_RELEASE
+    )
+
+}
+
+
+def thread_exit() None {
+
+    kernel32.'ExitThread'(0)
+
+}
+
+
+
+def to_capacity(log2: Int) Int {
+    return (1 << Int log2) >> 1
+}
+
+def get_capacity(pointer: Ptr) Int {
+    return to_capacity(Int load(<U16>, pointer - 2))
+}
+
+def full_aray_size(length: Int, element_size: Int) Int {
+    return length * element_size + 8
+}
+
+def set_length(pointer: Ptr, length: Int) None {
+    store(pointer - 8, U32 length)
+    store(pointer - 4, U16 (length >> 32))
+}
+
+def get_length(pointer: Ptr) Int {
+    return load(<Int>, pointer - 8) >> 16
+}
+
+def allocate_raw(arena_header: Ptr, length: Int, element_size: Int) Ptr {
+
+    const #MEMORY_CHUNK = 16384
+
+    if length == 0 {
+        return empty_array_address()
+    }
+
+    let arena_ptr = load(<Ptr>, arena_header)
+    let arena_cap = load(<Int>, arena_header + 8)
+    let arena_top = load(<Int>, arena_header + 16)
+
+    let full_size = full_aray_size(length, element_size)
+    let arr_cap = 65 - clz(full_size)
+
+    let real_size = to_capacity(arr_cap)
+    let new_top   = arena_top + real_size
+
+    store(arena_header + 16, new_top)
+
+    var extra_capacity = 0
+
+    while new_top > arena_cap + extra_capacity {
+
+        extra_capacity += #MEMORY_CHUNK
+
+    }
+
+    if extra_capacity != 0 {
+
+        memory_commit(arena_ptr + arena_cap, extra_capacity)
+        store(arena_header + 8, arena_cap + extra_capacity)
+
+    }
+
+    var arr_ptr = arena_ptr + arena_top
+
+    store(arr_ptr, (length << 16) | arr_cap)
+
+    arr_ptr += 8
+
+    return arr_ptr
+
+}
+
+def __allocate_data(arena_header: Ptr, length: Int, element_size: Int, source_data: Ptr) Ptr {
+
+
+    let arr_ptr = allocate_raw(arena_header, length, element_size)
+    let source_len = get_length(source_data)
+
+    memory_copy(source_data, arr_ptr, source_len * element_size)
+
+    return arr_ptr
+
+}
+
+def __allocate_clear(arena_header: Ptr, length: Int, element_size: Int) Ptr {
+
+    let arr_ptr = allocate_raw(arena_header, length, element_size)
+
+    memory_clear(arr_ptr, length * element_size)
+
+    return arr_ptr
+
+}
+
+def __create_arenas(data_segment: Ptr, arena_count: Int) None {
+
+    var i = 0
+    while i < arena_count {
+
+        let arena_pointer = memory_reserve(10_000_000_000)
+        store(data_segment + i * 24, Int arena_pointer)
+        store(data_segment + i * 24 + 8, 0)
+        store(data_segment + i * 24 + 16, 0)
+
+        i += 1
+
+    }
+
+}
+
+def __free_arenas(data_segment: Ptr, arena_count: Int) Ptr {
+
+    var i = 0
+    while i < arena_count {
+
+        let offset = data_segment + i * 24
+
+        let pointer = load(<Ptr>, offset)
+        memory_free(pointer, 10_000_000_000)
+        i += 1
+
+    }
+
+}
+
+def __shrink(pointer: Ptr, new_length: Int) Ptr {
+
+    if pointer == empty_array_address() {
+        return pointer
+    }
+
+    set_length(pointer, new_length)
+
+    return pointer
+}
+
+def __grow(arena_header: Ptr, pointer: Ptr, length: Int, element_size: Int) Ptr {
+
+    let capacity = get_capacity(pointer)
+
+    if capacity < full_aray_size(length, element_size) {
+        let new_pointer = __allocate_data(arena_header, length, element_size, pointer)
+        return new_pointer
+    } else {
+        set_length(pointer, length)
+        return pointer
+    }
+
+}
+
+def __clone(arena_header: Ptr, from: Ptr, element_size: Int) Ptr {
+
+    let length = get_length(from)
+
+    var to = __allocate_data(arena_header, length, element_size, from)
+
+    return to
+
+}
+
+def __append(arena_header: Ptr, $a: Ptr, b: Ptr, element_size: Int) Ptr {
+
+    let a_len = get_length(a)
+    let b_len = get_length(b)
+
+    let new_a = __grow(arena_header, a, a_len + b_len, element_size)
+
+    memory_copy(b, new_a + a_len * element_size, b_len * element_size)
+
+    return new_a
+
+}
+
+def __join(arena_header: Ptr, a: Ptr, b: Ptr, element_size: Int) Ptr {
+
+    let a_len = get_length(a)
+    let b_len = get_length(b)
+
+    var joined = __allocate_data(arena_header, a_len + b_len, element_size, a)
+
+    memory_copy(b, joined + a_len * element_size, b_len * element_size)
+
+    return joined
+
+}
+
+def __thread_exit() None {
+
+    thread_exit()
+
+}
+
+dot push($array: Arr[@Type], value: @Type) None {
+
+    let length = array.len()
+    grow(array, length + 1)
+    array[length] = value
+
+}
+
+dot pop($array: Arr[@Type]) @Type {
+
+    let length = array.len()
+
+    if length == 0 {
+
+        return
+
+    }
+
+    let result = array[length]
+    shrink(array, length - 1)
+    return result
+
+}
+
+dot cstring(input: Str) Cstring {
+
+    var result = [U8] input
+    grow(result, (result.len() + 1))
+    return <Cstring> result
+
+}
+
+def assert(condition: Bool, error_code: Int) None {
+
+    if condition {
+
+        exit(error_code)
+
+    }
+
+}
+
+
+
+// In the future use VirtualAlloc for memory https://learn.microsoft.com/en-us/windows/win32/memory/reserving-and-committing-memory
+
+
+const #STD_INPUT_HANDLE  = -10
+const #STD_OUTPUT_HANDLE = -11
+const #STD_ERROR_HANDLE  = -12
+
+//let output_handle = U64 kernel32.'GetStdHandle'(#STD_OUTPUT_HANDLE)
+
+def output(text: Str) None {
+
+    let length = U64 (Arr[U8] text).len()
+
+    //kernel32.'WriteFile'(.output_handle, text, length, 0, 0) // Calling with 5 args requires us to support stack passed arguments...
+
+    kernel32.'_write'(text, length)
+
+}
+
+def sleep(duration: Time) None {
+
+    var milliseconds = Int duration / 1000000
+    kernel32.'Sleep'(milliseconds)
+
+}
+
+def get_time() Time {
+
+    var result = Int kernel32.'_get_system_time_precise_as_file_time'()
+
+    result -= 116444736000000000
+    return Time (result * 100)
+
+}
+
+dot write(file: File, data: Arr[U8]) None {
+}
+
+def get_cycle_count() Int {
+    var result = 0
+    asm x86_64 {
+        rdtsc
+        mov rcx, 32
+        shl rdx, cl
+        or rax, rdx
+        mov $result, rax
+    }
+    return result
+}
+
+
+
+
+def hex(num: @Size) Str {
+    const #LEN = (size(num) + 3) / 4
+
+    if #LEN <= 16 {
+        return hex(#LEN, Int num)
+    }
+
+    var result = array(<U8>, #LEN)
+
+    var i = 0
+    while i < #LEN / 2 {
+        var value = (Arr[U8] num)[i]
+
+        let a = value % 16
+        let b = value / 16
+
+        let idx = #LEN - i * 2 - 2
+
+        if a < 10 {
+            result[idx + 1] = a + U8 ch_0
+        } else {
+            result[idx + 1] = a + U8 ch_a - 10
+        }
+
+        if b < 10 {
+            result[idx + 0] = b + U8 ch_0
+        } else {
+            result[idx + 0] = b + U8 ch_a - 10
+        }
+
+        i += 1
+    }
+
+    return Str result
+
+}
+
+def big_int_equal(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+
+    while i < len {
+        if (Arr[U64] a)[i] != (Arr[U64] b)[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+def big_int_not_equal(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+
+    while i < len {
+        if (Arr[U64] a)[i] == (Arr[U64] b)[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+def big_int_add(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+    var overflow = U64 0
+
+    while i < len {
+        let a_val = ([U64] a)[i]
+        let sum = a_val + ([U64] b)[i]
+        result[i] = sum + overflow
+        overflow = U64 (sum < a_val)
+        i += 1
+    }
+
+    return result
+}
+//def big_int_sub(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_mul(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_div_u(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_div_s(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_mod_u(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_mod_s(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_ror(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+//def big_int_rol(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_lsl(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+    let total_amount = (Arr[Int] b)[0]
+    let div_amount = total_amount / 64
+    let mod_amount = U64 total_amount % 64
+    let source = Arr[U64] a
+
+    let rev = 64 - mod_amount
+    var i = div_amount
+    while i < len {
+        let prev = i - div_amount - 1
+        if prev < 0 {
+            result[i] = source[i - div_amount] << mod_amount
+        } else {
+            result[i] = (source[i - div_amount] << mod_amount) | (source[prev] >> rev)
+        }
+        i += 1
+    }
+
+    return result
+}
+def big_int_lsr(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+    let total_amount = (Arr[Int] b)[0]
+    let div_amount = total_amount / 64
+    let mod_amount = U64 total_amount % 64
+    let source = Arr[U64] a
+
+    let rev = 64 - mod_amount
+    var i = 0
+    while i < len - div_amount {
+        let prev = i + div_amount - 1
+        if prev <= len - 1 {
+            result[i] = source[i + div_amount] >> mod_amount
+        } else {
+            result[i] = (source[i + div_amount] >> mod_amount) | (source[prev] << rev)
+        }
+        i += 1
+    }
+
+    return result
+}
+//def big_int_asr(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_not(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+
+    while i < len {
+        result[i] = ~(Arr[U64] a)[i]
+        i += 1
+    }
+
+    return result
+}
+def big_int_or(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+
+    while i < len {
+        result[i] = (Arr[U64] a)[i] | (Arr[U64] b)[i]
+        i += 1
+    }
+
+    return result
+}
+def big_int_and(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+
+    while i < len {
+        result[i] = (Arr[U64] a)[i] & (Arr[U64] b)[i]
+        i += 1
+    }
+
+    return result
+}
+def big_int_xor(a: Arr[U64], b: Arr[U64]) Arr[U64] {
+    let len = a.len()
+
+    var result = array(<U64>, len)
+
+    var i = 0
+
+    while i < len {
+        result[i] = ([U64] a)[i] ^ ([U64] b)[i]
+        i += 1
+    }
+
+    return result
+}
+//def big_int_bswap(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_less_equal_u(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[U64] a)[i] <= (Arr[U64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_less_equal_s(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[S64] a)[i] <= (Arr[S64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_great_equal_u(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[U64] a)[i] >= (Arr[U64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_great_equal_s(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[S64] a)[i] >= (Arr[S64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+
+}
+def big_int_less_u(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[U64] a)[i] < (Arr[U64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_less_s(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[S64] a)[i] < (Arr[S64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_great_u(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[U64] a)[i] > (Arr[U64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_great_s(a: Arr[U64], b: Arr[U64]) Bool {
+    let len = a.len()
+
+    var i = len - 1
+
+    while i >= 0 {
+        if (Arr[S64] a)[i] > (Arr[S64] b)[i] {
+            return true
+        }
+        i -= 1
+    }
+}
+def big_int_neg(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_min_u(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_min_s(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_max_u(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_max_s(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_clz(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+def big_int_ctz(a: Arr[U64], b: Arr[U64]) Arr[U64] {}
+
+
+def random(type: @Type) @Type {
+    const #SIZE = size(type)
+
+    if #SIZE <= 64 {
+        return @Type random()
+    }
+
+    const #LEN = (#SIZE + 63) / 64
+    var result = array(<Int>, #LEN)
+
+    var i = 0
+    while i < #LEN {
+        result[i] = random()
+        i += 1
+    }
+
+    return raw_cast(<@Type>, result)
+
+}
+
+
+
+// Fixme
+def log10(number: U64) Int {
+
+    if number < 10 {
+        return 0
+    } elif number < 100 {
+        return 1
+    } elif number < 1000 {
+        return 2
+    } elif number < 10_000 {
+        return 3
+    } elif number < 100_000 {
+        return 4
+    } elif number < 1_000_000 {
+        return 5
+    } elif number < 10_000_000 {
+        return 6
+    } elif number < 100_000_000 {
+        return 7
+    } elif number < 1_000_000_000 {
+        return 8
+    } elif number < 10_000_000_000 {
+        return 9
+    } elif number < 100_000_000_000 {
+        return 10
+    } elif number < 1_000_000_000_000 {
+        return 11
+    } elif number < 10_000_000_000_000 {
+        return 12
+    } elif number < 100_000_000_000_000 {
+        return 13
+    } elif number < 1_000_000_000_000_000 {
+        return 14
+    } elif number < 10_000_000_000_000_000 {
+        return 15
+    } elif number < 100_000_000_000_000_000 {
+        return 16
+    } elif number < 1_000_000_000_000_000_000 {
+        return 17
+    } elif number < 10_000_000_000_000_000_000 {
+        return 18
+    } else {
+        return 19
+    }
+
+}
+
+
+
+dot contains(array: Arr[@Type], value: @Type) Bool {
+
+    let length = array.len()
+
+    var i = 0
+    while i < length {
+
+        if array[i] == value { return true }
+        i += 1
+
+    }
+
+}
+
+dot in(value: @Type, array: Arr[@Type]) Bool {
+
+    return array.contains(value)
+
+}
+
+binary == (a: Arr[@Any], b: Arr[@Any]) Bool {
+
+    if raw_cast(<U64>, a) == raw_cast(<U64>, b) { return true }
+
+    let len = a.len()
+    if len != b.len() { return false }
+
+    var i = 0
+
+    while i < len {
+
+        if a[i] != b[i] {
+            return false
+        }
+
+        i += 1
+
+    }
+
+    return true
+
+}
+
+binary != (a: Arr[@Any], b: Arr[@Any]) Bool {
+    return ! (a == b)
+}
+
+dot high(a: Arr[@Any]) Int {
+
+    return a.len() - 1
+
+}
+
+def quick_sort($arr: Arr[@Any]) None {
+
+    def partition($arr: Arr[@Any], low: Int, high: Int) Int {
+
+        def swap(a: Int, b: Int) None {
+
+            let tmp = arr[a]
+            arr[a] = arr[b]
+            arr[b] = tmp
+
+        }
+
+        let pivot = arr[high]
+        var i = low - 1
+        var j = low
+
+        while j <= high - 1 {
+
+            if arr[j] <= pivot {
+
+                i += 1
+                swap(i, j)
+
+            }
+
+            j += 1
+
+        }
+
+        swap(i + 1, high)
+        return i + 1
+
+    }
+
+    def inc($val: Int) Int {
+
+        val += 1
+        return val
+
+    }
+
+    var low = 0
+    var high = arr.high()
+
+    var stack = array(type_of_element(arr), high + 1)
+    var top = -1
+
+    stack[inc($top)] = low
+    stack[inc($top)] = high
+
+    while top >= 0 {
+
+        high = stack[top]
+        top -= 1
+        low = stack[top]
+        top -= 1
+
+        let pivot = partition($arr, low, high)
+
+        if pivot - 1 > low {
+
+            stack[inc($top)] = low
+            stack[inc($top)] = pivot - 1
+
+        }
+
+        if pivot + 1 < high {
+
+            stack[inc($top)] = pivot + 1
+            stack[inc($top)] = high
+
+        }
+
+    }
+
+}
+
+def sort($arr: Arr[@Any]) None {
+
+    quick_sort($arr)
+
+}
+
+
+
+dot len(input: Str) Int {
+
+    return (Arr[U8] input).len()
+
+}
+
+binary + (a: Str, b: Str) Str {
+
+    return Str join(Arr[U8] a, Arr[U8] b)
+
+}
+
+binary += ($a: Str, b: Str) None {
+
+    a = a + b
+
+}
+
+def str(input: Str) Str {
+
+    return input
+
+}
+
+def str(input: Bool) Str {
+
+    if input {
+
+        return "true"
+
+    }
+
+    return "false"
+
+}
+
+def str(number: Uint) Str {
+
+    var partial = U64 number
+    var length = log10(partial) + 1
+
+    var result = array(<U8>, length)
+
+    var i = length
+
+    while i > 0 {
+
+        i -= 1
+        let orig = partial
+        partial = partial / 10
+        let mod = orig - partial * 10
+
+        result[i] = U8 (mod + 48)
+
+    }
+
+    return Str result
+
+}
+
+def str(number: Sint) Str {
+
+    if number >= 0 {
+
+        return str(U64 number)
+
+    }
+
+    var partial = U64 (-1 * number)
+    var length = log10(U64 partial) + 2
+    var result = array(<U8>, length)
+
+    var i = length
+
+    result[0] = U8 ch_minus
+
+    while i > 1 {
+        i -= 1
+
+        let orig = partial
+        partial = partial / 10
+        let mod = orig - partial * 10
+
+        result[i] = U8 mod + U8 ch_0
+    }
+
+    return Str result
+
+}
+
+def hex(orig_length: Int, number: Int) Str {
+
+    let length = min(orig_length, 16)
+
+    var partial = U64 number
+    var result = array(<U8>, length)
+
+    var i = length
+
+    while i > 0 {
+        i -= 1
+
+        let orig = partial
+        partial = partial / 16
+        let mod = orig - partial * 16
+
+        if mod < 10 {
+            result[i] = U8 mod + U8 ch_0
+        } else {
+            result[i] = U8 mod + U8 ch_a - 10
+        }
+    }
+
+    return Str result
+
+}
+
+def bin(orig_length: Int, number: Int) Str {
+
+    let length = orig_length % 64
+
+    var partial = U64 number
+    var result = array(<U8>, length)
+
+    var i = length
+
+    while i > 0 {
+        i -= 1
+
+        let orig = partial
+        partial = partial / 2
+        let mod = orig - partial * 2
+
+        if mod < 10 {
+            result[i] = U8 mod + U8 ch_0
+        } else {
+            result[i] = U8 mod + U8 ch_a - 10
+        }
+    }
+
+    return Str result
+
+}
+
+def str(pointer: Ptr) Str {
+    return str(Int pointer)
+}
+
+def int(value: Str) Int {
+
+    let negative = Char value[0] == ch_minus
+
+    let len = value.len()
+    var i = negative ? 1 : 0
+
+    var result = 0
+
+    while i < len {
+
+        result *= 10
+        let digitchar = U8 value[i]
+        let digit = digitchar - U8 ch_0
+        result += Int digit
+        i += 1
+
+    }
+
+    if negative {
+
+        result = -result
+
+    }
+
+    return result
+
+}
+
+
+def str(input: Char) Str {
+
+    return Str [input]
+
+}
+
+def str(array: Arr[@Type]) Str {
+
+    var length = array.len()
+
+    if length == 0 {
+        return "[]"
+    }
+
+    var i = 0
+
+    var until = length - 1
+
+    var result = "["
+
+    while i < until {
+        result += str(array[i]) + ", "
+        i += 1
+    }
+
+    return result + str(array[i]) + "]"
+
+}
+
+def print(array: Arr[@Type]) None {
+
+    print(str(array))
+
+}
+
+def print(text: @Any) None {
+
+    output(str(text))
+    output("\n")
+
+}
+
+index_read (input: Str, index: Int) Char {
+
+    return (Arr[Char] input)[index]
+
+}
+
+index_write (input: Str, index: Int, value: Char) None {
+
+    (Arr[Char] input)[index] = value
+
+}
+
+binary == (a: Str, b: Str) Bool {
+
+    return Arr[U8] a == Arr[U8] b
+
+}
+
+binary != (a: Str, b: Str) Bool {
+
+    return Arr[U8] a != Arr[U8] b
+
+}
+
+dot high(a: Str) Int {
+
+    return Arr[U8] a.len() - 1
+
+}
+
+
+const #NANOSECOND  = 1
+const #MICROSECOND = 1_000
+const #MILLISECOND = 1_000_000
+const #SECOND      = 1_000_000_000
+const #MINUTE      = #SECOND * 60
+const #HOUR        = #MINUTE * 60
+const #DAY         = #HOUR * 24
+const #WEEK        = #DAY * 7
+
+dot sec(amount: Int) Time {
+
+    return Time (amount * #SECOND)
+
+}
+
+dot ms(amount: Int) Time {
+
+    return Time (amount * #MILLISECOND)
+
+}
+
+dot us(amount: Int) Time {
+
+    return Time (amount * #MICROSECOND)
+
+}
+
+dot ns(amount: Int) Time {
+
+    return Time (amount * #NANOSECOND)
+
+}
+
+dot min(amount: Int) Time {
+
+    return Time (amount * #MINUTE)
+
+}
+
+dot hour(amount: Int) Time {
+
+    return Time (amount * #HOUR)
+
+}
+
+dot day(amount: Int) Time {
+
+    return Time (amount * #DAY)
+
+}
+
+binary + (a: Time, b: Time) Time {
+
+    return Time (Int a + Int b)
+
+}
+
+binary - (a: Time, b: Time) Time {
+
+    return Time (Int a - Int b)
+
+}
+
+binary * (a: Time, b: Time) Time {
+
+    return Time (Int a * Int b)
+
+}
+
+binary += ($a: Time, b: Time) None {
+
+    a = Time (Int a + Int b)
+
+}
+
+binary -= ($a: Time, b: Time) None {
+
+    a = Time (Int a - Int b)
+
+}
+
+binary < (a: Time, b: Time) Bool {
+
+    return Int a < Int b
+
+}
+
+binary > (a: Time, b: Time) Bool {
+
+    return Int a > Int b
+
+}
+
+binary <= (a: Time, b: Time) Bool {
+
+    return Int a <= Int b
+
+}
+
+binary >= (a: Time, b: Time) Bool {
+
+    return Int a >= Int b
+
+}
+
+
+
+def exit() None {
+
+    exit(0)
+
+}
+
+dot write(file: File, text: Str) None {
+
+    var data = [U8] text
+    file.write(data)
+
+}
+
+
+// xorshift*
+def xorshift(input: Int) Int {
+
+    var x = input
+    x ^= x << 12
+    x ^= x >> 25
+    x ^= x >> 27
+    return x * 0x2545F4914F6CDD1
+
+}
+
+var global_seed = Seed 1
+
+def randomize_seed() None {
+    global_seed = Seed get_cycle_count()
+}
+
+dot next($s: Seed) Int {
+    s = Seed xorshift(Int s)
+    return Int s
+}
+
+def random() Int {
+    var result = $global_seed.next()
+    return result
+}
+
+def random(max: Int) Int {
+    var result = random()
+
+    return Int (U64 result % U64 max)
+}
+
+def sample(array: Arr[@Any]) @Any {
+
+    let index = random(array.len())
+    return array[index]
+
+}
+

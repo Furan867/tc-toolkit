@@ -1,0 +1,159 @@
+
+def get_input(cycle: Int) Input {
+    var x = cycle
+    x ^= x << 1
+    x ^= x >> 5
+    x ^= x << 8
+
+    var condition = x & 0b111
+    var value = (x >> 3) & 0xff
+
+    if value & 0b10000000 != 0 {
+        value = value ^ 0xff
+        value += 1
+        value = -value
+    }
+
+    var condition_text = " "
+    if (condition / 4) % 2 == 0 {
+        condition_text += "[F]"
+    } else {
+        condition_text += "[T]"
+    }
+    if (condition / 2) % 2 == 0 {
+        condition_text += "[F]"
+    } else {
+        condition_text += "[T]"
+    }
+    if (condition / 1) % 2 == 0 {
+        condition_text += "[F]"
+    } else {
+        condition_text += "[T]"
+    }
+    condition_text += " "
+
+    ui_set_text("table[1][1]", `{value}`)
+
+    switch condition
+        case 0 {
+            ui_set_text("table[2][1]", (31337_80507287196650, `NEVER`))
+            ui_set_text("table[3][1]", "[F]")
+        }
+        case 1 {
+            ui_set_text("table[2][1]", (31337_74974087807935, `ALWAYS`))
+            ui_set_text("table[3][1]", "[T]")
+        }
+        case 2 {
+            ui_set_text("table[2][1]", `{value} = 0`)
+            if value == 0 {
+                ui_set_text("table[3][1]", "[T]")
+            } else {
+                ui_set_text("table[3][1]", "[F]")
+            }
+        }
+        case 3 {
+            ui_set_text("table[2][1]", `{value} ≠ 0`)
+            if value == 0 {
+                ui_set_text("table[3][1]", "[F]")
+            } else {
+                ui_set_text("table[3][1]", "[T]")
+            }
+        }
+        case 4 {
+            ui_set_text("table[2][1]", `{value} < 0`)
+            if value < 0 {
+                ui_set_text("table[3][1]", "[T]")
+            } else {
+                ui_set_text("table[3][1]", "[F]")
+            }
+        }
+        case 5 {
+            ui_set_text("table[2][1]", `{value} ≥ 0`)
+            if value < 0 {
+                ui_set_text("table[3][1]", "[F]")
+            } else {
+                ui_set_text("table[3][1]", "[T]")
+            }
+        }
+        case 6 {
+            ui_set_text("table[2][1]", `{value} ≤ 0`)
+            if value <= 0 {
+                ui_set_text("table[3][1]", "[T]")
+            } else {
+                ui_set_text("table[3][1]", "[F]")
+            }
+        }
+        case 7 {
+            ui_set_text("table[2][1]", `{value} > 0`)
+            if value <= 0 {
+                ui_set_text("table[3][1]", "[F]")
+            } else {
+                ui_set_text("table[3][1]", "[T]")
+            }
+        }
+
+    ui_set_text("table[0][1]", condition_text)
+
+    return Input {condition: U3 condition, input: U8 value}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.result_is_z {
+        ui_set_text("table[4][1]", "[Z]")
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    if output.result == 0 {
+        ui_set_text("table[4][1]", "[F]")
+    } else {
+        ui_set_text("table[4][1]", "[T]")
+    }
+
+    var expected = false
+
+    var condition = input.condition
+    var value = asr(Int input.input << 56, 56)
+
+    switch condition
+        case 0 {
+            expected = false
+        }
+        case 1 {
+            expected = true
+        }
+        case 2 {
+            expected = value == 0
+        }
+        case 3 {
+            expected = value != 0
+        }
+        case 4 {
+            expected = value < 0
+        }
+        case 5 {
+            expected = value >= 0
+        }
+        case 6 {
+            expected = value <= 0
+        }
+        case 7 {
+            expected = value > 0
+        }
+
+    if expected {
+        if output.result == 0 {
+            return fail
+        }
+    } else {
+        if output.result != 0 {
+            return fail
+        }
+    }
+
+    if cycle == 2047 {
+        return win
+    }
+}

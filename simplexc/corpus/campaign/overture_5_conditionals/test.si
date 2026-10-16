@@ -1,0 +1,179 @@
+const #INPUT  = U8 0b110_000
+const #OUTPUT = U8 0b000_110
+
+const #IMM    = U8 0b0000_0000
+const #CALC   = U8 0b0100_0000
+const #MOVE   = U8 0b1000_0000
+const #COND   = U8 0b1100_0000
+
+const #NAND = U8 0
+const #OR   = U8 1
+const #AND  = U8 2
+const #NOR  = U8 3
+const #ADD  = U8 4
+const #SUB  = U8 5
+
+const #NEVER  = U8 0
+const #ALWAYS = U8 1
+const #EQ     = U8 2
+const #NE     = U8 3
+const #LT     = U8 4
+const #GE     = U8 5
+const #LE     = U8 6
+const #GT     = U8 7
+
+const #NOP   = #COND | #NEVER
+
+var registers = [U8 0,0,0,0,0,0]
+var counter   = U8 0
+
+def get_input(cycle: Int) Input {
+    return Input {input: U8 random(256)}
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+
+    ui_set_instruction(0, cycle, 0)
+    ui_set_instruction(1, cycle, 0)
+    ui_set_instruction(2, cycle, 0)
+    ui_set_instruction(3, cycle, 0)
+    ui_set_instruction(4, cycle, 0)
+    ui_set_instruction(5, cycle, 0)
+
+    let actual_counter = get_output("Count", 0)
+    let instruction = get_ram_value("Program", actual_counter, <U8>)
+
+    ui_set_instruction(0, Int instruction, cycle)
+
+    let opcode = instruction >> 6
+
+    let to   = (instruction >> 3) & 0b111
+
+    if output.output_enabled && (opcode != #MOVE >> 6 || to != 6) {
+        set_error((31337_17521915837347, `Output should not be enabled.`))
+        return fail
+    }
+
+    switch U8 opcode
+        case #IMM {
+            registers[0] = instruction
+            counter += 1
+        }
+        case #CALC >> 6 {
+            let alu_code = instruction & 0b111
+            let r1 = registers[1]
+            let r2 = registers[2]
+
+            switch U8 alu_code
+                case #OR {
+                    registers[3] = r1 | r2
+                }
+                case #NAND {
+                    registers[3] = ~(r1 & r2) & 0xff
+                }
+                case #NOR {
+                    registers[3] = ~(r1 | r2) & 0xff
+                }
+                case #AND {
+                    registers[3] = r1 & r2
+                }
+                case #ADD {
+                    registers[3] = (r1 + r2) & 0xff
+                }
+                case #SUB {
+                    registers[3] = (r1 - r2) & 0xff
+                }
+
+            counter += 1
+
+        }
+        case #MOVE >> 6 {
+
+            let from = instruction & 0b111
+            let to   = (instruction >> 3) & 0b111
+
+            var value = U8 0
+            if from <= 5 {
+                value = registers[from]
+            } elif from == 6 {
+                value = U8 input.input
+            }
+
+            if to <= 5 {
+                registers[to] = value
+            } elif to == 6 {
+                if !output.output_enabled {
+                    set_error((31337_36308361121667, `Output not enabled.`))
+                    return fail
+                }
+                if output.output != U8 value {
+                    set_error((31337_33411257451562, `Expected output: {value}.`))
+                    return fail
+                }
+            }
+
+            counter += 1
+        }
+        case #COND >> 6 {
+            let cond = instruction & 0b111
+
+            let equal = registers[3] == 0
+            let less  = registers[3] > 127
+
+            var set_counter = false
+
+            switch U8 cond
+                case #NEVER {}
+                case #ALWAYS {
+                    set_counter = true
+                }
+                case #EQ {
+                    set_counter = equal
+                }
+                case #NE {
+                    set_counter = !equal
+                }
+                case #LT {
+                    set_counter = less
+                }
+                case #GE {
+                    set_counter = !less
+                }
+                case #LE {
+                    set_counter = less || equal
+                }
+                case #GT {
+                    set_counter = !less && !equal
+                }
+
+
+            if set_counter {
+                counter = registers[0]
+            } else {
+                counter += 1
+            }
+        }
+
+    var reg_i = 0
+    while reg_i < 6 {
+        let value = U8 get_memory(`Reg {reg_i}`)
+        if registers[reg_i] != value {
+            let value = registers[reg_i]
+            set_error((31337_35224907301551, `Register {reg_i} should have value {value}.`))
+            return fail
+        }
+
+        reg_i += 1
+    }
+
+    if U8 get_memory("Count") != counter {
+        let expected_value = counter
+        set_error((31337_24524168624111, `Counter memory should be {expected_value}.`))
+        return fail
+    }
+
+    if cycle == 255 {
+        return win
+    }
+}

@@ -1,0 +1,61 @@
+const #CORRECT_OUTPUT = [U1 0,1,1,0,0,0,0,0,1,1,1,1,0]
+
+def get_input(cycle: Int) Input {
+    switch cycle
+        case 0 {
+            return Input {save: U1 1, value: U1 1}
+        }
+        case 1 {
+            return Input {save: U1 1, value: U1 1}
+        }
+        case 2 {
+            return Input {save: U1 1, value: U1 0}
+        }
+        case 3 {
+            return Input {save: U1 1, value: U1 0}
+        }
+        case 4 {
+            return Input {save: U1 0, value: U1 0}
+        }
+        case 5 {
+            return Input {save: U1 0, value: U1 1}
+        }
+        case 6 {
+            return Input {save: U1 1, value: U1 0}
+        }
+        case 7 {
+            return Input {save: U1 1, value: U1 1}
+        }
+        case 8 {
+            return Input {save: U1 1, value: U1 1}
+        }
+        case 9 {
+            return Input {save: U1 0, value: U1 1}
+        }
+        case 10 {
+            return Input {save: U1 0, value: U1 0}
+        }
+        case 11 {
+            return Input {save: U1 1, value: U1 0}
+        }
+        case 12 {
+            return Input {save: U1 1, value: U1 0}
+        }
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    if #CORRECT_OUTPUT[cycle] != output.output {
+        return fail
+    }
+
+    if cycle == 12 {
+        return win
+    }
+
+}

@@ -1,0 +1,74 @@
+
+def get_binary_repr(value: Int, size: Int) Str {
+    var text = ""
+    var i = size - 1
+    while i >= 0 {
+        if ((value >> i) & 1) == 0 {
+            text += "[F]"
+        } else {
+            text += "[T]"
+        }
+        i -= 1
+    }
+    return text
+}
+
+def get_input(cycle: Int) Input {
+
+
+    // 17 bit RNG
+    var x = cycle
+    x ^= x << 6
+    x ^= x >> 11
+    x ^= x << 9
+
+    let input = Input {
+        a: U8 (x & 0xff),
+        b: U8 ((x >> 8) & 0xff),
+        carry_in: U1 (x >> 16) & 1,
+    }
+
+    ui_set_text("table[0][1]", `{input.a}`)
+    ui_set_text("table[0][2]", `[right]{get_binary_repr(Int input.a, 8)}[/right]`)
+
+    ui_set_text("table[1][1]", `{input.b}`)
+    ui_set_text("table[1][2]", `[right]{get_binary_repr(Int input.b, 8)}[/right]`)
+
+    ui_set_text("table[2][1]", `{input.carry_in}`)
+    ui_set_text("table[2][2]", `[right]{get_binary_repr(Int input.carry_in, 1)}[/right]`)
+
+    let value = Int (U64 input.a + U64 input.b + U64 input.carry_in)
+    ui_set_text("table[3][1]", `{value}`)
+    ui_set_text("table[3][2]", `[right]    {get_binary_repr(value >> 8, 1)}    {get_binary_repr(value, 8)}[/right]`)
+
+    return input
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        ui_set_text("table[4][1]", `[Z]`)
+        ui_set_text("table[4][2]", `[right]    [Z]    [Z][Z][Z][Z][Z][Z][Z][Z][/right]`)
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    ui_set_text("table[4][1]", `{Int output.carry_out << 8 | Int output.output}`)
+    ui_set_text("table[4][2]", `[right]    {get_binary_repr(Int output.carry_out, 1)}    {get_binary_repr(Int output.output, 8)}[/right]`)
+
+    var sum = Int input.a + Int input.b + Int input.carry_in
+    var car = Int (U64 (sum > 0xff))
+
+    if Int output.output != (Int sum & 0xff) {
+        return fail
+    }
+
+    if Int output.carry_out != car {
+        return fail
+    }
+
+    if cycle == 0x1ffff {
+        return win
+    }
+
+}

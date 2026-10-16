@@ -14,6 +14,10 @@
 ```
 tools/        分析脚本与工具（已固化的）
 docs/         本套文档 + 专题记录（specs/ 下是设计文档）
+simplexc/     自研编译器（接口冻结见 docs/specs/2026-10-15-simplexc-interfaces.md）
+  frontend/ lower/ runtime/ assemble/ shell/ cli/   代码
+  tools/     语料重编译、地址分类等脚本    corpus/ 98 份语料 + manifest（ref/ 不进 git）
+  dossier/   语义档案（M3，未开始）
 work/hook/    转发层捕获：hook_src_NNN.si ↔ hook_out_NNN.bin（同号即一对）
 work/opt/     转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log / opt_stderr.log
 work/freq/    主频采样输出：freq_log.tsv（事件）与 freq_summary.txt（给人读）

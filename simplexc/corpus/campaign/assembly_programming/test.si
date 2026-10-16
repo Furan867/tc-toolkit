@@ -1,0 +1,33 @@
+
+var input = U8 ((get_test() * 207 + 168) % 251)
+
+def get_input(cycle: Int) Input {
+
+    return Input {input: input}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let actual_counter = get_output("Count", 0)
+    let instruction = get_ram_value("Program", actual_counter, <U8>)
+    ui_set_instruction(0, Int instruction, cycle)
+
+    if !output.output_enabled {
+        return pass
+    }
+
+    if input.input + 5 != output.output {
+        let input_value = input.input
+        let expected_value = input.input + 5
+        let actual_value = output.output
+        if !output.output_enabled {
+            set_error((31337_47165251832545, `{input_value} + 5 is {expected_value}, not Z.`))
+        } else {
+            set_error((31337_38629344681843, `{input_value} + 5 is {expected_value}, not {actual_value}.`))
+        }
+        return fail
+    }
+
+    return win
+}

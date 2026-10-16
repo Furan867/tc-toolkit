@@ -1,0 +1,28 @@
+const #CORRECT_OUTPUT = [U3 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]
+
+def get_input(cycle: Int) Input {
+
+    return Input {input: U4 cycle}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        ui_set_text(`table[5][{cycle + 1}]`, `?`) // Don't use "Z" as it hasn't been introduced yet
+        return fail
+    }
+
+    var display_result = str(output.output)
+
+    ui_set_text(`table[5][{cycle + 1}]`, display_result)
+
+    if #CORRECT_OUTPUT[cycle] != output.output {
+        return fail
+    }
+
+    if cycle == #CORRECT_OUTPUT.len() - 1 {
+        return win
+    }
+
+}

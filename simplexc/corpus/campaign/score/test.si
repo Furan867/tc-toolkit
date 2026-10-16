@@ -1,0 +1,31 @@
+
+def get_input(cycle: Int) Input {
+
+    ui_set_text("goal", (31337_46433606967015, `Add 1 to {cycle}`))
+    return Input {input: U8 cycle}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let expected = (input.input + 1)
+
+    if output.output_is_z {
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    if expected != output.output {
+
+        set_error((31337_15039285047182, `Output should be {expected}.`))
+        return fail
+
+    }
+
+    if cycle == 0xff {
+
+        return win
+
+    }
+
+}

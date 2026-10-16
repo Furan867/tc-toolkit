@@ -1,0 +1,3 @@
+def get_input_switched() Int { }
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult { }

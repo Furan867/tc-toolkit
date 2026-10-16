@@ -1,0 +1,115 @@
+
+var memory_state      = [0,0,0,0]
+
+def markup(text: Str) Str {
+    return `[color=#E5787D][b]{text}[/b][/color]`
+}
+
+def get_input(cycle: Int) Input {
+
+    var add_1 = random(2)
+    var add_2 = random(2)
+    var actions = random(4)
+    var load = actions & 1
+    var save = actions >> 1
+    var value = 1 + random(255)
+
+    if cycle < 8 {
+        if cycle % 2 == 0 {
+            save = 1
+            load = 0
+            add_1 = (cycle / 2) & 1
+            add_2 = Int ((cycle / 2) > 1)
+
+        } else {
+            save = 0
+            load = 1
+            add_1 = (cycle / 2) & 1
+            add_2 = Int ((cycle / 2) > 1)
+        }
+    }
+
+    var offset = -1
+    if save == 1 {
+        offset = add_1 * 2 + add_2
+    }
+
+    var i = 0
+    while i < 4 {
+        var text = offset == i ? str(value) : str(memory_state[i])
+        ui_set_text(`states[{i + 1}][1]`, text)
+        i += 1
+    }
+
+    var text_value = markup(`{value}`)
+    ui_set_text("actions[1][2]", text_value)
+
+    var text_add = str(add_1) + str(add_2)
+    text_add = markup(text_add)
+    ui_set_text("actions[1][3]", text_add)
+
+    if load == 0 {
+        ui_set_text("actions[2][1]", "[F]")
+        ui_set_hidden("load", true)
+    } else {
+        var text_state = markup(`{memory_state[add_1 * 2 + add_2]}`)
+        ui_set_text("actions[2][1]", "[T]")
+        ui_set_text("load", `[left]` + (31337_55086379351729, `Load {text_state} from {text_add}`) + `[/left]`)
+        ui_set_hidden("load", false)
+    }
+
+    if save == 0 {
+        ui_set_text("actions[3][1]", "[F]")
+        ui_set_hidden("save", true)
+    } else {
+        ui_set_text("actions[3][1]", "[T]")
+        ui_set_text("save", `[left]` + (31337_52597500133853, `Save {text_value} to {text_add}`) + `[/left]`)
+        ui_set_hidden("save", false)
+    }
+
+    return Input {
+        load: U1 load,
+        save: U1 save,
+        address: U2 add_1 << 1 | U2 add_2,
+        value: U8 value,
+    }
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if input.load == 1 {
+
+        if memory_state[input.address] != Int output.output {
+            let expected_value = memory_state[input.address]
+            let actual_value = output.output
+
+            if output.output_is_z {
+                set_error((31337_29258463778822, `Output was Z, but it should have been {expected_value}.`))
+            } else {
+                set_error((31337_48251194975794, `Output was {actual_value}, but it should have been {expected_value}.`))
+            }
+
+            return fail
+
+        }
+
+    } else {
+
+        if !output.output_is_z {
+            set_error((31337_45179662026844, `Output should have been Z.`))
+            return fail
+        }
+
+    }
+
+    if cycle == 0xfff {
+
+        return win
+
+    }
+
+    if input.save == 1 {
+        memory_state[input.address] = Int input.value
+    }
+
+}

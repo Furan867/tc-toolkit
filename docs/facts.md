@@ -69,12 +69,16 @@
 验证：静态核对（`objdump -s` 27711 字节前缀）
 最后验证：2026-10-11
 
-### compile() 可脱离游戏进程调用，产物逐字节可复现
-两个独立进程编译同一份源码，产物 md5 相同；且与「游戏内经转发层捕获」的产物三者相同：
-`a18_run1.bin` = `a18_run2.bin` = `hook_out_002.bin` = `002.raw.bin`
+### compile() 可脱离游戏进程调用，产物**同一 boot 内**逐字节可复现
+两个独立进程编译同一份源码，产物 md5 相同（**同一 boot 内**；跨 boot 不成立 —— 参考产物里烘焙着
+`compile_real.dll` 的加载基址，见 §「产物的绝对地址绑定 compile_real.dll 的加载基址」）。
+「离线重编译 == 游戏内捕获产物」这条只在**归一化掉 DLL 基址差**之后成立：98 份语料归一化后逐字节相同，
+差值恒为 `0x380000`，未分类差异 0 处。
+历史例子（同一 boot 会话内）：`a18_run1.bin` = `a18_run2.bin` = `hook_out_002.bin` = `002.raw.bin`
 （md5 `12cb7184…`，204623 B = 8 字节头 + 204615 机器码）。
-验证：`python tools/try_compile_dll.py --compile --src <样本>` 跑两次比 md5
-最后验证：2026-10-11
+验证：`python simplexc/tools/recompile_corpus.py --check`（退出码 0）+ `corpus/manifest.tsv` 的
+      `ref_match` / `ref_match_rebased` / `rebased_delta` 列；旧例：`python tools/try_compile_dll.py --compile --src <样本>` 跑两次比 md5
+最后验证：2026-10-16
 
 ### 游戏内 JIT 代码与离线产物逐字节相同
 故映射可直接用于采样地址。19 份产物 md5 全等，`locate()` 对 19 个内存候选做整段比对全 pass。
@@ -141,6 +145,38 @@
 → 内建清单（主设计 §11 U5）的权威来源是这里，不是从前缀反推。
 验证：`python tools/extract_nim_strings.py <dll> lits --out FILE`，看文件偏移 `0x1104A0`–`0x1106A0` 段
 最后验证：2026-10-16
+
+## 语料与判据
+
+### simplexc/corpus：98 份唯一源码 + 含 entry 的 manifest
+`work/hook/all/` 的 180 份捕获按源码字节去重 → 98 份（重复分布 1×91、2×3、3×2、4×1、73×1，
+最多的是 004 出现 73 次）；离线重编译后 `entry` 全部非 0（53 个不同值，`0x212f` 出现 15 次）
+且都 < `out_len`；98 份源码只产出 **97 个不同产物**（`020` 与 `058` 只差一个空行的位置）。
+`corpus/manifest.tsv` 13 列：`id file src_len src_sha256 dups seen flags entry out_len out_sha256
+ref_match ref_match_rebased rebased_delta`；`corpus/ref/*.bin` **不进 git**（能由源码重新生成）。
+验证：`python simplexc/tools/recompile_corpus.py --check`；独立复算（不 import 该工具）行数/列数/
+      `entry` 边界/`out_len` 与文件大小/`out_sha256` 与文件内容
+最后验证：2026-10-16
+
+### stdlib 前缀：27711 B 含 55 处 CRLF，归一化后 27656 B
+`compile_real.dll` 偏移 `0x119F48` 起 27711 字节；CRLF→LF 归一化后 27656 B（1503 行）。
+两者**等价** —— 不要去「修」这个差。
+验证：`cmp simplexc/corpus/stdlib_prefix.si <工作副本>` → 相同（工作副本从 DLL 段重新提取后归一化）
+最后验证：2026-10-16
+
+## 离线差分宿主（M2）
+
+### 游戏内存地址在全新进程里可直接 VirtualAlloc
+生成源码里硬编码的游戏内存地址（`0x232a6f…`、`0x232a9f…`、`0x232aab…` 段）在一个**全新的
+`python.exe` 进程里能按原地址 `VirtualAlloc(MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE)` 成功**
+（6/6 个样本全成功）→ 差分宿主可以「按源码里出现的绝对地址造假内存」，不必先把产物里的地址重写。
+注意：`VirtualAlloc` 会把请求地址向下取整到页边界（`0x232a3220800` → `0x232a3220000`），
+拿返回值当实际基址。
+验证：`python -c` 对 `work/hook/all/hook_src_001.si` 里的 `Ptr <digits>` 逐个 VirtualAlloc
+最后验证：2026-10-16
+
+### 判据入口的基线：参考产物 vs 参考产物
+宿主可靠性得证前不得接我们的产物（主设计 §7.2）。
 
 ## 组件映射
 

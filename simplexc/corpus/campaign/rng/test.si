@@ -1,0 +1,51 @@
+
+
+var initial_seed = 1 + random(0xfffffffe)
+var seed = initial_seed
+var count = 0
+
+def show_calculations(seed: Int) None {
+
+    var result = ((seed >> 13) ^ seed) & 0xffffffff
+    ui_set_text("table[0][0]", `({result})`)
+    result = ((result << 17) ^ result) & 0xffffffff
+    ui_set_text("table[1][0]", `({result})`)
+    result = ((result >> 5) ^ result) & 0xffffffff
+    ui_set_text("table[2][0]", `({result})`)
+
+}
+
+def get_input_switched() Int {
+
+    return initial_seed
+
+}
+
+def check_output_switched(output: Int) TestResult {
+
+    let this_seed = seed
+
+    var result = ((this_seed >> 13) ^ this_seed) & 0xffffffff
+    result = ((result << 17) ^ result) & 0xffffffff
+    result = ((result >> 5) ^ result) & 0xffffffff
+
+    if output != result {
+
+        set_error((31337_77825640575531, `The next seed should be {result}, not {output}`))
+        return fail
+
+    }
+
+    if count == 64 {
+
+        return win
+
+    }
+    count += 1
+
+    seed = result
+    show_calculations(result)
+
+}
+
+show_calculations(seed)

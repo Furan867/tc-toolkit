@@ -1,0 +1,151 @@
+def flag_result(a: U32, b: U32) U32 {
+    let equal = U32 (a == b)
+    let uless = U32 (U32 a < U32 b) & 1
+    let sless = U32 (S32 a < S32 b) & 1
+
+    let result = (sless << 2) | (uless << 1) | equal
+
+    return (sless << 2) | (uless << 1) | equal
+}
+
+def get_input(cycle: Int) Input {
+
+    var code = random(11)
+    var a = U32 0
+    var b = U32 0
+
+    if cycle < 0xfff {
+
+        a = U32 random(0x100)
+        b = U32 random(0x100)
+
+    } else {
+
+        switch random(5)
+            case 0 {
+                a = U32 random(0x10000_0000)
+                b = U32 random(0x10000_0000)
+            }
+            case 1 {
+                a = U32 random(0x10000_0000)
+                b = a
+            }
+            case 2 {
+                a = U32 random(0x10000_0000)
+                b = a + 1
+            }
+            case 3 {
+                a = U32 random(0x10000_0000)
+                b = a - 1
+            }
+            case 4 {
+                a = U32 random(0x10000_0000)
+                let mask = U32 1 << U32 random(32)
+                b = a ^ mask
+            }
+
+    }
+
+    if code == 7 || code == 8 || code == 9 {
+
+        b = U32 random(32)
+
+    }
+
+    switch code
+        case 0 {
+
+            ui_set_text("description", `{a} NAND {b} = {U32 ~(a & b)}`)
+
+        }
+        case 1 {
+
+            ui_set_text("description", `{a} OR {b} = {a | b}`)
+
+        }
+        case 2 {
+
+            ui_set_text("description", `{a} AND {b} = {a & b}`)
+
+        }
+        case 3 {
+
+            ui_set_text("description", `{a} NOR {b} = {U32 ~(a | b)}`)
+
+        }
+        case 4 {
+
+            ui_set_text("description", `{a} ADD {b} = {U32 (a + b)}`)
+
+        }
+        case 5 {
+
+            ui_set_text("description", `{a} SUB {b} = {a - b}`)
+
+        }
+        case 6 {
+
+            ui_set_text("description", `{a} XOR {b} = {a ^ b}`)
+
+        }
+        case 7 {
+
+            ui_set_text("description", `{a} LSL {b} = {U32 (a << b)}`)
+
+        }
+        case 8 {
+
+            ui_set_text("description", `{a} LSR {b} = {a >> b}`)
+
+        }
+        case 9 {
+
+            ui_set_text("description", `{a} ASR {b} = {asr(a, b)}`)
+
+        }
+        case 10 {
+
+            ui_set_text("description", `CMP {a}, {b} = {flag_result(a, b)}`)
+
+        }
+
+    return Input {opcode: U4 code, argument_a: U32 a, argument_b: U32 b}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.result_is_z {
+        set_error((31337_33181499064044, `Result should never be Z state`))
+        return fail
+    }
+
+    var result = U32 0
+
+    switch input.opcode
+        case 0  { result = ~(input.argument_a &  input.argument_b) }
+        case 1  { result =   input.argument_a |  input.argument_b }
+        case 2  { result =   input.argument_a &  input.argument_b }
+        case 3  { result = ~(input.argument_a |  input.argument_b) }
+        case 4  { result =   input.argument_a +  input.argument_b }
+        case 5  { result =   input.argument_a -  input.argument_b }
+        case 6  { result =   input.argument_a ^  input.argument_b }
+        case 7  { result =   input.argument_a << input.argument_b }
+        case 8  { result =   input.argument_a >> input.argument_b }
+        case 9  { result =   asr(input.argument_a, input.argument_b) }
+        case 10 { result =   flag_result(input.argument_a, input.argument_b) }
+
+    result &= 0xffff_ffff
+
+    if output.result != result {
+        return fail
+
+    }
+
+    if cycle == 1000_000 {
+
+        return win
+
+    }
+
+}

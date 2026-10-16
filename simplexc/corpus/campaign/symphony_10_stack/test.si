@@ -1,0 +1,92 @@
+
+var sp = 0
+var ram = array(<U8>, 1000)
+var waiting_for_pop = 0
+var count = 0
+
+def on_ui_update(input: Input, output: Output) None {
+
+    let actual_counter = get_load_port_input("Instruction")
+
+    var instruction = get_ram_value("Main Memory", Int actual_counter, <U32>)
+    ui_set_instruction(0, Int instruction, Int actual_counter)
+
+}
+
+def get_input(cycle: Int) Input {
+
+    var result = random(2) == 0 ? 1 + random(0xfe) : 0
+
+    if sp == 0 {
+
+        result = 1 + random(0xfe)
+
+    }
+
+    return Input {input: U32 result}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    {
+
+
+        if input.input_enabled {
+
+            let push = input.input != 0
+
+            if push {
+
+                ram[sp] = U8 input.input
+                sp += 1
+
+
+            } else { // Pop
+
+                if waiting_for_pop == 1 {
+
+                    set_error((31337_77129086767196, `You did not output the last popped value.`))
+                    return fail
+
+                }
+
+                waiting_for_pop = 1
+                sp -= 1
+
+            }
+
+        }
+
+    }
+
+    if !output.output_enabled {
+        return pass
+    }
+
+    if waiting_for_pop == 0 {
+
+        set_error(`Only output when the input is 0`)
+        return fail
+
+    }
+
+    if output.output != U32 ram[sp] {
+
+        let expected_value = ram[sp]
+        let actual_value = output.output
+        set_error((31337_35910734851012, `{expected_value} is supposed to be on top of the stack, not {actual_value}.`))
+        return fail
+
+    }
+
+    waiting_for_pop = 0
+    count += 1
+
+    if count >= 1000 {
+
+        return win
+
+    }
+
+}

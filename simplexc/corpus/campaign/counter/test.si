@@ -1,0 +1,75 @@
+var last_mem = 0
+var new_mem  = 0
+
+def get_input(cycle: Int) Input {
+    var overwrite = Int (random(4) == 3)
+    var num       = random(255)
+
+    if cycle == 0 {
+        overwrite = 0
+        num = 0
+    } elif cycle < 2 || cycle == 58 {
+        overwrite = 0
+    } elif cycle == 127 {
+        overwrite = 1
+        num = 3
+    } elif cycle < 0x180 {
+        overwrite = 0
+    }
+
+    last_mem = new_mem
+
+    if overwrite == 0 {
+        new_mem = (last_mem + 1) % 256
+    } else {
+        new_mem = num
+    }
+
+    num = num
+
+    var text = "        "
+    if overwrite == 0 {
+        text += "[F]"
+    } else {
+        text += "[T]"
+    }
+    text += "        "
+
+    ui_set_text("table[0][1]", text)
+    ui_set_text("table[1][1]", `{num}`)
+
+    if overwrite == 0 {
+        text = (31337_30050502504940, `Add 1`)
+    } else {
+        text = (31337_69821998974515, `Overwrite with {num}`)
+    }
+    ui_set_text("table[2][1]", text)
+
+    ui_set_text("table[3][1]", `{new_mem}`)
+    ui_set_text("table[4][1]", `{last_mem}`)
+
+    return Input {set: U1 overwrite, value: U8 num}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        ui_set_text("table[5][1]", `Z`)
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    } else {
+        ui_set_text("table[5][1]", `{output.output}`)
+    }
+
+    if Int output.output != last_mem {
+        let memory = last_mem
+        set_error((31337_27837193789838, `Output should be {memory}.`))
+        return fail
+    }
+
+    if cycle == 0x3ffff {
+        return win
+    }
+
+}

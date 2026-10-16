@@ -1,0 +1,57 @@
+def get_binary_repr(value: Int, size: Int) Str {
+    var text = ""
+    var i = size - 1
+    while i >= 0 {
+        if ((value >> i) & 1) == 0 {
+            text += "[F]"
+        } else {
+            text += "[T]"
+        }
+        i -= 1
+    }
+    return text
+}
+
+def get_input(cycle: Int) Input {
+
+    var x = cycle
+    x ^= x << 6
+    x ^= x >> 5
+    x ^= x << 7
+
+    ui_set_text(`table[0][1]`, `[right]{get_binary_repr(x, 3)}[/right]`)
+    ui_set_text(`table[1][1]`, `{get_binary_repr(x >> 3, 4)}`)
+
+    return Input {flags: U3 x, condition: U4 (x >> 3)}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    let match  = (Int input.condition & Int input.flags) > 0
+    let result = match != ((input.condition & 0b1000) > 0)
+
+    ui_set_text(`table[2][1]`, `{get_binary_repr(Int result, 1)}`)
+
+    if output.result_is_z {
+        ui_set_text(`table[3][1]`, `[Z]`)
+        set_error((31337_33181499064044, `Result should never be Z state`))
+        return fail
+    }
+
+    ui_set_text(`table[3][1]`, `{get_binary_repr(Int output.result, 1)}`)
+
+    if Bool output.result != result {
+
+        set_error((31337_73051402798264, `The correct output is {U1 result}`))
+        return fail
+
+    }
+
+    if cycle == 0xff {
+
+        return win
+
+    }
+
+}

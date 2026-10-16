@@ -1,0 +1,261 @@
+
+var input = 0
+var source = random(3)
+var destination = source
+var height = 3 + random(3)
+var mag_pos = 0
+var mag_lifted = -1
+var failed = 0
+var plates = array(<Int>, 10)
+
+
+while source == destination {
+
+    destination = random(3)
+
+}
+
+var i = 0
+while i < height {
+
+    plates[i] = source
+    i += 1
+
+}
+
+while i < 5 {
+
+    plates[i] = -1
+    i += 1
+
+}
+
+
+def redraw() None {
+
+    if failed == 1 {
+
+        ui_set_hidden("0", true)
+        ui_set_hidden("1", true)
+        ui_set_hidden("2", true)
+        ui_set_hidden("3", true)
+        ui_set_hidden("4", true)
+        ui_set_hidden("magnet", true)
+        ui_set_hidden("error_text", false)
+
+    }
+
+    ui_set_hidden("2", true)
+    ui_set_hidden("3", true)
+    ui_set_hidden("4", true)
+
+    let plate_0 = plates[0]
+    let plate_1 = plates[1]
+    let plate_2 = plates[2]
+    let plate_3 = plates[3]
+    let plate_4 = plates[4]
+
+    var y_pos = [140, 140, 140]
+
+    if plate_4 != -1 {
+
+        ui_set_position("4", -200 + 200 * plate_4, y_pos[plate_4])
+        ui_set_hidden("4", false)
+        y_pos[plate_4] -= 24
+
+    }
+
+    if plate_3 != -1 {
+
+        ui_set_position("3", -200 + 200 * plate_3, y_pos[plate_3])
+        ui_set_hidden("3", false)
+        y_pos[plate_3] -= 24
+
+    }
+
+    if plate_2 != -1 {
+
+        ui_set_position("2", -200 + 200 * plate_2, y_pos[plate_2])
+        ui_set_hidden("2", false)
+        y_pos[plate_2] -= 24
+
+    }
+
+    ui_set_position("1", -200 + 200 * plate_1, y_pos[plate_1])
+    y_pos[plate_1] -= 24
+    ui_set_position("0", -200 + 200 * plate_0, y_pos[plate_0])
+
+
+    // Magnet
+
+    ui_set_position("magnet", -200 + 200 * mag_pos, -100)
+
+    if mag_lifted != -1 {
+
+        let x = -200 + 200 * mag_pos
+
+        switch mag_lifted
+            case 0 { ui_set_position("0", x, -50) }
+            case 1 { ui_set_position("1", x, -50) }
+            case 2 { ui_set_position("2", x, -50) }
+            case 3 { ui_set_position("3", x, -50) }
+            case 4 { ui_set_position("4", x, -50) }
+
+    }
+
+}
+
+def level_input(input: Int) None {
+
+    switch input
+        case 0 {
+
+            mag_pos = 0
+
+        }
+        case 1 {
+
+            mag_pos = 1
+
+        }
+        case 2 {
+
+            mag_pos = 2
+
+        }
+        case 5 {
+
+            if mag_lifted == -1 {
+
+                let pos = mag_pos
+
+                var i = 0
+                while i < 5 {
+
+                    if pos == plates[i] {
+
+                        mag_lifted = i
+                        break
+
+                    }
+
+                    i += 1
+                }
+
+            } else {
+
+                let pos = mag_pos
+                let lifted = mag_lifted
+
+                var i = 0
+                while i < lifted {
+
+                    if plates[i] == pos {
+
+                        failed = 1
+                        break
+
+                    }
+
+                    i += 1
+
+                }
+
+                plates[lifted] = pos
+                mag_lifted = -1
+
+            }
+
+        }
+
+    redraw()
+
+}
+
+def on_manual_input(input: Int) None {
+
+    switch input
+        case 0 { // left
+
+            if mag_pos > 0 {
+
+                level_input(mag_pos - 1)
+
+            }
+
+        }
+        case 2 { // right
+
+            if mag_pos < 2 {
+
+                level_input(mag_pos + 1)
+
+            }
+
+        }
+        case 5 { // enter
+
+
+            level_input(5)
+
+        }
+
+}
+
+
+def get_input_switched() Int {
+
+    let count = input
+    input = count + 1
+
+    switch count
+        case 0 { return height - 1 }
+        case 1 { return source }
+        case 2 { return destination}
+        case 3 { return 3 - source - destination }
+
+}
+
+def check_output_switched(output: Int) TestResult {
+
+    level_input(output)
+
+    if failed == 1 {
+
+        return fail
+
+    }
+
+    let target = destination
+
+    var i = 0
+    while i < 5 {
+
+        let pos = plates[i]
+        if pos == -1 {
+
+            return win
+
+        } elif pos != target {
+
+            break
+
+        }
+
+        i += 1
+
+    }
+
+
+    if i >= 5 {
+
+        return win
+
+    }
+
+}
+
+
+// redraw()
+
+

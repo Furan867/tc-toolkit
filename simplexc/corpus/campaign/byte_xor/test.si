@@ -1,0 +1,40 @@
+
+def get_input(cycle: Int) Input {
+
+    var x = cycle
+    x ^= x << 7
+    x ^= x >> 9
+    x ^= x << 8
+
+    return Input {a: U8 x, b: U8 (x >> 8)}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.result_is_z {
+        set_error((31337_33181499064044, `Result should never be Z state`))
+        return fail
+    }
+
+    let result = input.a ^ input.b
+
+    let a = input.a
+    let b = input.b
+    let description = (31337_54747903652562, `{a} XOR {b} is {result}`)
+
+    ui_set_text("description", description)
+
+    if result != output.result {
+        let a = "0x" + hex(2, Int input.a)
+        let b = "0x" + hex(2, Int input.b)
+        let hex_result = "0x" + hex(2, Int result)
+        set_error(description)
+        return fail
+    }
+
+    if cycle == 0xffff {
+        return win
+    }
+
+}

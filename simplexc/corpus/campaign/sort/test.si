@@ -1,0 +1,55 @@
+
+var input_cursor = 0
+var output_cursor = 0
+var raw_numbers = array(<Int>, 16)
+var sorted_numbers = array(<Int>, 16)
+
+
+{
+    var i = 0
+    while i < 16 {
+
+        let number = random(0x100)
+        raw_numbers[i] = number
+        sorted_numbers[i] = number
+        ui_set_text(`text_{i}`, str(number))
+        ui_set_image_name(`{i}`, `{random(49)}.png`)
+        i += 1
+
+    }
+}
+
+sort($sorted_numbers)
+
+
+def get_input_switched() Int {
+
+    if input_cursor >= 16 {
+        return 0
+    }
+
+    input_cursor += 1
+    return raw_numbers[input_cursor - 1]
+
+}
+
+def check_output_switched(output: Int) TestResult {
+
+    if output != sorted_numbers[output_cursor] {
+
+        let expected = sorted_numbers[output_cursor]
+        let index = output_cursor
+        set_error((31337_25018662661467, `Index {index} in the sorted list should be {expected}, not {output}`))
+        return fail
+
+    }
+
+    if output_cursor == 15 {
+
+        return win
+
+    }
+
+    output_cursor += 1
+
+}

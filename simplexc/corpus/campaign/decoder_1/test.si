@@ -1,0 +1,38 @@
+
+def get_input(cycle: Int) Input {
+
+    return Input {input: U1 cycle}
+
+}
+
+def check_output(cycle: Int, input: Input, output: Output) TestResult {
+
+    if output.output_is_z {
+        set_error((31337_70376380014778, `Output should never be Z state`))
+        return fail
+    }
+
+    switch cycle
+        case 0 {
+
+            if output.output != 1 {
+
+                return fail
+
+            }
+
+        }
+
+        case 1 {
+
+            if output.output != 2 {
+
+                return fail
+
+            }
+
+            return win
+
+        }
+
+}

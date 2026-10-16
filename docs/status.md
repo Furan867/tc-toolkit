@@ -35,14 +35,14 @@ blob 头 bit62 决定游戏是否 free、entry = 顶层块且每次编译只进�
 5. **判据入口**（spec §7.5）：一条命令跑「全语料编译 → 逐 tick 差分 → 覆盖率矩阵」，
    机器可读报告 + 人读摘要；游戏内部分单独标 slow/manual。
 6. **Steam 更新后的重验脚本**（spec §10 的 5 条断言）：按符号名定位，不硬编码地址。
-7. **主频/bench 层重写**：先出架构（子代理已出提案），确认后重写。要求分两层输出（人读摘要 + 机器可读报告）、
-   按「编译器/改写配置」参数化、权威配置只认 `hook.log` 的 `opt` 行。
+7. **主频/bench 层重写**：设计见 `docs/specs/2026-10-15-freq-measurement-design.md`
+   （架构与 5 项决策已确认：包 `tools/freq/`、`read_freq` 降为薄 CLI、统一 median、
+   `hook.log` 新增 per-call「实际实现」行并**从 `work/opt/` 移到 `work/hook/`**、TSV 增 `compiler`/`impl` 列）。
+   顺序：零行为变化抽库（用现有 freq_log.tsv / freq_summary.txt / bench_*.tsv 回归）→ 统一采样口径 →
+   泛化 `Variant(compiler, rewrite)` → JSON 报告接判据入口 → 收尾。
 8. **并发写者协调**：按 spec §8 执行 —— 默认静态分区（一个写者一个目录）+ 两把显式锁
    （`work/tmp/locks/game.lock` 游戏内实验串行；`ledger.lock` 共享账本由主导者独占写）。
 
 ### 待定
 
-- **主频/bench 层重写的架构提案**（子代理已出）：待负责人确认 5 个问题 ——
-  包名与位置 / `read_freq.py` 是否保留 / 是否统一用 median（会改变 bench 历史数字口径）/
-  `hook.log` 是否新增 per-call 的「实际用了哪个实现」行（要动 C 侧）/ TSV 加列是否可接受。
 - benchmark 协议与性能目标：暂缓（测法已定，见 spec §7.3）。

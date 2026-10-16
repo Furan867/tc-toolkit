@@ -242,8 +242,11 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 
 ### 4.1 extern 与重定位（设计约束）
 
-- extern（`kernel32` 等）在**编译期**解析成进程内绝对地址（✅ 参考实现如此：同一源码跨进程有 69 字节
-  差异，全落在 kernel32 区间的 `movabs`）。
+- extern（`kernel32` 等）在**编译期**解析成进程内绝对地址（✅ 参考实现如此）。
+  ⚠️ 2026-10-16 更正：那些 `movabs` 指向的是 **`compile_real.dll` 自己的导入 thunk**（DLL 内 RVA `0x1310`
+  = `jmp QWORD PTR [rip+0x147059]` → `.idata`），**不是 kernel32 自身的地址** —— 原文「全落在 kernel32 区间」
+  是地址区间的误读。后果（尤其是「产物跨 boot 不能逐字节相等」）见 `docs/facts.md`
+  §「产物的绝对地址绑定 compile_real.dll 的加载基址」。
 - 装配器职责：局部符号解成 PC 相对；外部符号用 `GetProcAddress` 解析。若目标地址超出 `call rel32`
   范围，需在 blob 内生成 `movabs rax, imm64; jmp rax` 桩（stub pool），不能让重定位失败。
 - 产物内部**不得**出现指向自身固定地址的绝对引用（blob 会被游戏拷到任意地址执行）。

@@ -79,7 +79,11 @@ tools/freq/                 # 包（位置与命名已确认）
 
 - **变体轴**：`Variant(compiler ∈ {reference, ours, ours_with_fallback}, rewrite ∈ {off, on, short, short_cse})`。
   控制通道仍是 `opt.ini`（新增 `[opt] compiler=`，由转发层读；当前只有 `rewrite`，见 `compile_hook.c:340`）。
-- **归属只认 `hook.log`**：不能用"我们写了什么配置"当归属（`facts.md` §「产物 rewrite 模式的权威来源」已记该坑）。
+- **缺失键的 fail-safe 必须先定义**：`opt.ini` 读不到键时，`rewrite` 现按 `on` 兜底（`facts.md:192`；
+  实测当前生效值就是 `on`）；新增的 `compiler` 必须兜底到 **`reference`**，否则 A/B 会把“没配”误当“我们的实现”。
+- **归属只认 `hook.log`，且要分清三行**：`cfg` = **配置了什么**（原样搬运）、`opt` = **改写器实际做了什么**、
+  新增的 per-call `impl` 行 = **实际走了哪个实现**。不能用“我们写了什么配置”当归属
+  （`facts.md` §「产物 rewrite 模式的权威来源」已记该坑）；加 compiler 轴后，只记 `cfg` 会把回退误当我们的实现。
 - **必须新增 per-call「实际用了哪个实现」行**（已确认）：回退是 per-call 的，只记 `cfg` 会重演
   "标注 vs 实际"错位（`compile_hook.c:337` 记的 `short_cse` 被静默改写成 `on` 那次就是同类问题）。
 - **`hook.log` 移到 `work/hook/`**（已确认，名字更符合直觉）：
@@ -101,8 +105,8 @@ tools/freq/                 # 包（位置与命名已确认）
 
 ## 5. 迁移路径
 
-1. **抽库，零行为变化**：两个 CLI 的输出与旧实现逐字符对齐；用现成的 `freq_log.tsv`/`freq_summary.txt`/
-   `bench_*.tsv` 做回归判据。
+1. **抽库，零行为变化**：两个 CLI 的输出与旧实现逐字符对齐；**先把三份基线快照到 `work/tmp/baseline/`**
+   （`freq_summary.txt` 每次覆盖写、`bench_*.tsv` 每轮新建、`freq_log.tsv` 追加），再用它们做回归判据。
 2. **统一采样口径**：median + 丢首个 + 相位对齐 + 停机/低压判据；bench 改用统一 `sampler`。
 3. **泛化变体轴**：`compiler` 维度先默认关，等转发层支持切换实现。
 4. **加 JSON 报告 + schema**，接进判据入口（慢步骤）。
@@ -139,7 +143,7 @@ tools/freq/                 # 包（位置与命名已确认）
 2. `products`（合并两份 `latest_product`，保留 `wait_new_product` 的失败解释）+ `hook_log` 路径迁移 + per-call `impl` 行。
 3. `sampler`（统一 median/丢首个/相位对齐/停机判据）+ `report`（人读表 + JSON schema 1）。
 4. `driver`（薄封装 simctl + 前置断言）+ `cli_bench` 支持 `--variant`。
-5. 回归：用现有三份数据逐字符比对；补最小测试；更新 `docs/map.md` / `facts.md` / `TOOLS.md`。
+5. 回归：用现有三份数据逐字符比对；补最小测试；更新 `docs/map.md` / `docs/facts.md`（仓库里没有 `TOOLS.md`）。
 
 ---
 

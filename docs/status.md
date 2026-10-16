@@ -22,8 +22,9 @@
   代码落库 `reversing/simplexc/`；**LLVM 链接方式 = `LLVM-C.dll` + C API + 现有 w64devkit g++**
   （不引入 CMake，构建照抄 `tools/deploy_compile_hook.py` 的直调 gcc）。
 - 主频测量层 `docs/specs/2026-10-15-freq-measurement-design.md`（5 项决策已确认）。
-- **语料实测**：`work/hook/all/` 180 份源码 + 180 份参考产物 + `work/hook/manifest.tsv`
-  → 去重 98 份唯一源码，**180 组「源码, 参考产物, entry」三元组**（oracle 不用跑游戏即可建）。
+- **语料实测**：`work/hook/all/` 180 份源码 + 180 份参考产物（同名配对）→ 去重 98 份唯一源码；
+  ⚠️ **`all/` 里没有 manifest，entry 没留** → M0 用 `tools/try_compile_dll.py` **离线重编译 98 份**，
+  补出含 `entry` 的 manifest。
 - **MVP 验收下界 = 沙盒模式能跑起来**；主线关卡专用构造允许「显式报错 + 回退」，用回退率量化。
 
 ### 下一步（已决定）
@@ -35,8 +36,8 @@
    壳要新增「选实现」开关（`ours` / `ours_with_fallback` / `reference`），失败一律整单转交
    `compile_real.dll` 并原样返回它的 Result。
 2. **M1.5 收益探针**：一块最小电路的端到端主频 A/B（参考产物 vs 我们的产物），先量出量级。
-3. **观测设施**：语料固化（180 份 → 去重 98 份 + manifest + **按构造打标签**）+ oracle CLI +
-   离线差分宿主（假游戏内存 + extern 桩 + 逐 tick 驱动）；先用「参考产物 vs 参考产物」自比对证明宿主可靠。
+3. **观测设施**：语料固化（180 份 → 去重 98 份 + **离线重编译补出含 entry 的 manifest** + 按构造打标签）
+   + oracle CLI + 离线差分宿主（假游戏内存 + extern 桩 + 逐 tick 驱动）；先用「参考产物 vs 参考产物」自比对证明宿主可靠。
 4. **前端与 runtime**：先走路线 B（自研 runtime + 只吃生成代码子集 + 失败回退），跑通后再上路线 A
    （全 stdlib，终态）。同一个核心要有**两个前端**：DLL 壳与离线 CLI（agent 日常走 CLI，不碰游戏）。
 5. **判据入口**（spec §7.5）：一条命令跑「全语料编译 → 逐 tick 差分 → 覆盖率矩阵 + **回退率**」，
@@ -52,3 +53,4 @@
 ### 待定
 
 - benchmark 协议与性能目标：暂缓（测法已定，见主设计 §7.3）。
+- 主设计 §11 的 U1–U5、U10–U12：其中 **U10/U11/U12 是 M0/M1 前置**（先做实验再写死，推断不得进 facts.md）。

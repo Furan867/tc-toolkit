@@ -6,6 +6,12 @@
   **版本 1.1（2026-10-17，增量）**：`AsmResult` 加 `stubs`（§4）+ 宿主 `stub` sidecar 协议（§6）——
   跨 boot 的 extern 解析让「产物里的 movabs 落在宿主镜像里」成为正常形态，原先的硬错误判据会把自己的产物挡住；
   同时 stub 不接桩 = 两遍跑没有确定性。改动理由与实现证据见 `docs/notes/2026-10-17-m1.5-probe.md`。
+- **版本 1.2（2026-10-17，只有状态说明、不改任何接口）**：现有实现有两套 —— **Python 原型**
+  （`frontend/*.py` + `lower/ir_build.py`，M3 的产出）与**产品实现**（本文件冻结的 C++17，如 `frontend/ast.h`）。
+  自本条起 Python 原型**冻结为参考实现（oracle）**：只读，用途 = 语义查询（当规格读）、差分对照、延迟基线；
+  **默认只读**（唯一例外 = “跑不起来 / 结果不可复现”的缺陷，且不得新增语义与覆盖面 —— 见主设计 §8 流程禁令），
+  也禁止「先在 Python 上做、再移植到 C++」（M4.5 是一次性收尾，不构成先例 —— 主设计 §9）。
+  产品实现的落地里程碑 = **M4.5**，M5 之前完成（主设计 §9）；以下各节与 Python 原型实现不一致时，**以本文件为准**。
 - 上游（唯一权威，本文件不复制其内容）：
   - 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 §2/§4、语义保真 §5、验证 §7、工作流 §8、里程碑 §9）
   - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（变体轴、归属语义、`hook.log` 迁移）
@@ -29,6 +35,10 @@ reversing/simplexc/
   dossier/    语义档案（机器可执行，§9 的实验都在这里落地）
 ```
 
+- **语言分工（唯一权威）**：产品路径的 `frontend/` / `lower/` / `runtime/` / `assemble/` / `shell/` / `cli/`
+  = **C++17**（必要时汇编）；`tools/` 下的脚本 = Python（离线工具，不进产品路径）；
+  **产品路径不得依赖 Python**（判据 = 主设计 §7.5 依赖门）。`frontend/*.py` + `lower/ir_build.py` 是
+  M3 的**冻结原型（oracle）**：默认只读（例外见主设计 §8 流程禁令），不入产品路径。
 - 既有 `reversing/tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
 - 一个写者一个目录（主设计 §8）；`tools/compile_hook.c` 由 `work/tmp/locks/compile-hook.lock` 串行化。
 
@@ -227,6 +237,20 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
   - 归属只认 `hook.log` 的 `opt` / `impl` 行（主设计 §7.3）。
 - 三模式与 `rewrite` 正交（`rewrite` 仍只由改写器定义合法值集合）。
 
+**导出与 C→C++ 边界（冻结，2026-10-17）**：
+
+- DLL 必须靠**名字**匹配：`compile` / `NimMain` / `NimDestroyGlobals`
+  （游戏是 `nimLoadLibrary("compile.dll")` + `nimGetProcAddr("compile")`）。现状是纯 C，用 `__declspec(dllexport)`
+  （`tools/compile_hook.c:763,869,876`）；**C++ 化后必须补 `extern "C"`**（否则导出名变成 `_Z7compile…`，
+  游戏查到 NULL）。**不必**用 `.def` 导出别名去绕名字改编（GNU ld 的 `EXPORTS alias=internal` 可用，
+  代价是内部名随编译器/ABI 变而脆）。
+- 导出签名**只允许 C 类型**（调用方是 Nim，不知道我们的 C++ ABI）：C++ 类型不得出现在参数/返回值里。
+- **异常不得穿出边界**：C++ 异常必须在壳内 catch-all（穿过 Nim 帧的展开没有保证：轻则漏跑析构，重则直接崩），
+  catch-all 是**唯一出口**，转成形状合法的失败 Result（`out[3]≠0`）。**不要**用 `-fno-exceptions` 回避 ——
+  那会把 `bad_alloc` 变成 `terminate`/`abort`，就是崩游戏。
+- 加载期（`DllMain`）的**硬禁忌**是 `LoadLibrary` / `CreateThread` / 等待其他线程（loader lock 下真会死锁）；
+  内存分配尽量推迟（分配本身通常可用），别在加载期干重活。
+
 ---
 
 ## 6. 差分宿主驱动协议
@@ -268,11 +292,18 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
   （照抄 `tools/deploy_compile_hook.py` 的构建风格）；构建脚本 `simplexc/tools/build.py`。
 - LLVM：**`LLVM-C.dll` + C API**，版本锁定；三元组 `x86_64-pc-windows-gnu`，**`RelocMode=PIC`**，`CodeModel=Small`，
   禁 `uwtable`/异常。管线：`LLVMRunPasses`（`-O2`）+ `LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)`。
-- 取导入库的两条路（M1 spike 先试 ①）：
-  1. MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，无 MSVC 运行时依赖，与目标三元组同源）；
-  2. 官方 win64 发行包 + `gendef`/`dlltool` 造导入库（官方包只有 DLL，无 C++ 库/头）。
+- 取导入库：**已定走 ②**（① 未采用）—— ① MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，与目标三元组同源）；
+  ② 官方 win64 发行包 + `gendef LLVM-C.dll` → `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
+  （官方包只有 DLL，无 C++ 库/头）。取件与验证命令见 `docs/facts.md`。
 - 落地位置：DLL 与导入库放 `reversing/build/llvm/`（**不进 git**）；版本号 + DLL sha256 记进 `docs/facts.md`。
-- 构建产物：`reversing/build/simplexc.dll`（壳）、`reversing/build/simplexc-cli.exe`（离线 CLI）。
+- 导出机制：见 §5（`extern "C"` + `__declspec(dllexport)`），只导出那三个符号。
+- 部署：`build/compile_hook.dll` 拷进游戏目录时**改名 `compile.dll`**；一旦链接 `LLVM-C.dll`，
+  部署必须把 `LLVM-C.dll` 一起拷进去（否则游戏加载时解析依赖失败）。
+- 构建产物：**现状** = `reversing/build/compile_hook.dll`（壳）、`build/tcblob.exe` / `build/llvm_prog.exe`（离线 CLI）；
+  `simplexc.dll` / `simplexc-cli.exe` 是**接上前端（M4.5）之后**的目标名，现在还不存在
+  （见 `simplexc/cli/README.md` 的“现状”节）。
+- 不依赖 PATH：工具链一律**绝对路径**（`W64DEVKIT_BIN` / `W64DEVKIT_CXX` / `W64DEVKIT_CC` 可覆盖，见 `build.py`），
+  入口只有 `build.py`。make/CMake 只在出现“全量重建太慢”或“改 header 未重编”时再引入（入口不变）。
 
 ---
 

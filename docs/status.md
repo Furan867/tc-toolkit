@@ -22,42 +22,45 @@
   `reference | ours | fallback | ours_failed`。
 - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（决策已定；实现未开始）。
 - 代码落库 `reversing/simplexc/`；LLVM 固定 **23.1.3**（`bin/clang.exe`，sha256 在 `facts.md`）。
-- **当前没有前端、没有 IR**：`frontend/`、`lower/` 只有 README。M1.5 的产物是**手写 C**，
-  优化全由 `clang -O2` 做（`default<O2>`）；我们只负责写法选择与装配。
+- **当前没有前端、没有 IR**：`frontend/`、`lower/` 只有 README。
 
 **已完成**：
 - **M0 观测设施**：98 份语料 + 含 `entry` 的 manifest + 54×98 覆盖率矩阵。
 - **M1 spike**：装配链跑通（g++ 来源的空程序，728 B）。
 - **M1 缺口已闭合**：clang 来源的产物在游戏进程里跑到过协议主函数（`manifest.tsv` seq 007，
-  `impl=ours`，标记文件两行）—— 见 `facts.md`。同一次触发随后崩，**根因是用过期地址部署**，非逻辑错。
-- **M1.5 收益探针（宿主内）**：006 等价物对参考产物 10/10 tick 全等、白名单为空；
-  忠实直译 1.74 ns/cycle（**慢 28%**），热状态进寄存器 0.47 ns/cycle（**快 2.9×**）→
-  收益来自 lowering 的别名/定序策略，不来自 clang 的 pass（硬指示，见 `facts.md`）。
+  `impl=ours`，标记文件两行）；同一次触发随后崩，根因是**用过期地址部署**，非逻辑错（见 `facts.md`）。
 - **M2 差分宿主**：`<blob>.stubs` sidecar 让我们的产物也能跑同一驱动；`selftest.py --entry`。
-- 装配器两处修复：`.bss` 无原始数据节（产物可复现）、桩/槽分两趟定址（`__imp_` 被桩块挤歪），
-  且返回前自校验 sidecar ↔ 产物字节。
-- 工具链：`build.py`（一键构建）、`check.py`（4 步判据入口）、`verify_game_contract.py`（§10 重验）、
-  `gen_addrs.py` + `equiv_build.py`（**现取地址** → clang -O2 → 装配 → 双跑宿主 → 逐 tick 比对）。
+- **装配器**：`.bss` 无原始数据节（产物可复现）、桩/槽分两趟定址（`__imp_` 被桩块挤歪），
+  返回前自校验 sidecar ↔ 产物字节。
+- **工具链**：`build.py`（一键构建）、`check.py`（4 步判据入口）、`verify_game_contract.py`（§10 重验）、
+  `gen_addrs.py` + `equiv_build.py`（现取地址 → clang -O2 → 装配 → 双跑宿主 → 逐 tick 比对）。
 - 壳：失败路径与熔断（ours 失败记账 / §8 分类 / 超时 / VEH / per-call `impl`）。
+
+**已终止：M1.5 手写等价物验证收益**（2026-10-17，负责人决定）
+终止理由：手写 C 等价物的成本随电路复杂度爆炸；能体现优化的电路（每 tick 数百条指令）翻不动，
+翻得动的（单与门、计数器）比值又被协议轮询与 `Sleep` 粒度淹没。**保留**的结论只有宿主相对数字
+（直译慢 ~25%、热状态进寄存器快 ~2.95×）——「换编译器在游戏里能提速」**没有证据**，这是已知边界。
+现有资产不浪费：`equiv_cc_and.c` / `probe_006.py` / `equiv_build.py` 仍是 M3 的回归靶子与比对工具。
 
 ### 下一步（已决定，按顺序）
 
-1. **拿到一个「真有组件」的靶子**（阻塞 M1.5 游戏内 A/B）。现状：`work/hook/hook_src_008.si` 是
-   元件工坊上下文但 `get_component_count()=0`、`mode_refresh()` 空（每 tick 只 `cycle += 1`），
-   测不出收益；040（与门，4 组件）已被新会话覆盖。→ 负责人在元件工坊里对**计数器元件**触发一次编译，
-   捕获里必须出现 `com_counter` 一类组件调用与 `get_component_count() > 0`。
-2. **等价物骨架模板化**（进行中，`skeleton` 子任务）：把协议骨架与组件部分拆开，换电路只写组件那几十行。
-   判据：006 与 008 两份不同上下文都由同一骨架 + 各自组件部分编出，逐 tick 全等。
-3. **游戏内 A/B 主频**（要 `game.lock`，依赖 1）：部署纪律 = 用**最新** `hook_src_NNN.si` 现取地址 →
-   宿主逐 tick 全等 → 部署 → 切 `ours` → 持续跑采样 → 立刻切回 `reference`。
-   单与门/计数器的比值会被协议固定开销淹没，**优先选每 tick 有实质运算**的组件。
+1. **M3.0 垂直切片**（进行中，`m3-0-scope` 子任务打头）：先只吃 `work/hook/hook_src_007.si`
+   （元件工坊计数器，8 组件，`mode_refresh()` 69 行）→ 程序生成 LLVM IR → `default<O2>` → 目标码 →
+   装配 → 宿主逐 tick 全等。**成功标志 = 第一份机器生成的产物与参考产物逐 tick 全等**，不是收益。
+   先交「构造清单 + 语义判定方案 + 验收判据草案」，把前端范围钉死再动手写。
+   地址一律从该 `.si` 现取（`gen_addrs.py`）。
+2. **语义档案落地**：接口 §9 的 U-L1…U-L14 里被 M3.0 用到的那几条必须先实验后写死
+   （`load`/`store` 的地址单位是地基）。清单由第 1 步产出，实验进 `simplexc/dossier/`。
+3. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行消费。
+   与壳抢同一份 `tools/compile_hook.c` → 串行，锁 `work/tmp/locks/compile-hook.lock`。
 
 ### 待定 / 未解
 
-- 手写 C 等价物能覆盖的电路复杂度有限（用户判断）；要不要跳过 M1.5 的更多手写、直接推 M3 前端，**未定**。
+- 游戏内主频收益量级：M1.5 终止后**不再用「手写等价物 + 游戏内」这条路**量它。
+  将来若要量，应等 M3 前端能直接吃真实 `.si` 之后再开（那时热点电路才翻得动）。
 - `entry`（`Result[2]`）的用途仍只知「相对机器码起点的偏移」。
 - 产物里 75300 处非 image 空间 movabs（大整数常量、`0x232a…` 游戏地址）跨 boot 相同的机制没查。
 - `campaign/` 的 92 份没编译过（可能是片段，编译失败会 abort 整个进程）。
 - 字面量 `'…'`（单引号）与模板插值的语义未定（见 `docs/notes/2026-10-16-m0-coverage.md`）。
 - 参考产物的热环没定位到（要 RIP 采样，不猜反汇编）。
-- M3 语义档案（§9 的 U-L1…U-L14）、MVP 构造集合、前端 + lowering、主频/bench 层重写：未开始。
+- M3 剩余：MVP 构造集合定稿、前端 + lowering 主体、主设计的 §11 U1–U4/U7。

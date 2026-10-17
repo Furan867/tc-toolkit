@@ -165,6 +165,32 @@
 验证：跑它看每步 rc；故意让一步失败时该步 rc≠0 且 JSON 如实记录
 最后验证：2026-10-17
 
+### 生成源码里的游戏内存地址按「游戏进程实例」变
+`commands` / `settings` / `#SIMULATION_STATE` 等绝对地址写在生成源码里，同一台机器上**每个游戏进程实例一套**
+（实测：同一进程内 NAND 关卡与元件工坊的源码都是 `2270676779008` 段；12:24 那次会话的捕获是 `2416573349888` 段）。
+→ 含地址的产物（我们的 blob、参考产物）**只在生成它的那个进程里有效**；游戏内验证必须（违反这条的实测后果见下一条）
+「同一次会话内：抓源码 → 生成产物 → 部署」。宿主不受影响（它自己按源码里的地址 VirtualAlloc 假内存）。
+验证：`grep -m1 "var commands" work/hook/hook_src_{003,005,040}.si` vs `simplexc/corpus/src/006.si`
+最后验证：2026-10-17
+
+### clang -O2 来源的产物在游戏进程里跑到过协议主函数（M1 缺口已闭合）
+2026-10-17 16:49:53（`manifest.tsv` seq 007）：`impl=ours`、`out_len=0x0B54`（2900 B 标记版）、`r2=0x7A0`；
+壳记 `impl=ours mode=ours result=ok guard=veh`；产物自己写的 `work/tmp/equiv/equiv_cc_and.log` 出现两行
+`equiv_cc_and tc_main, sim_state=2270726717440`（= `0x210B1DC0000`，与该会话 `addrs.h` 里 `A_SIM_STATE` 逐字相同）。
+→ 手写的 LLVM 产物确实被游戏 JIT 执行了，并跑进了协议主函数。标记走的是 kernel32 跳板（与游戏内存无关），
+所以它能在「后面写游戏内存时崩掉」的情况下依然留下证据。
+验证：`awk -F'\t' '$1=="007"' work/hook/manifest.tsv`；`grep 007 work/opt/hook.log`；`cat work/tmp/equiv/equiv_cc_and.log`
+最后验证：2026-10-17
+
+### 跨游戏进程复用含地址的产物 = 写未映射地址，崩在 JIT 代码里
+2026-10-17 16:50 实测：用 16:39（进程 A，`0x210A…` 段）生成的产物，喂给 16:49 的进程 B（`0x20C4…` 段，
+16:47 崩过一次后重启）。我们的代码正常进了 `tc_main`（标记文件两行），随后按旧地址写游戏内存 →
+`0xc0000005`；WER 记 `Faulting module: unknown`、异常偏移 `0x20C57020197`（JIT 区，`MapViewOfFileEx`
+基址 64 KB 对齐 → 对应产物内偏移 `0x197`），CrashDump 落 `%LOCALAPPDATA%\CrashDumps\Turing Complete.exe.51276.dmp`。
+壳**不会**记 `error stage=ours_fault` —— VEH 只包 `compile()` 那一段，JIT 执行期的异常不归它管。
+验证：`%LOCALAPPDATA%\CrashDumps` 里 16:47 / 16:50 两份 dump + `wevtutil` 的 Application 日志（Id 1000）
+最后验证：2026-10-17
+
 ### simplexc/corpus：98 份唯一源码 + 含 entry 的 manifest
 `work/hook/all/` 的 180 份捕获按源码字节去重 → 98 份（重复分布 1×91、2×3、3×2、4×1、73×1，
 最多的是 004 出现 73 次）；离线重编译后 `entry` 全部非 0（53 个不同值，`0x212f` 出现 15 次）

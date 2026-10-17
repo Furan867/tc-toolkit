@@ -43,3 +43,12 @@
 - 别让 git 的行尾归一化碰语料 —— `core.autocrlf=true` 会把 CRLF 折成 LF 存（`src/001.si` 少 74 字节）、
   检出时再折回来；只要语料路径在 `.gitattributes` 里标了 `-text` 才安全。
   自检：`git show :<file> | wc -c` 必须等于工作区字节数。
+- 别把 ctypes 回调当普通局部变量 —— 注册给系统（VEH / 窗口过程 / 线程过程）后必须留引用；
+  Python 对象被回收后系统会跳到已释放内存，表现为**没有任何信息的静默崩溃**
+  （实测：VEH 装了却从不打印、进程直接以 `0xC0000005` 退出）。
+- 别在可选头里找 `SizeOfOptionalHeader` —— 它在 COFF 头（`e_lfanew+20`）。读错会让整张节表错位，
+  报出「缓冲区不够」这类看不出根因的怪错（实测：19 个节全乱、import 目录指到 674 MB 处）。
+- 别用 `sim_cycle == target` 判一次 run 完成 —— 被 `check_output`/短路 halt 的 run **提前结束**
+  （实测 120：`sim_test_result=win` → halt → `sim_cycle` 停在 0），会把正常完成当成超时。
+- 别拿 extern 调用条数当判据 —— `Sleep`/读时钟是节奏类，条数随真实时间变化（实测两次跑差 650 万条），
+  而仿真状态可以逐字节全等。

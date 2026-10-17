@@ -177,6 +177,48 @@ ref_match ref_match_rebased rebased_delta`；`corpus/ref/*.bin` **不进 git**�
 ### 判据入口的基线：参考产物 vs 参考产物
 宿主可靠性得证前不得接我们的产物（主设计 §7.2）。
 
+### 参考产物会直接调用 compile_real.dll 里的运行时函数、读写它的 .bss
+产物里的 movabs 不全是「kernel32 导入 thunk」：还有指向 DLL **内部真代码**的（RVA `0x1350`/`0x1380`，
+prologue `48 83 ec 38`）与指向 DLL **.bss 全局**的（RVA `0x131280`）。所以差分宿主不能只把游戏地址摆出来
+—— 必须**加载真 `compile_real.dll`**（DllMain/TLS/它自己的导入都白送），再把产物里
+`[baked, baked+image_size)` 的 movabs 加上 `实际加载基址 - baked`（实测 020：23 处）。
+验证：`python simplexc/tools/abs_scan.py --src simplexc/corpus/src/020.si --bin simplexc/corpus/ref/020.bin`；
+      `simplexc/tools/host/host.py` 的 `_rebase`
+最后验证：2026-10-17
+
+### 导入 thunk 的真身是 `48 FF 25 rel32`，产物引用的是**指令起点**
+MinGW 的导入 thunk 是 `REX.W + jmp QWORD PTR [rip+rel32]`，16 字节一格；`FF 25` 在指令第 2 字节，
+而产物 movabs 用的是**指令起点**（`0x1310`/`0x1320`/`0x1370`…）。只匹配 `FF 25` 会漏掉全部 thunk。
+验证：`abs_scan.py` 的 `Pe.import_thunks()`；DLL 文件 `0x1300` 处的字节
+最后验证：2026-10-17
+
+### baked 基址可从产物单独反推，不需要捕获时的会话信息
+产物里 DLL 地址 = `baked_base + thunk_rva`（thunk RVA 集合从 DLL 文件本身算）→ 对每个候选 `v - t`
+投票、只留 64 KB 对齐的，取票数最高者。
+验证：020 得到唯一候选 `0x7ff9a1160000`（10 票）；`abs_scan.py`
+最后验证：2026-10-17
+
+### 游戏是 `jmp` 进 entry（rsp 16 对齐、栈上无返回地址）
+`CreateThread(entry)` 是 `call`（rsp ≡ 8）→ 产物里对齐敏感的 SSE 指令直接 AV。宿主/壳必须复现 jmp 语义
+（宿主用 `and rsp,-16; mov rax,entry; jmp rax` 的 trampoline；游戏内是我们的 `__tc_entry` shim）。
+参考产物的 entry 自己就保存全部寄存器（头 16 字节 `50 51 52 53 54 55 56 57 41 50 41 51 41 52 41 53`
+= push rax/rcx/rdx/rbx/rsp/rbp/rsi/rdi/r8..r11）—— 与主设计 §5 第 8 条一致。
+验证：`host.py` 的 `_start_thread`；`objdump -D -b binary -m i386:x86-64` 看 `corpus/ref/*.bin` 的 entry 处
+最后验证：2026-10-17
+
+### run 的完成信号 = 命令号被消费 + 不在跑（`sim_cycle == target` 会误判）
+被 `check_output`/短路 halt 的 run 会**提前结束**（实测 120：`sim_test_result=win` → halt → `sim_cycle` 停在 0）。
+判据用 `sim_last_command_id == id && sim_running == 0`，且要**连续两次采样一致** —— 程序写
+`sim_last_command_id` 与置 `sim_running=1` 之间有个极短窗口形状相同。
+验证：`host.py` 的 `tick()`；120 从「20 s 超时」变成 10/10 通过
+最后验证：2026-10-17
+
+### 节奏类调用不能进可观测序列
+`Sleep` 与读时钟的条数取决于**真实时间**（程序在两次命令之间的轮询次数；实测两次跑差 3 万~650 万条），
+对仿真状态没有语义影响 → 宿主不记进 `extern`（主设计 §7.1 的显式白名单），只留计数在 `pacing` 字段。
+验证：005/006 两次跑的 `extern` 条数不同，而页与 `sim_cycle` 逐 tick 全等
+最后验证：2026-10-17
+
 ## 构建与 LLVM
 
 ### LLVM 固定版 = 官方 23.1.3（win64 / MSVC 构建）+ 自造 MinGW 导入库

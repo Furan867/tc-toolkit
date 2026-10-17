@@ -263,6 +263,26 @@
       + `docs/notes/2026-10-18-lowering-v0.md`
 最后验证：2026-10-17
 
+### M3 首个里程碑：`.si` → 我们的 lowering → 产物，006 与参考产物**逐 tick 全等**
+`simplexc/lower/ir_build.py`（AST → LLVM-C → 目标码 → `tcblob`）吃 `simplexc/corpus/src/006.si`：
+产物 3508 B、entry `0xA90`；宿主 10 tick 与参考产物（entry `0x212F`）**差异 0 条**
+（页哈希 + `sim_cycle` + extern 序列全同）。**整条链没有手写 C 参与**：
+`decls` → `expr` → `ir_build` → LLVM `default<O2>` → `tcblob`。
+静态：我们的 708 条指令 vs 手写 C 版 508 条（差在 `alloca` + `align 1` + 全 i64），参考产物 3090 条。
+验证：`python simplexc/lower/ir_build.py --src simplexc/corpus/src/006.si --out <bin>`，再 `host.py`
+      两边各跑 `--ticks 10` 比 `pages`/`sim_cycle`/`extern`（复跑命令见 notes）
+最后验证：2026-10-17
+
+### rv32im 的 lowering 缺口只有**两类**根因（250 条里 208 条是连锁）
+`python simplexc/lower/ir_build.py --src simplexc/corpus/rv32im/rv32im.si --list-unsupported`
+→ 250 条 / 250 行（约占 M3.0 规模 5181 行的 4.8%）：**38 条三目** `cond ? a : b`（前端已解析、
+lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局未定）+ 2 条顶层
+`var level_input = Input {}` + **208 条连锁**（`let x = cond ? …` 失败 → 后续名字未定义）。
+→ 补掉三目与空 struct，rv32im 就能装配起来；其余构造（`load`/`store`/`asr`/`min`/`max`/`Arr[i]`/
+`Str.len`/`memory_copy`/`Ptr` 算术/非 2 的幂掩码）都没再报 unsupported。
+验证：`python simplexc/lower/ir_build.py --src simplexc/corpus/rv32im/rv32im.si --list-unsupported`
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

@@ -68,12 +68,16 @@
    `/`、`%`（看被除数类型，除数不参与；折叠窄常量零扩展是参考实现的不自洽，要复刻）。
    剩余 `U-L2`（数组下标）/`U-L4`（struct）/`U-L5`（enum 宽度）/`U-L10`（字符串）/`U-L12`（min/max）/
    `U-L14`（`in_scope`）—— **写一条验一条**。
-5. **前端两刀已落地**：`simplexc/frontend/decls.py`（词法 + 顶层声明 + 函数体只配平）→
-   `simplexc/frontend/expr.py`（语句 + 表达式 AST）。判据：`mode_run` 1117 语句 / 5800 表达式节点 /
-   **覆盖 1257/1257 = 100%**、未支持构造 0；AST 保真（带 `src_line`、显式 cast 带目标类型、
-   **字面量解析期不折叠** —— 这条是除法语义能复刻的前提）；三种故意破坏都报错带行列号。
-   下一步 = **lowering v0**：AST → LLVM IR（LLVM-C API），先吃 `006` 做最小闭环。
-6. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行消费。
+5. **全链路已打通（M3 首个里程碑）**：`decls.py` → `expr.py` → **`lower/ir_build.py`** → LLVM →
+   `tcblob`。吃 `006.si` 生成的产物与参考产物 **逐 tick 差异 0 条**（10 tick、页哈希/`sim_cycle`/extern 全同），
+   **全程没有手写 C 参与**。前端判据：`mode_run` 覆盖 1257/1257 = 100%、AST 保真（`src_line`、
+   cast 带目标类型、字面量不折叠）、破坏性输入报错带行列号。
+   接口级更正：`RelocMode` 由 `Static` 改 **PIC**（`7b6ae4c`，Static 会生成指针内部全局的 ADDR32，
+   与 §4-2 互斥；产物要 memcpy 到未知 JIT 基址）。
+6. **下一步 = 让 rv32im 装配起来**：`--list-unsupported` 250 条里根因只有两类 ——
+   **38 条三目** + **2 条空 struct**（其余 208 条是连锁）。补完这两个就能拿到 M3 的真验收面
+   （rv32im 的逐 tick 比对，006 只覆盖 229 行协议骨架）。
+7. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行消费。
    与壳抢同一份 `tools/compile_hook.c` → 串行，锁 `work/tmp/locks/compile-hook.lock`。
 
 ### 待定 / 未解

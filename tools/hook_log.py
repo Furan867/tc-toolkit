@@ -17,10 +17,10 @@
 | 事件 | 写入者 | 含义 | 键 |
 |---|---|---|---|
 | `cfg`       | 转发层 | 起改写子进程前读到的配置 | `rewrite` |
-| `impl`      | 转发层 | **这一次实际走了哪个实现**（与 `cfg` 的 `compiler` 可能不同：回退就是不同） | `impl` `result` |
+| `impl`      | 转发层 | **这一次实际走了哪个实现**（与 `cfg` 的 `compiler` 可能不同：回退就是不同） | `impl` `mode` `result`（ours 行可选 `budget_ms`；首次加 `guard=veh`） |
 | `writeback` | 转发层 | 产物已就位写回原缓冲     | `len` |
 | `entry`     | 转发层 | 缩短后锚点已同步更新     | `offset` |
-| `error`     | 转发层 | 任一环节放弃             | `stage` + `code`/`timeout`/`detail` |
+| `error`     | 转发层 | 任一环节放弃             | `stage` + `kind`/`code`/`timeout`/`detail` |
 | `opt`       | 改写器 | 这一趟改写的实际结果     | `mode` `rewritten` `cse` `reloc` `len` `sha256` `note` |
 
 **两个写入者**：转发层（C，`compile_hook.c` 的 `hook_log()`）与本模块的
@@ -28,6 +28,12 @@
 
 `mode` 是**实际执行**的模式（`off` / `on` / `short` / `short_cse`）：
 解析失败或缩短被防御挡回时它与 `cfg` 的 `rewrite` 不同，那正是要查的信号。
+⚠️ `impl` 行的 `mode` 是**另一个东西** —— 它是 `opt.ini` 里配的 `compiler`（`reference` / `ours` /
+`ours_with_fallback`），取值以 `docs/specs/2026-10-15-simplexc-interfaces.md` §5 的 `impl` 词表为准。
+解析时按事件名区分：`opt` 行的 `mode` = 改写器实际做了什么，`impl` 行的 `mode` = 配了什么。
+`impl` 词表（唯一一处定义在接口文档 §5）：`reference` / `ours` / `fallback` / `ours_failed`，
+**每次编译都写一行**（含 reference —— 回退率需要分母）；解析：`fallback` = 配了
+`ours_with_fallback` 但 ours 失败、整单转交了参考实现。
 """
 from __future__ import annotations
 

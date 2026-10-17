@@ -34,8 +34,14 @@
  * 入口
  * ----
  * `opt.ini` 的 `[opt] compiler=` 选实现：`reference`（默认）/ `ours` / `ours_with_fallback`，
- * 语义见 `docs/specs/2026-10-15-simplexc-interfaces.md` §5；每次都写一条 `impl` 事件到 `hook.log`
- * （“配置了什么”与“实际走了哪个”是两件事，只认后者）。
+ * 语义见 `docs/specs/2026-10-15-simplexc-interfaces.md` §5；**每次** compile() 都写一条
+ * `impl` 事件到 `hook.log`（含 reference —— 回退率需要分母），键 `impl` / `mode` / `result`，
+ * 词表 `reference | ours | fallback | ours_failed` 与 manifest 的 `impl` 列同源。
+ *
+ * 失败路径：ours 段的失败点归到 §8 的分类串（`error` 事件 `stage=ours` + `kind=`；
+ * 超时 `stage=ours_timeout`、熔断 `stage=ours_fault`），**并照常写 manifest**（`impl=ours_failed`
+ * 或 `fallback`）；`ours` 段还有两个兜底：耗时超预算（默认 5 s）与 VEH 熔断（本进程内
+ * 永久不再进 ours 段）。任何失败都返回形状合法的 Result，绝不把异常传给游戏。
  *
  * 契约（已由反汇编独立验证，2026-09-15 / 09-17 两次复核）
  * ------------------------------------------------------
@@ -58,11 +64,20 @@
  */
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define REAL_DLL "compile_real.dll"
-#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\hook"
 #define SEP      92        /* 反斜杠的 ASCII —— 写成字符字面量在多轮转义里会失真 */
+
+/* 路径宏一律可以 -D 覆盖（默认值与以前逐字符相同）—— 离线判据要用**测试专用路径**
+ * 跑四种情形，不能碰活的数据：转发层加载时会清空 OUT_DIR / OPT_DIR（见 purge_*），
+ * 测试构建若共用真路径就会把游戏抓到的捕获和 work/opt/hook.log 一起洗掉。
+ * 覆盖 = 只在**测试构建**的命令行上给 -D，正式构建（tools/deploy_compile_hook.py build）
+ * 一个都不给，行为与以前完全一致。 */
+#ifndef OUT_DIR
+#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\hook"
+#endif
 
 /* 产物改写器（MVP：把产物交给外部 Python 走一趟，再**就地**写回原缓冲）
  *
@@ -70,17 +85,25 @@
  * （`compile_real.dll` 能用自身模块路径推导，是因为它与我们同在游戏目录 ——
  * 见 ensure_real。改机器上的路径要改这三行）。
  */
+#ifndef OPT_DIR
 #define OPT_DIR     "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\opt"
+#endif
 #define OPT_PROJ    "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing"
+#ifndef OPT_SCRIPT
 #define OPT_SCRIPT  OPT_PROJ "\\tools\\optimize_image.py"
+#endif
+#ifndef OPT_INI
 #define OPT_INI     OPT_PROJ "\\opt.ini"
+#endif
 #define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
 #define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
 
 /* 自研实现的产物（spike 占位：真正的编译器还没有，先拿一个装配好的固定 blob 走通整条链）。
  * 由 `simplexc/cli/tcblob.cc` 生成 —— 里面是「空程序」：shim → tc_main（空）→ thread_exit。
  * 一旦前端接进来，这个读文件的函数就被真正的编译器核心取代。 */
+#ifndef OURS_BLOB
 #define OURS_BLOB   OPT_PROJ "\\build\\blob_empty.bin"
+#endif
 
 typedef void* (*compile_fn)(void* out, void* src, int flags);
 typedef void  (*void_fn)(void);
@@ -103,35 +126,79 @@ static const char* resolve_compiler(void) {
     return "reference";
 }
 
+/* ---- 失败分类（接口冻结版 1 §8）-----------------------------------------
+ * 分类串就是 §8 的那七个名字，只在一处写。`UnsupportedConstruct` /
+ * `RelocUnsupported` / `SymbolUndefined` 由编译器核心（前端 / 装配器）产生，
+ * 还没接进来；壳这一侧目前只用得上下面四个。
+ */
+#define KIND_INTERNAL   "InternalError"
+#define KIND_TIMEOUT    "Timeout"
+#define KIND_FAULT      "OursFault"
+#define KIND_TOO_LARGE  "BlobTooLarge"
+
+/* ours 段的超时预算（毫秒）：`TC_OURS_TIMEOUT_MS` 环境变量 > `opt.ini` 的
+ * `[opt] ours_timeout_ms` > 默认 5 秒；调试期调大到 60000。
+ * 与 `OPT_TIMEOUT` 是两同事：那个只管改写子进程，这个只量 ours 段自身。
+ * 特殊值 0 = 任何耗时都算超预算（离线判据用它对真实产物走一遍超时分支）。
+ */
+#define OURS_TIMEOUT_MS        5000
+#define OURS_TIMEOUT_ENV       "TC_OURS_TIMEOUT_MS"
+#define OURS_TIMEOUT_INI_KEY   "ours_timeout_ms"
+
+static unsigned long long parse_ms(const char* s) {
+    /* 不合法（含空串）返回 -1 表示"这个来源没给值"。写错的值不会报错，但它总会被
+       `budget_ms` 记进 hook.log 的 impl 行 —— 静默改值至少留得下痕迹。 */
+    if (!s || !s[0]) return (unsigned long long)-1;
+    char* end = NULL;
+    unsigned long long v = strtoull(s, &end, 10);
+    if (!end || *end) return (unsigned long long)-1;
+    return v;
+}
+
+static unsigned long long ours_budget_ms(void) {
+    char buf[32];
+    DWORD n = GetEnvironmentVariableA(OURS_TIMEOUT_ENV, buf, sizeof(buf));
+    if (n > 0 && n < sizeof(buf)) {
+        unsigned long long v = parse_ms(buf);
+        if (v != (unsigned long long)-1) return v;
+    }
+    buf[0] = 0;
+    GetPrivateProfileStringA("opt", OURS_TIMEOUT_INI_KEY, "", buf, sizeof(buf), OPT_INI);
+    unsigned long long v = parse_ms(buf);
+    return v == (unsigned long long)-1 ? OURS_TIMEOUT_MS : v;
+}
+
 /* 自研路径的产物：现在只把预先装配好的 blob 读进来、交给游戏（spike 占位）。
  *
  * 三条不变量（写错了会崩游戏，别动）：
  *   · 缓冲是 **malloc** 的，头 word 的 **bit62 置位** → 游戏不会拿 Nim 的分配器去 free 我们的指针；
  *   · `out[0]` = 缓冲总长（含 8 字节头），缓冲实际分配 **out[0] + 8** 字节（游戏会多读 8 字节）；
  *   · 上一次的缓冲在下一次编译开始时释放（产品生命周期由我们持有）。
+ *
+ * 返回 NULL = 成功，否则是 §8 分类串 —— 失败点归到具体分类，「哪个环节失败」
+ * 不再靠读日志猜。
  */
-static int ours_compile_spike(void* out) {
+static const char* ours_compile_spike(void* out) {
     if (g_ours_prev) { free(g_ours_prev); g_ours_prev = NULL; }
     HANDLE h = CreateFileA(OURS_BLOB, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return 0;
+    if (h == INVALID_HANDLE_VALUE) return KIND_INTERNAL;        /* blob 缺失 */
     LARGE_INTEGER sz;
-    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 16 || sz.QuadPart > (64LL << 20)) {
-        CloseHandle(h);
-        return 0;
-    }
+    if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return KIND_INTERNAL; }
+    if (sz.QuadPart < 16)       { CloseHandle(h); return KIND_INTERNAL; }
+    if (sz.QuadPart > (64LL << 20)) { CloseHandle(h); return KIND_TOO_LARGE; }
     long long n = sz.QuadPart;
     void* buf = malloc((size_t)n + 8);          /* 多 8 字节：游戏 memcpy 会读到末尾之外 */
-    if (!buf) { CloseHandle(h); return 0; }
+    if (!buf) { CloseHandle(h); return KIND_INTERNAL; }
     memset(buf, 0, (size_t)n + 8);
     DWORD got = 0;
     BOOL ok = ReadFile(h, buf, (DWORD)n, &got, NULL);
     CloseHandle(h);
-    if (!ok || got != (DWORD)n) { free(buf); return 0; }
+    if (!ok || got != (DWORD)n) { free(buf); return KIND_INTERNAL; }
     unsigned long long header = *(unsigned long long*)buf;
     if (!(header & (1ULL << 62))) {             /* 产物头必须带 bit62，否则游戏会 free 它 */
         free(buf);
-        return 0;
+        return KIND_INTERNAL;
     }
     /* entry 偏移不在产物里（它是 Result 的字段）—— tcblob 把它写成 `<blob>.entry`（十六进制）。 */
     long long entry = 0;
@@ -139,15 +206,15 @@ static int ours_compile_spike(void* out) {
     sprintf(epath, "%s.entry", OURS_BLOB);
     HANDLE he = CreateFileA(epath, GENERIC_READ, FILE_SHARE_READ, NULL,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (he == INVALID_HANDLE_VALUE) { free(buf); return 0; }
+    if (he == INVALID_HANDLE_VALUE) { free(buf); return KIND_INTERNAL; }
     char ebuf[32];
     DWORD egot = 0;
     BOOL eok = ReadFile(he, ebuf, sizeof(ebuf) - 1, &egot, NULL);
     CloseHandle(he);
-    if (!eok || egot == 0) { free(buf); return 0; }
+    if (!eok || egot == 0) { free(buf); return KIND_INTERNAL; }
     ebuf[egot] = 0;
-    if (sscanf(ebuf, "%llx", (unsigned long long*)&entry) != 1) { free(buf); return 0; }
-    if (entry < 0 || entry >= n) { free(buf); return 0; }
+    if (sscanf(ebuf, "%llx", (unsigned long long*)&entry) != 1) { free(buf); return KIND_INTERNAL; }
+    if (entry < 0 || entry >= n) { free(buf); return KIND_INTERNAL; }
 
     g_ours_prev = buf;
     *(long long*)((char*)out + 0) = n;
@@ -155,13 +222,109 @@ static int ours_compile_spike(void* out) {
     *(long long*)((char*)out + 16) = entry;     /* 8 字节写全（游戏按 32 位读、按 64 位用） */
     *(long long*)((char*)out + 24) = 0;         /* err_len = 0 */
     *(long long*)((char*)out + 32) = 0;         /* err_ptr = 0 */
-    return 1;
+    return NULL;
+}
+
+/* ---- ours 段的看门狗：超时预算 + VEH 熔断 -------------------------------
+ *
+ * VEH **只包 ours 段**：处理器装一次（首次进 ours 段时），作用域由 `g_in_ours`
+ * 卡住 —— 参考实现路径上它是 0，异常照原样穿透给游戏自己的处理器（实测见
+ * `docs/notes/2026-10-17-shell-failure-paths.md` 的穿透试验）。
+ *
+ * 触发后：置 `g_ours_fault`、**永久**置熔断标志（本进程内之后所有调用直接按
+ * 失败处理，不再进 ours 段），并把上下文搬回 `g_resume` 恢复点 —— 于是控制流
+ * 回到 `ours_segment()` 里，异常不往游戏那边传。
+ *
+ * 处理器里只做三件事：置标志、搬上下文、返回；**不分配内存、不 LoadLibrary、
+ * 不写文件**（真正落盘留给调用方，理由与 `hook_log` 的静默风格相反：这里没有
+ * 安全的 I/O 手段，硬写可能死在写一半上）。
+ */
+static volatile LONG g_veh_present  = 0;    /* VEH 已注册（惰性装一次） */
+static volatile LONG g_ours_fault  = 0;    /* 本次调用里 ours 段出过异常 */
+static volatile LONG g_in_ours     = 0;    /* ours 段正在跑（VEH 只认这个窗口） */
+static volatile LONG g_have_resume = 0;    /* g_resume 里有一个有效的恢复点 */
+static volatile LONG g_resume_tid  = 0;    /* 抓恢复点时的线程 —— 别线程的异常绝不用它 */
+static volatile LONG g_breaker     = 0;    /* 熔断：本进程内永久不再进 ours 段 */
+static CONTEXT       g_resume;
+
+static LONG CALLBACK ours_veh(EXCEPTION_POINTERS* ep) {
+    if (!g_in_ours || !g_have_resume) return EXCEPTION_CONTINUE_SEARCH;
+    /* 整个壳本来就是单线程假设（g_seq / g_ours_prev 也是全局的）；万一有别的线程
+       在 ours 窗口里踩了异常，把 A 线程的上下文往 B 线程身上搬会跳到别人的栈帧上
+       —— 宁可不接，也不要把"不崩"变成"换个死法"。 */
+    if ((LONG)GetCurrentThreadId() != g_resume_tid) return EXCEPTION_CONTINUE_SEARCH;
+    switch (ep->ExceptionRecord->ExceptionCode) {
+    /* 本体代码会踩的"真"异常；断点 / 单步 / C++ 抛出等一律穿透，别抢 */
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_INT_OVERFLOW:
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+    case EXCEPTION_IN_PAGE_ERROR:
+    case EXCEPTION_STACK_OVERFLOW:
+        break;
+    default:
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    g_ours_fault = 1;
+    InterlockedExchange(&g_breaker, 1);
+    g_in_ours = 0;
+    g_have_resume = 0;
+    memcpy(ep->ContextRecord, &g_resume, sizeof(CONTEXT));
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+/* 装一次；返回 1 表示"这次调用是安装者"（只用于在日志里留一条安装证据）。 */
+static int ours_guard_install(void) {
+    if (g_veh_present) return 0;
+    if (AddVectoredExceptionHandler(1, ours_veh)) { g_veh_present = 1; return 1; }
+    return 0;
+}
+
+/* ours 段（VEH 包住的整段，含读产物）。返回 NULL = 成功，否则是 §8 分类串。
+ *
+ * 计时用 GetTickCount64（毫秒粒度，别拿它量微秒级的差异 —— 这里要判的是"秒级预算"）。
+ */
+static const char* ours_segment(void* out, int* installed, unsigned long long* budget_ms) {
+    *installed = ours_guard_install();
+    *budget_ms = ours_budget_ms();
+    g_ours_fault = 0;
+
+    /* 恢复点：下面这行之后就是"异常被拦下"回来的入口。
+       RtlCaptureContext 存下的就是这一刻的寄存器组（含非易失寄存器与 Rsp），
+       处理器把它搬回 ContextRecord 再 CONTINUE_EXECUTION，等于一次 longjmp。 */
+    RtlCaptureContext(&g_resume);
+    if (g_ours_fault) return KIND_FAULT;
+    g_resume_tid = (LONG)GetCurrentThreadId();
+    g_have_resume = 1;
+    g_in_ours = 1;
+    ULONGLONG t0 = GetTickCount64();
+    const char* err = ours_compile_spike(out);
+    ULONGLONG elapsed = GetTickCount64() - t0;
+    g_in_ours = 0;
+    g_have_resume = 0;
+    if (err) return err;
+    if (elapsed > *budget_ms) {
+        /* 超预算：产物作废。缓冲区由我们持有，直接放掉，并把 out 里指向它的字段
+           清干净 —— 后面任何路径都不该读到一个悬垂指针。 */
+        if (g_ours_prev) { free(g_ours_prev); g_ours_prev = NULL; }
+        *(long long*)((char*)out + 0) = 0;
+        *(void**)((char*)out + 8) = NULL;
+        *(long long*)((char*)out + 16) = 0;
+        return KIND_TIMEOUT;
+    }
+    return NULL;
 }
 
 /* `ours` 模式的失败 Result：**必须给非 0 的 out[3]**，否则游戏会走成功路径、
  * 在 jit 里因 len<=0 抛 index error（见 docs/facts.md）。返回值的形状由游戏自己拼，
- * 这里返回 NULL 即可（真正决定走向的是 out[3]）。 */
-static void ours_fail_result(void* out, long long seq, const char* why) {
+ * 这里返回 NULL 即可（真正决定走向的是 out[3]）。
+ *
+ * 内容 = `ours: ` + §8 分类串（接口冻结版 1 §5）—— 回退率报告按这个前缀分类。 */
+static void ours_fail_result(void* out, long long seq, const char* kind) {
+    char why[96];
+    sprintf(why, "ours: %s", kind ? kind : KIND_INTERNAL);
     long long n = (long long)strlen(why);
     unsigned long long* desc = (unsigned long long*)malloc((size_t)n + 9);
     if (!desc) return;
@@ -617,30 +780,67 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     }
     if (!g_compile) return NULL;
 
-    const char* mode = resolve_compiler();          /* reference / ours / ours_with_fallback */
-    const char* impl = mode;
-    int ours_ok = 0;
-    if (out && lstrcmpA(mode, "reference") != 0) {
-        ours_ok = ours_compile_spike(out);
-        if (!ours_ok) {
-            if (lstrcmpA(mode, "ours") == 0) {
-                /* 不转交：给一个形状合法的失败 Result（out[3] ≠ 0），游戏不跑新代码也不会崩 */
-                impl = "ours_failed";
-                hook_log(seq, "impl", "impl=ours\tresult=fail");
-                ours_fail_result(out, seq, "ours: no product available");
-                return NULL;
-            }
-            impl = "fallback";
+    /* 选实现 + 跑 ours 段。§5 的词表与三种模式一一对应：
+     *   reference       → impl=reference  result=reference（**每次调用都记**，回退率要分母）
+     *   ours 成功       → impl=ours       result=ok
+     *   fallback 成功   → impl=fallback   result=reference
+     *   ours 失败       → impl=ours_failed result=fail
+     * 熔断（g_breaker）后不再进 ours 段，按模式当"ours 失败"处理。 */
+    const char* mode = resolve_compiler();
+    int is_ref = lstrcmpA(mode, "reference") == 0;
+    const char* impl = NULL;
+    const char* result = NULL;
+    const char* kind = NULL;               /* §8 分类串；NULL = 没失败 */
+    int ours_ok = 0, ours_attempted = 0, guard_installed = 0, need_reference = 0;
+    unsigned long long budget_ms = 0;
+
+    if (is_ref) {
+        impl = "reference"; result = "reference"; need_reference = 1;
+    } else {
+        if (out && !g_breaker) {
+            ours_attempted = 1;
+            kind = ours_segment(out, &guard_installed, &budget_ms);
+            ours_ok = kind == NULL;
         } else {
-            hook_log(seq, "impl", "impl=ours\tresult=ok");
+            /* 没有 out 缓冲（无处写产物）/ 已熔断：不试 ours */
+            kind = out ? KIND_FAULT : KIND_INTERNAL;
         }
+        if (ours_ok) { impl = "ours"; result = "ok"; }
+        else if (lstrcmpA(mode, "ours") == 0) { impl = "ours_failed"; result = "fail"; }
+        else { impl = "fallback"; result = "reference"; need_reference = 1; }
     }
 
+    /* 失败先记账。为什么放在这里而不是各自的 return 点上：早先版本 ours 失败直接
+       return，manifest 写在下面的 `if (out)` 块里够不到 —— 按 manifest 统计回退率会
+       漏掉**全部** ours 失败。
+       超时/熔断用各自的 stage 名（§5），其余分类用 stage=ours + kind=分类串。 */
+    if (kind) {
+        const char* stage = "ours";
+        if (lstrcmpA(kind, KIND_TIMEOUT) == 0)      stage = "ours_timeout";
+        else if (lstrcmpA(kind, KIND_FAULT) == 0)   stage = "ours_fault";
+        char kve[96];
+        sprintf(kve, "stage=%s\tkind=%s", stage, kind);
+        hook_log(seq, "error", kve);
+    }
+
+    /* impl 行在**起参考实现之前**写：参考实现是别人的代码，它 aborts 或崩掉的话
+       这一行是唯一的"我们走到了哪"的记录（hook.log 只加行，不改已有行）。 */
+    {
+        char kvi[192];
+        int n = sprintf(kvi, "impl=%s\tmode=%s\tresult=%s", impl, mode, result);
+        if (ours_attempted) n += sprintf(kvi + n, "\tbudget_ms=%llu", budget_ms);
+        if (guard_installed) n += sprintf(kvi + n, "\tguard=veh");
+        hook_log(seq, "impl", kvi);
+    }
+
+    /* ours 模式失败时不给游戏跑新代码的机会：写一个形状合法的失败 Result（out[3] ≠ 0），
+       Bit62 头让游戏不去 free 我们的描述串。 */
     void* ret = NULL;
-    if (!ours_ok) {
+    if (!is_ref && !ours_ok && lstrcmpA(mode, "ours") == 0) {
+        if (out) ours_fail_result(out, seq, kind);
+        ret = NULL;
+    } else if (need_reference) {
         ret = g_compile(out, src, flags);
-        if (lstrcmpA(mode, "reference") != 0)
-            hook_log(seq, "impl", "impl=fallback\tresult=reference");
     }
     if (out) {
         long long olen = *(long long*)out;

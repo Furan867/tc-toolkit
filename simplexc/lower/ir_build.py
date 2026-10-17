@@ -404,7 +404,7 @@ class Lower:
                 L.BuildRetVoid(self.bd)
             else:
                 self.warnings.append(f"{self.cur_name}：控制流落到函数末尾，补 ret 零值")
-                L.BuildRet(self.bd, L.ConstNull(self.ll_type(self.ret_ty)))
+                L.BuildRet(self.bd, L.ConstNull(self.val_ll(self.ret_ty)))
         L.DisposeBuilder(self.bd)
         self.bd = None
 
@@ -1005,7 +1005,7 @@ class Lower:
         self.cur_block = end_bb
         # phi 的结果类型是**值的类型**（SSA 里窄整数一律 i64 位模式，见文件头「值表示」），
         # 不是 `ll_type` 那个内存宽度；只有 struct / ptr 两类值不是 i64。
-        vty = self.ll_type(ty) if ty.kind in ('struct', 'str', 'array') else self.i64
+        vty = self.val_ll(ty)
         phi = L.BuildPhi(self.bd, vty, "cnd")
         L.AddIncoming(phi, carr([self.llv(tv), self.llv(ev)]), carr([t_bb, e_bb]), 2)
         return V(phi, ty, None)
@@ -1505,8 +1505,8 @@ class Lower:
         if key in self._fn:
             return self._fn[key][0]
         fnty = self.L.FunctionType(
-            self.ll_type(ret_ty) if ret_ty.kind != 'void' else self.void,
-            carr([self.ll_type(t) for t in param_tys]), len(param_tys), 0)
+            self.val_ll(ret_ty) if ret_ty.kind != 'void' else self.void,
+            carr([self.val_ll(t) for t in param_tys]), len(param_tys), 0)
         fnref = self.L.AddFunction(self.module, name.encode(), fnty)
         self.L.SetLinkage(fnref, self.L.InternalLinkage)
         self._fn[key] = (fnref, ret_ty, param_tys, [])
@@ -1601,8 +1601,8 @@ class Lower:
             return self._fn[key][0]
         L = self.L
         fnty = L.FunctionType(
-            self.ll_type(ret_ty) if ret_ty.kind != 'void' else self.void,
-            carr([self.ll_type(t) for t in param_tys]), len(param_tys), 0)
+            self.val_ll(ret_ty) if ret_ty.kind != 'void' else self.void,
+            carr([self.val_ll(t) for t in param_tys]), len(param_tys), 0)
         gname = d.name if len(self.defs.get(d.name, [])) == 1 else f"{d.name}#L{d.lo}"
         fnref = L.AddFunction(self.module, gname.encode(), fnty)
         L.SetLinkage(fnref, L.InternalLinkage)
@@ -1633,8 +1633,8 @@ class Lower:
             return self._fn[key][0]
         L = self.L
         fnty = L.FunctionType(
-            self.ll_type(ret_ty) if ret_ty.kind != 'void' else self.void,
-            carr([self.ll_type(t) for t in param_tys] + [self.ptr] * len(caps)),
+            self.val_ll(ret_ty) if ret_ty.kind != 'void' else self.void,
+            carr([self.val_ll(t) for t in param_tys] + [self.ptr] * len(caps)),
             len(param_tys) + len(caps), 0)
         owner = getattr(self, 'cur_def', None)
         prefix = owner.name if owner is not None else "closure"
@@ -1859,6 +1859,17 @@ class Program(Lower):
                 L.SetLinkage(g, L.InternalLinkage)
                 L.SetInitializer(g, L.ConstNull(self.i64))
                 self.globals[stmt.name] = (g, I64)
+
+    def val_ll(self, ty):
+        """一个**值**的 LLVM 表示类型（不是内存宽度，也不是 ABI 宽度）。
+
+        SSA 里整数一律 i64 位模式 + 掩码承载宽度（U-L7），`Str`/`Arr` 是真 `ptr`，
+        聚合保持自身。内部函数（`ensure_def_fn`/`ensure_nested_fn`/`ensure_prefix_fn`）
+        的参数与返回也走这一层 —— 它们只在**函数体内**按声明类型掩码，不留窄 `iN` 在
+        签名上（否则 `mask_ll` 的 i64 掩码常量与 i8/i16/i32 参数类型对不上）。
+        唯一按**目标 ABI** 给宽度的是 `get_extern`（`Sleep(i32)` 那种），它在调用点做转换。
+        """
+        return self.ll_type(ty) if ty.kind in ('struct', 'str', 'array') else self.i64
 
     def ll_type(self, ty):
         """LLVM 侧的类型。

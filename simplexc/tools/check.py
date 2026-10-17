@@ -7,6 +7,7 @@
 |---|---|
 | `corpus`        | `python simplexc/tools/recompile_corpus.py --check`（M0：语料/manifest 一致 + 同源三条断言）|
 | `host_selftest` | `python simplexc/tools/host/selftest.py --src …006.si --bin …006.bin --ticks 3`（M2 宿主自比对）|
+| `lower_equiv`   | `build/simplexc_cli.exe`（**C++ 产品路径**）出 rv32im 产物 → 宿主与参考逐 tick 比对（10 tick，灌 RESET_DATA）|
 | `hook_offline`  | `hook_offline.run_all()`：壳的四种情形 + refcmp + 超时（8 个 case）|
 | `probe_006`     | `simplexc/tools/probe_006.py`（M1.5 探针，**可选**：缺依赖/脚本在改 → SKIP）|
 
@@ -59,6 +60,13 @@ PROBE = os.path.join(HERE, "probe_006.py")
 
 CORPUS_SRC = os.path.join("simplexc", "corpus", "src", "006.si")
 CORPUS_BIN = os.path.join("simplexc", "corpus", "ref", "006.bin")
+BUILD = os.path.join(ROOT, "build")
+SIMPLEXC_CLI = os.path.join(BUILD, "simplexc_cli.exe")
+HOST = os.path.join(HERE, "host", "host.py")
+RV32IM_SRC = os.path.join("simplexc", "corpus", "rv32im", "rv32im.si")
+RV32IM_BIN = os.path.join("simplexc", "corpus", "rv32im", "rv32im.bin")
+RV32IM_REF_ENTRY = "0x215B"   # manifest-capture.tsv seq 002 的 r2
+LOWER_TICKS = 10
 
 STEP_TIMEOUT = 900.0        # 普通子进程步骤的超时秒数
 PROBE_TIMEOUT = 900.0       # probe_006 是可选步骤，超时就是 SKIP（不重试、不拉长）
@@ -185,6 +193,71 @@ def step_host_selftest(ctx):
         summary["report_passed"] = bool(rep.get("passed"))
     except (OSError, ValueError) as e:
         summary["report"] = f"读不到 {rel(report)}：{e}"
+    return {**r, "summary": summary}
+
+
+@step("lower_equiv", "M4.5：C++ 产物 vs 参考产物逐 tick 等价（rv32im，10 tick，灌 RESET_DATA）")
+def step_lower_equiv(ctx):
+    """生产者是**我们自己的**编译器（`build/simplexc_cli.exe`，C++17），不是参考实现 ——
+    这一步才是「C++ 前端 + lowering 能独立产出等价产物」的判据。
+
+    没有 CLI 就是 SKIP（不是 FAIL）：它要先 `python simplexc/tools/build.py simplexc_cli`。
+    """
+    if not os.path.exists(SIMPLEXC_CLI):
+        return {"rc": 0, "seconds": 0.0, "output": "", "status": "SKIP", "reason": "缺 CLI",
+                "summary": {"verdict": "SKIP：先跑 python simplexc/tools/build.py simplexc_cli"}}
+    workdir = os.path.join(WORK, "lower_equiv")
+    os.makedirs(workdir, exist_ok=True)
+    blob = os.path.join(workdir, "ours.bin")
+    for suffix in (".entry", ".stubs"):
+        with contextlib.suppress(OSError):
+            os.remove(blob + suffix)
+    r = run_cmd([SIMPLEXC_CLI, "--src", RV32IM_SRC, "--out", blob, "--timing"],
+                timeout=STEP_TIMEOUT)
+    summary = {"cli_rc": r.get("rc"), "blob": rel(blob)}
+    m = re.search(r"前端=(\d+) ms\s+lowering=(\d+) ms\s+LLVM\(O2\+代码生成\)=(\d+) ms", r["output"])
+    if m:
+        summary["ms_frontend"], summary["ms_lowering"], summary["ms_llvm"] = m.group(1), m.group(2), m.group(3)
+    if r["rc"] != 0 or not os.path.exists(blob):
+        summary["verdict"] = "CLI 没产出 blob"
+        return {**r, "summary": summary}
+    summary["blob_bytes"] = os.path.getsize(blob)
+    try:
+        with open(blob + ".entry", encoding="ascii") as f:
+            ours_entry = "0x" + f.read().strip()
+    except OSError as e:
+        summary["verdict"] = "读不到 .entry：%s" % e
+        return {**r, "summary": summary}
+    summary["ours_entry"] = ours_entry
+
+    logs = {}
+    for tag, binpath, entry in (("ref", RV32IM_BIN, RV32IM_REF_ENTRY),
+                               ("ours", blob, ours_entry)):
+        out = os.path.join(workdir, "%s.jsonl" % tag)
+        with contextlib.suppress(OSError):
+            os.remove(out)
+        hr = run_cmd([sys.executable, HOST, "--src", RV32IM_SRC, "--bin", binpath,
+                      "--entry", entry, "--ticks", str(LOWER_TICKS),
+                      "--seed-reset-data", "seq", "--out", out], timeout=STEP_TIMEOUT)
+        if hr["rc"] != 0 or not os.path.exists(out):
+            summary["verdict"] = "%s 侧宿主失败：%s" % (tag, (hr["output"] or "")[-400:])
+            return {**r, "output": r["output"] + "\n" + hr["output"], "summary": summary}
+        with open(out, encoding="utf-8") as f:
+            logs[tag] = [json.loads(line) for line in f if line.strip()]
+
+    mod = _load_by_path(SELFTEST, "selftest")
+    try:
+        diff = mod.compare(logs["ref"], logs["ours"])
+    except Exception as e:                                     # noqa: BLE001 —— 比对器自己炸也要算 FAIL
+        summary["verdict"] = "比对器抛异常：%s" % e
+        return {**r, "rc": 1, "status": "FAIL", "summary": summary}
+    summary["ticks"] = "%d/%d" % (len(logs["ref"]), len(logs["ours"]))
+    summary["diff_count"] = len(diff)
+    if diff:
+        summary["first_diff"] = str(diff[0])[:300]
+        summary["verdict"] = "差异 %d 条" % len(diff)
+        return {**r, "rc": 1, "status": "FAIL", "reason": "有差异", "summary": summary}
+    summary["verdict"] = "逐 tick 全等"
     return {**r, "summary": summary}
 
 

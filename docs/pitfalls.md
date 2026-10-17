@@ -90,3 +90,7 @@
   bench 的等产物逻辑）在 ours 轮都会误判：实测 bench 重试 3 次、每轮都编译成功
   （`manifest` seq 006/007/008 + `hook_out_*.bin` 都在），却报「等 60s 没等到产物」。
   「编译完成」= 该 seq 的**任一终态行**（`impl … result=ok` 或 `writeback`/`opt`）。
+- 别把 `LLVMRunPasses` 当成「机器码优化过了」—— 它只优化 **IR**；机器码质量由 
+  `LLVMCreateTargetMachine` 的 `CodeGenOptLevel` 决定（`Default`=2，`None`=0）。
+  Python 原型把 `Default` 传成 0 一直没被发现，因为「IR 变小了」看起来像优化生效了；
+  判据必须是 `.text` 体积或指令数，不是 IR 文本长度（实测差 2.2 倍，见 facts.md）。

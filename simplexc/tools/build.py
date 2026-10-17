@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 
@@ -61,6 +62,7 @@ OBJDIR = os.path.join(BUILD, "objs")
 # LLVM-C.dll + 头 + 自造 MinGW 导入库（不进 git，见 docs/facts.md §构建与 LLVM）
 LLVM_INC = os.path.join(BUILD, "llvm", "include")
 LLVM_LIB = os.path.join(BUILD, "llvm", "lib")
+LLVM_BIN = os.path.join(BUILD, "llvm", "bin")
 
 def REL(p: str) -> str:
     """仓库内的路径 → 命令行里的相对写法（正斜杠）。见模块 docstring 的「两条写法」。"""
@@ -198,6 +200,14 @@ def step_simplexc_cli() -> None:
          "-L", LLVM_LIB, "-lLLVM-C",
          "-o", REL(out)], out=out,
         hint="编译 CLI 失败 → 需要 build/llvm/{include,lib}（头 + 导入库）；静态库顺序要压在源文件之后。")
+
+    # Windows 先从 exe 所在目录找依赖 DLL（再看 PATH）→ 把 LLVM-C.dll 放它旁边，
+    # 判据入口（check.py）就不用为这一步改 PATH。
+    dll = os.path.join(LLVM_BIN, "LLVM-C.dll")
+    if os.path.exists(dll):
+        shutil.copy2(dll, os.path.join(BUILD, "LLVM-C.dll"))
+    else:
+        print("  警告：找不到 %s，CLI 跑起来会缺依赖" % dll)
 
 
 def step_spike() -> None:

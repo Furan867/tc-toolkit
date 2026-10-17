@@ -739,3 +739,24 @@ COFF 对象文件里 `.bss` 是 `SizeOfRawData=N / PointerToRawData=0` —— �
 - `mode_refresh()` 从内存回读刚写的位再算 NAND（不是用局部变量）。
 验证：`docs/notes/2026-10-17-m1.5-probe.md` §「从参考产物实验出来的 006 语义」
 最后验证：2026-10-17
+### LLVM 的代码生成级别与 IR 优化是两件事 —— Python 原型一直按 -O0 出机器码
+`LLVMCreateTargetMachine` 的 `CodeGenOptLevel` 枚举是 `None=0, Less=1, **Default=2**, Aggressive=3`。
+Python 原型 `lower/ir_build.py:213` 写的是 `self.CodeGenLevelDefault = 0`（= None），
+所以它的 `LLVMRunPasses(default<O2>)` **只优化 IR**，机器码生成始终是 -O0。
+实测：同一份 `rv32im.si` 的 IR **逐字节相同**（md5 `869677f0891a7884bcf025fc6384937e`，1379416 B），
+Python 产物 `.text`=0xE1E9(57833)/COFF 59047，C++ 产物 `.text`=0x6393(25491)/COFF 26843，
+而 clang `-O2` 编同一份 IR 得 0x6393、clang `-O0` 编**已优化**的 IR 得 0xE1E9 —— 三路互证。
+含义：M3/M4 的所有 Python 产物（58612 B、游戏内 24.83 MHz）都是 **-O0 代码生成**的成绩；
+「C++ 产物小 2.2 倍」不是写法差异，是这一处枚举值。
+验证：`python work/tmp/check_py_o2ir.py`（落盘优化后 IR + clang 两种 -O 对照）；`docs/notes/2026-10-18-m45-cli.md`
+最后验证：2026-10-18
+
+### M4.5：C++ 前端 + lowering 已能独立产出等价 blob
+`build/simplexc_cli.exe --src <si> --out <blob>`（`python simplexc/tools/build.py simplexc_cli`）是产品路径入口：
+frontend → `ModuleAst` → `lower::Program` → `assemble()` → blob，不经 Python、不碰游戏。
+- **逐 tick 等价**：`rv32im.si` → 26340 B / entry `0x63A0`，与参考产物（`0x215B`）10 tick **差异 0 条**；
+- **延迟门**：`corpus/src/177.si`（479225 B，最大语料）前端 38 ms + lowering 13 ms + LLVM(O2+代码生成) 212 ms + 装配 1 ms
+  = **266 ms**（门 ≤4 s）；外部 wall 479 ms（含进程启动与文件 IO）；
+- **依赖门**：`objdump -p build/compile_hook.dll | grep -i python` 为空（导入表只有 KERNEL32/msvcrt）。
+验证：`docs/notes/2026-10-18-m45-cli.md` 的命令与输出；`python simplexc/tools/build.py simplexc_cli`
+最后验证：2026-10-18

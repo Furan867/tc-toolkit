@@ -1,4 +1,4 @@
-/* assemble.cpp —— COFF → blob（接口与规则见 assemble.h / docs/specs/2026-10-15-simplexc-interfaces.md §4）。
+/* assemble.cc —— COFF → blob（接口与规则见 assemble.hh / docs/specs/2026-10-15-simplexc-interfaces.md §4）。
  *
  * 布局：`[.text][.rdata][.data][.bss][stubs]` 顺序拼接，全部按输入节的对齐要求对齐。
  * 产物内部只允许 PC 相对引用（REL32 家族）→ blob 被游戏 memcpy 到任意地址执行都成立。
@@ -6,7 +6,7 @@
  * ⚠️ 一个刻意的取舍：节的顺序固定，不做「把 .text 放最后」。因为 stub 在 .text 之后，
  *    而条数在链接期才知道；把 stub 并进 .text 段尾比再开一段简单，且 REL32 一定够得着。
  */
-#include "assemble.hpp"
+#include "assemble.hh"
 
 #include <cstdio>
 #include <cstdlib>

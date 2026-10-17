@@ -182,7 +182,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 9. entry 符号 = 手写 shim `__tc_entry`：保存寄存器 + 对齐栈 + `call <llvm_main>` + 收尾（`thread_exit`），
    因为游戏是 `jmp` 进来的、不保证 ABI 对齐（主设计 §5 第 8 条）。
 
-**输入形状已实测（2026-10-16，`simplexc/shell/llvm_link_probe.cpp`）**：
+**输入形状已实测（2026-10-16，`simplexc/shell/llvm_link_probe.cc`）**：
 `x86_64-pc-windows-gnu` + RelocMode=Static + CodeModel=Small + `default<O2>` 下，
 - 节：`.text`/`.data`/`.bss`（空的也在），有栈帧的函数额外带 `.pdata`/`.xdata`；
 - `.text` 重定位**只有** `IMAGE_REL_AMD64_REL32`，出现三种目标：内部函数、未定义 extern、**`___chkstk_ms`**

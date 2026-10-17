@@ -17,7 +17,7 @@
  *      因为调用方是 `call *__imp_X(%rip)`，解引用目标地址 —— 拿代码桩去顶必崩。
  *   4. 内部绝对引用一律不复现（blob 会被拷到任意地址执行），所以产物里**只有 PC 相对引用**。
  *
- * 实现见 `assemble.cpp`；CLI 见 `simplexc/cli/tcblob.cpp`（`--run` 可不进游戏自测一次）。
+ * 实现见 `assemble.cc`；CLI 见 `simplexc/cli/tcblob.cc`（`--run` 可不进游戏自测一次）。
  */
 #pragma once
 

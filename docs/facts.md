@@ -188,7 +188,7 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 `gendef LLVM-C.dll`（1240 个导出）→ `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
 （MSVC 那份 `LLVM-C.lib` 没用上）。运行期靠系统中已有的 MSVC 运行时
 （`vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`）。
-验证：`g++ -std=c++17 -O2 -I build/llvm/include simplexc/shell/llvm_link_probe.cpp -o build/llvm/probe.exe -L build/llvm/lib -lLLVM-C`
+验证：`g++ -std=c++17 -O2 -I build/llvm/include simplexc/shell/llvm_link_probe.cc -o build/llvm/probe.exe -L build/llvm/lib -lLLVM-C`
       编译通过，运行输出 `RESULT: OK`
 最后验证：2026-10-16
 

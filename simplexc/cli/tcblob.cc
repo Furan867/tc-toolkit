@@ -1,4 +1,4 @@
-/* tcblob.cpp —— 装配器的命令行前端（spike 用；agent 日常自测不碰游戏）。
+/* tcblob.cc —— 装配器的命令行前端（spike 用；agent 日常自测不碰游戏）。
  *
  * 用法
  * ----
@@ -13,7 +13,7 @@
  *
  * 外部符号解析：`kernel32.dll` 的导出（`ExitThread` 之类），失败即报错，不静默。
  */
-#include "../assemble/assemble.hpp"
+#include "../assemble/assemble.hh"
 
 #include <windows.h>
 
@@ -24,6 +24,20 @@
 
 namespace {
 
+/* 自测探针的计数器：`--run` 后打印，证明 blob 真的执行到了那一步 */
+struct ProbeState {
+    uint64_t calls = 0;
+    uint64_t last = 0;
+};
+ProbeState g_probe;
+/* 探针：给自测用。blob 里的代码调 `tc_probe_ok(x)` 会落到这里 —— 用它证明
+   「extern 桩 → 宿主函数」这条链真的通了（也能在游戏外用同一份产物对账）。 */
+extern "C" void tc_probe_ok(uint64_t v);
+extern "C" void tc_probe_ok(uint64_t v) {
+    g_probe.calls++;
+    g_probe.last = v;
+}
+
 class Kernel32Resolver : public tc::ExternResolver {
 public:
     bool resolve(std::string_view symbol, uint64_t& addr) override {
@@ -32,6 +46,10 @@ public:
            真正要查的是去掉前缀后的 `ExitThread`。 */
         const std::string imp = "__imp_";
         if (name.rfind(imp, 0) == 0) name = name.substr(imp.size());
+        if (name == "tc_probe_ok") {          /* 自测探针：不经 kernel32 */
+            addr = reinterpret_cast<uint64_t>(&tc_probe_ok);
+            return true;
+        }
         HMODULE k = GetModuleHandleA("kernel32.dll");
         if (!k) return false;
         FARPROC p = GetProcAddress(k, name.c_str());
@@ -100,6 +118,9 @@ int run_blob(const tc::Blob& blob) {
     VirtualFree(dest, 0, MEM_RELEASE);
     std::printf("RUN ok：blob 在 %p 上跑完，线程退出码 %lu（0 = 正常 ExitThread）\n",
                 static_cast<void*>(dest), code);
+    if (g_probe.calls)
+        std::printf("probe：tc_probe_ok 被调用 %llu 次，最后一次参数 = %llu\n",
+                    (unsigned long long)g_probe.calls, (unsigned long long)g_probe.last);
     return 0;
 }
 
@@ -167,6 +188,16 @@ int main(int argc, char** argv) {
         std::fclose(f);
         std::printf("写出 %s（%llu 字节）\n", out_path.c_str(),
                     (unsigned long long)r.blob.out_len());
+        /* entry 偏移不在产物里（它是 Result 的字段）→ 写成 `<blob>.entry`（十六进制），
+           `tools/compile_hook.c` 的自研路径靠它拿到入口。 */
+        std::string epath = out_path + ".entry";
+        FILE* fe = std::fopen(epath.c_str(), "w");
+        if (fe) {
+            std::fprintf(fe, "%llX\n", (unsigned long long)r.blob.entry_off);
+            std::fclose(fe);
+        } else {
+            std::fprintf(stderr, "写不出 %s（壳的自研路径会因无 entry 而回退）\n", epath.c_str());
+        }
     }
     if (run) return run_blob(r.blob);
     return 0;

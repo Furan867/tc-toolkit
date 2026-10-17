@@ -198,6 +198,25 @@ int main(int argc, char** argv) {
         } else {
             std::fprintf(stderr, "写不出 %s（壳的自研路径会因无 entry 而回退）\n", epath.c_str());
         }
+        /* extern 跳板清单（接口冻结版 1.1 增量）：宿主靠它区分「产物自己的跳板落点」
+           与「游戏地址/常量」，并把里面的真实地址换成宿主桩 —— 否则两遍跑的确定性直接没了。
+           TSV：表头 `offset<TAB>kind<TAB>symbol`，offset 是**相对机器码起点**的十六进制小写；
+           `stub` = 12 字节代码桩（宿主改写其中的 imm64，在 offset+2），
+           `slot` = `__imp_X` 的 8 字节数据槽（宿主改写槽内容）。 */
+        std::string spath = out_path + ".stubs";
+        FILE* fs = std::fopen(spath.c_str(), "w");
+        if (fs) {
+            std::fprintf(fs, "offset\tkind\tsymbol\n");
+            for (const tc::StubRef& s : r.stubs) {
+                const char* kind = s.symbol.rfind("__imp_", 0) == 0 ? "slot" : "stub";
+                std::fprintf(fs, "%llx\t%s\t%s\n", (unsigned long long)s.offset, kind,
+                             s.symbol.c_str());
+            }
+            std::fclose(fs);
+            std::printf("写出 %s（%zu 处 extern 跳板）\n", spath.c_str(), r.stubs.size());
+        } else {
+            std::fprintf(stderr, "写不出 %s（宿主会把 extern 桩当未知地址拒跑）\n", spath.c_str());
+        }
     }
     if (run) return run_blob(r.blob);
     return 0;

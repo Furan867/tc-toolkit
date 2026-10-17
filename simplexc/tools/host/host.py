@@ -54,6 +54,8 @@ PAGE_RW, PAGE_RWX = 0x04, 0x40
 ARENA_BASE = 0x100000000          # 确定性 bump 分配器的固定首址（4 GB，x64 用户空间内）
 ARENA_SIZE = 0x10000000           # 256 MB
 ARR_LEN, ARR_CAP_LOG2 = 4096, 13  # 宿主给数组的 len/cap（与游戏给的值可能不同，两遍一致即可）
+EXIT_MAPPED_MOVABS = 2            # 地址表外已映射 movabs：与 tick 失败同码（非 0 即判据失败）
+EXIT_STUB_CONTRACT = 3            # sidecar 与产物对不上 / extern 符号没有宿主桩
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 k32.VirtualAlloc.restype = ctypes.c_void_p
@@ -167,6 +169,63 @@ def movabs_sites(buf):
             yield i, struct.unpack_from("<Q", buf, i)[0]
 
 
+def read_stub_sidecar(path):
+    """读 `<blob>.stubs`（`tcblob` 写的 extern 跳板清单，接口冻结版 1.1 增量）。
+
+    → [(offset, kind, symbol)]，offset 相对机器码起点；缺文件返回 []（老产物照旧跑）。
+    kind 只有两种：`stub` = 12 字节代码桩（`movabs rax,imm64 ; jmp rax`，改写 offset+2 处的 imm64），
+    `slot` = `__imp_X` 的 8 字节数据槽（改写 offset 处的槽内容）。
+    """
+    if not path or not os.path.isfile(path):
+        return []
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
+    except OSError as e:
+        raise SystemExit(f"读不了 {path}：{e}") from e
+    if not rows or rows[0][:3] != ["offset", "kind", "symbol"]:
+        raise SystemExit(f"{path}: 表头不是 offset/kind/symbol")
+    for r in rows[1:]:
+        if len(r) != 3:
+            raise SystemExit(f"{path}: 这一行列数不是 3：{r}")
+        try:
+            off = int(r[0], 16)
+        except ValueError as e:
+            raise SystemExit(f"{path}: offset 不是十六进制：{r[0]}") from e
+        if r[1] not in ("stub", "slot"):
+            raise SystemExit(f"{path}: 未知 kind {r[1]}")
+        out.append((off, r[1], r[2]))
+    return out
+
+
+def sidecar_path_for(bin_path):
+    """与产物同名同目录：`<blob>.stubs`（游戏内路径不用它 —— 壳自己就是解析器）。"""
+    return bin_path + ".stubs"
+
+
+def mapped_region(addr):
+    """addr 在本进程里是否落在**已提交**区间 —— 产物里这样的 movabs 能解引用（spec §6）。
+
+    `classify_abs_addrs.query_mapping`（经 abs_scan 复用）已挡掉两个「VirtualQuery 成功但不是映射」
+    的形状：未分配区间（`State=MEM_FREE`、`AllocationBase=0`，见 docs/pitfalls.md）与 MEM_RESERVE-only
+    区间（`Protect=0`，实测）。能解引用的区间 `Protect` 必非 0。
+    """
+    m = abs_scan.CAA.query_mapping(addr)
+    if m is None or not m["protect"]:
+        return None
+    return m
+
+
+def detour_name(symbol):
+    """sidecar 里的符号名 → detour 表里的名字：`__imp_X` 要去掉前缀。
+
+    与 `cli/tcblob.cc` 的 `Kernel32Resolver::resolve` 同一规则 —— 两处不一致会让
+    「同一个符号一半命中一半不命中」，那种错极难查。
+    """
+    return symbol[6:] if symbol.startswith("__imp_") else symbol
+
+
 def recover_baked_base(code, thunks, game_lo, game_hi):
     """产物里指向 DLL 的地址 = baked_base + thunk_rva → 用投票反推 baked_base。"""
     votes = collections.Counter()
@@ -205,6 +264,15 @@ class Detours:
         cb = SIG(fn)
         self._cbs[fn.__name__] = cb
         return cb
+
+    def addr_for(self, name):
+        """宿主桩的地址（0 = 这个符号没有桩）。
+
+        给 `Host._patch_externs` 用：产物自己的 extern 跳板要指到这里，走的才与 IAT 槽路径
+        **完全同一条**（同一个 handler → 同一个记录格式），两遍跑的 extern 序列才能直接比。
+        """
+        cb = self.handlers.get(name)
+        return ctypes.cast(cb, ctypes.c_void_p).value if cb else 0
 
     def _rec(self, name, args, ret):
         if name in self.PACING:
@@ -287,6 +355,16 @@ class Detours:
         self._rec("__stdio_common_vfprintf", [], 0)
         return 0
 
+    def _create_file(self, _path, *_args):
+        # rt_min.cc 的 spike 记录器用（没它就没有代码桩可接）→ 一律失败：那玩意儿我们不需要，
+        # 而真去开文件会拿真实时间/真实磁盘，两遍跑不可重复。
+        self._rec("CreateFileA", [], 0xFFFFFFFFFFFFFFFF)
+        return 0xFFFFFFFFFFFFFFFF                # INVALID_HANDLE_VALUE
+
+    def _close_handle(self, _h, *_args):
+        self._rec("CloseHandle", [_h], 1)
+        return 1
+
     def _make_handlers(self):
         self.handlers = {
             "ExitThread": self._cb(self._exit_thread),
@@ -300,17 +378,23 @@ class Detours:
             "fwrite": self._cb(self._fwrite),
             "_write": self._cb(self._write),
             "__stdio_common_vfprintf": self._cb(self._vfprintf),
+            "CreateFileA": self._cb(self._create_file),
+            "CloseHandle": self._cb(self._close_handle),
         }
 
 
 class Host:
-    def __init__(self, spec, blob, entry_off, budget=120.0, dump_dir=None, verbose=True):
+    def __init__(self, spec, blob, entry_off, budget=120.0, dump_dir=None, verbose=True,
+                 stub_path=None):
         self.spec = spec
         self.blob = blob
         self.entry = entry_off
         self.budget = budget
         self.dump_dir = dump_dir
         self.verbose = verbose
+        # extern 跳板清单（`<blob>.stubs`，可能不存在 → 老行为：产物里不许有 extern 桩）
+        self.stub_path = stub_path
+        self.stub_decl = read_stub_sidecar(stub_path)
 
         self.regions = []
         self.baseline = {}
@@ -324,9 +408,13 @@ class Host:
         self.baked = 0
         self.dll_base = 0
         self.rebased = 0
-        self.stats = {"game": 0, "dll": 0, "const": 0, "unknown": 0}
+        self.stats = {"game": 0, "dll": 0, "const": 0, "unknown": 0, "stubs": 0,
+                      "slots": 0}
         self.game_like = []
         self.unexplained = []
+        self.stub_hits = []              # [(offset, 桩地址, 符号, 0)]（`_scan_product` 里填）
+        self.stub_patched = []           # [(offset, kind, 符号, 宿主桩地址)]（`_patch_externs` 里填）
+        self.extern_patched = 0
 
     # -- 准备 ------------------------------------------------------------
     def setup(self):
@@ -362,7 +450,15 @@ class Host:
                   f"实际 0x{self.dll_base:X}，delta 0x{self.dll_base - self.baked:X}", file=sys.stderr)
 
         game_like, unexplained = [], []
-        for _off, v in movabs_sites(code):
+        stub_at = {off: sym for off, kind, sym in self.stub_decl if kind == "stub"}
+        for off, v in movabs_sites(code):
+            sym = stub_at.get(off - 2)
+            if sym is not None:
+                # extern 代码桩：它是产物**自己**造的跳板，不是「游戏地址」也不是未知地址。
+                # 地址由 `_patch_externs` 换成宿主桩（不换就是真 kernel32 调用，两遍跑必不同）。
+                self.stats["stubs"] += 1
+                self.stub_hits.append((off, v, sym, 0))
+                continue
             if lo - BAND <= v <= hi + BAND:
                 game_like.append(v)
             elif self.baked and self.baked <= v < self.baked + self.pe.image_size:
@@ -370,16 +466,55 @@ class Host:
             elif v in self.spec.literals:
                 self.stats["const"] += 1
             else:
-                unexplained.append(v)
+                unexplained.append((off, v))
         self.stats["game"] = len(game_like)
         self.stats["unknown"] = len(unexplained)
         self.game_like = game_like
-        self.unexplained = sorted(set(unexplained))
+        self.unexplained = sorted({v for _off, v in unexplained})
+        self.stats["slots"] = sum(1 for _o, k, _s in self.stub_decl if k == "slot")
         if self.verbose:
+            extra = (f"、extern 跳板 {self.stats['stubs']} 桩/{self.stats['slots']} 槽"
+                     f"（{self.stub_path}）" if self.stub_decl else "")
             print(f"[host] movabs：游戏段 {self.stats['game']}、DLL {self.stats['dll']}、"
-                  f"常量 {self.stats['const']}、未解释 {self.stats['unknown']}"
+                  f"常量 {self.stats['const']}、未解释 {self.stats['unknown']}{extra}"
                   + (f"（例 {[hex(v) for v in self.unexplained[:4]]}）"
                      if unexplained else ""), file=sys.stderr)
+        self._check_stub_contract()
+        self._reject_mapped_movabs(unexplained)
+
+    def _check_stub_contract(self):
+        """sidecar 说了有 `stub` 跳板，就得到那个偏移上真的找到 `movabs rax,imm64`。
+
+        对不上说明 sidecar 与产物不是一对（旧的 `.stubs` 配新产物之类）—— 那种情况下
+        「哪些 movabs 是跳板」的判定已经错了，必须吵，不能接着跑。
+        """
+        found = {off - 2 for off, _v, _s, _a in self.stub_hits}
+        missing = [(o, s) for o, kind, s in self.stub_decl if kind == "stub" and o not in found]
+        if missing:
+            for o, s in missing:
+                print(f"[host] 硬错误：sidecar 声明 0x{o:X} 是 {s} 的代码桩，那里没有 movabs",
+                      file=sys.stderr, flush=True)
+            raise SystemExit(EXIT_STUB_CONTRACT)
+
+    def _reject_mapped_movabs(self, sites):
+        """地址表外 + 本进程已映射的立即数 = 能解引用 → 会静默读错内存 → 宿主报错退出（spec §6）。
+
+        只在**未映射**时才退化成统计：实测每份参考产物都有 4 处大整数常量
+        （`0x2540be400`、`0x19db1ded53e8000` 之类），它们本来就该被忽略。
+        """
+        hits = [(off, v, m) for off, v in sites if (m := mapped_region(v)) is not None]
+        if not hits:
+            return
+        for off, v, m in hits:
+            where = (f"{m['mapped']} alloc_base=0x{m['alloc_base']:X}" if m["mapped"]
+                     else f"私有区 type=0x{m['type']:X} protect=0x{m['protect']:X}"
+                          f" alloc_base=0x{m['alloc_base']:X}")
+            print(f"[host] 硬错误：机器码 +0x{off:X}（指令 +0x{off - 2:X}）的 movabs 立即数 "
+                  f"0x{v:X} 落在本进程已映射区间（{where}，区间 0x{m['base']:X}+0x{m['size']:X}）",
+                  file=sys.stderr, flush=True)
+        print(f"[host] 共 {len(hits)} 处地址表外且已映射的 movabs —— 能解引用、会静默读错内存"
+              f"（spec §6），宿主拒绝运行", file=sys.stderr, flush=True)
+        raise SystemExit(EXIT_MAPPED_MOVABS)
 
     def _map_game_memory(self):
         addrs = self.spec.all_addrs() + self.game_like
@@ -442,8 +577,45 @@ class Host:
                 n += 1
         return bytes(buf), n
 
+    def _patch_externs(self, code):
+        """把产物**自己造的** extern 跳板里的真实地址换成宿主桩地址（sidecar 说了哪几处）。
+
+        为什么必须改：不改就是真的 `kernel32!Sleep` / 真 `ExitThread` —— 前者引入真实时间
+        （两遍跑必不同），后者直接杀掉宿主线程。改完之后产物走的是与 IAT 槽路径**同一个**
+        handler，所以两边的 extern 序列可以直接逐条比。
+        未命中 detour 表 → 报符号名退出（宁可吵，不把不可控的真调用放进去）。
+        """
+        if not self.stub_decl:
+            return code, 0
+        buf = bytearray(code)
+        n = 0
+        miss = []
+        hits = []
+        for off, kind, sym in self.stub_decl:
+            proc = detour_name(sym)
+            addr = self.detours.addr_for(proc)
+            if not addr:
+                miss.append((off, kind, sym))
+                continue
+            at = off + 2 if kind == "stub" else off     # `movabs rax,imm64` 的 imm64 / 槽内容
+            if at + 8 > len(buf):
+                raise SystemExit(f"[host] sidecar 的 0x{off:X} {sym} 落在产物外")
+            struct.pack_into("<Q", buf, at, addr)
+            hits.append((off, kind, sym, addr))
+            n += 1
+        if miss:
+            for off, kind, sym in miss:
+                print(f"[host] extern 跳板没有宿主桩：0x{off:X} ({kind}) {sym}" + "\n" +
+                      "       → 不能放真实调用进去（两遍跑的确定性会没）；补 detour 或别链它。",
+                      file=sys.stderr, flush=True)
+            raise SystemExit(EXIT_STUB_CONTRACT)
+        # 记回明细：扫到的那批（在 `_scan_product` 里已有偏移/桩地址）对上宿主桩地址
+        self.stub_patched = hits
+        return bytes(buf), n
+
     def _start_thread(self):
         code, self.rebased = self._rebase(self.blob[8:])
+        code, self.extern_patched = self._patch_externs(code)
         self.code_alloc = mem_alloc(0, len(code) + PAGE, PAGE_RWX)
         ctypes.memmove(self.code_alloc, code, len(code))
         self.entry_addr = self.code_alloc + self.entry
@@ -462,9 +634,11 @@ class Host:
         if not self.thread:
             raise SystemExit(f"CreateThread 失败 err={ctypes.get_last_error()}")
         if self.verbose:
+            extra = [f"{k} {s}" for _o, k, s, _a in self.stub_patched]
             print(f"[host] 线程已起：代码 @0x{self.code_alloc:X}，entry +0x{self.entry:X} → "
-                  f"0x{self.entry_addr:X}（经 trampoline @0x{tramp:X}），重定位 {self.rebased} 处",
-                  file=sys.stderr)
+                  f"0x{self.entry_addr:X}（经 trampoline @0x{tramp:X}），重定位 {self.rebased} 处"
+                  + (f"，extern 跳板换桩 {self.extern_patched} 处 {extra}"
+                     if self.extern_patched else ""), file=sys.stderr)
 
     # -- 执行 ------------------------------------------------------------
     def alive(self):
@@ -618,7 +792,7 @@ def main(argv=None):
     entry = int(args.entry, 0) if args.entry else entry_from_manifest(args.bin)
 
     host = Host(spec, blob, entry, budget=args.budget, dump_dir=args.dump_pages,
-                verbose=not args.quiet)
+                verbose=not args.quiet, stub_path=sidecar_path_for(args.bin))
     install_veh(lambda: host.code_alloc, lambda: host.dll_base)   # 必须早于起线程
     host.setup()
     reason = "ok"

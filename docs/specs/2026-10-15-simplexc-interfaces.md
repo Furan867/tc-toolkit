@@ -2,7 +2,10 @@
 
 - 日期：2026-10-16
 - 状态：**冻结版 1**（负责人 2026-10-16 批准三处取舍：runtime 目标码随 blob 装配 / blob 内部禁止绝对重定位 /
-  corpus 的 `.bin` 不进 git）
+  corpus 的 `.bin` 不进 git）。
+  **版本 1.1（2026-10-17，增量）**：`AsmResult` 加 `stubs`（§4）+ 宿主 `stub` sidecar 协议（§6）——
+  跨 boot 的 extern 解析让「产物里的 movabs 落在宿主镜像里」成为正常形态，原先的硬错误判据会把自己的产物挡住；
+  同时 stub 不接桩 = 两遍跑没有确定性。改动理由与实现证据见 `docs/notes/2026-10-17-m1.5-probe.md`。
 - 上游（唯一权威，本文件不复制其内容）：
   - 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 §2/§4、语义保真 §5、验证 §7、工作流 §8、里程碑 §9）
   - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（变体轴、归属语义、`hook.log` 迁移）
@@ -158,7 +161,8 @@ struct Blob {
   uint64_t entry_off;           // 相对机器码起点（= 相对 blob+8）
 };
 enum class AsmStatus { Ok, BadObject, UndefinedSymbol, UnsupportedReloc, TooLarge };
-struct AsmResult  { AsmStatus status; Blob blob; std::string detail; };
+struct StubRef    { uint64_t offset; std::string symbol; };   // offset 相对机器码起点；顺序 = 造桩顺序
+struct AsmResult  { AsmStatus status; Blob blob; std::string detail; std::vector<StubRef> stubs; };
 
 AsmResult assemble(const std::vector<ObjectFile>& objs,
                    std::string_view entry_symbol,       // = 我们的 shim 符号 __tc_entry
@@ -240,6 +244,13 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
   **不是 kernel32 自身的地址**。所以宿主必须 **`LoadLibrary` 真 `compile_real.dll`** → 把产物里 baked 基址
   重定位到实际加载基址（加 delta）→ 把 DLL 的 **IAT 槽**换成宿主桩；桩记录 `{name, args, ret}` 进快照。
   取证见 `docs/facts.md` §「参考产物会直接调用 compile_real.dll 里的运行时函数」+ `docs/notes/2026-10-17-m2-host-design.md`。
+- **`stub` sidecar（版本 1.1 增量）**：**我们自己的**产物形态不同 —— 装配器把未定义符号解析成 `.text` 尾部的
+  `movabs rax, imm64 ; jmp rax` 代码桩（以及 `__imp_*` 的 8 字节数据槽），`imm64` 是**编译期**在别的进程里
+  `GetProcAddress` 得的绝对地址（`Sleep` 等）→ 它会落在宿主进程里「已映射但不在地址表内」的位置，
+  正好撞上下面那条硬错误判据，**而且不接桩就没有两遍跑的确定性**。所以：装配/CLI 在产物旁写
+  `<blob>.stubs`（TSV：`offset<TAB>kind<TAB>symbol`，`kind ∈ {stub, slot}`，`offset` 相对机器码起点），
+  宿主读了它就把这些位置按符号接到自己的桩上（记录格式与 IAT 槽路径**完全一致**，否则 extern 序列不可比）；
+  命中不了桩的符号 → 报名字并非 0 退出。**游戏内不需要 sidecar** —— 壳自己用 `GetProcAddress` 填桩。
 - **命令驱动**（依据主设计 §7.1）：命令块在游戏内存里（`commands[...]`/`settings[...]`），
   驱动方把 `sim_target_cycle` 依次设为 `1,2,3,…` 并递增 `ctl_command_id` 发 `SimCommand.run`
   → 每次 `run` 返回即一个 tick 边界。

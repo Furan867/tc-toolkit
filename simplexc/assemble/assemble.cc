@@ -8,6 +8,7 @@
  */
 #include "assemble.hh"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,8 +37,8 @@ struct Reloc {
 struct Section {
     std::string name;
     uint32_t chars = 0;
-    uint64_t vsize = 0;                 /* .bss 用它当大小 */
-    std::vector<uint8_t> data;
+    uint64_t size = 0;                  /* 节在产物里占的字节数（规则见 parse_coff） */
+    std::vector<uint8_t> data;          /* 文件里的原始数据；没有原始数据的节（.bss）为空 */
     std::vector<Reloc> relocs;
     uint32_t align = 16;
 };
@@ -99,14 +100,22 @@ bool parse_coff(const ObjectFile& f, Obj& o, std::string& err) {
             std::string raw(reinterpret_cast<const char*>(sh), 8);
             s.name = raw.c_str();
         }
-        s.vsize = r32(sh + 8);
+        uint32_t vsize = r32(sh + 8);
         uint32_t raw_size = r32(sh + 16);
         uint32_t raw_ptr = r32(sh + 20);
         uint32_t rel_ptr = r32(sh + 24);
         uint32_t nrel = r16(sh + 32);
         s.chars = r32(sh + 36);
         s.align = align_from_chars(s.chars);
-        if (raw_size) {
+        /* 节在产物里占多少字节。COFF **对象文件**里 `VirtualSize` 是 0（实测 clang 与 gcc
+           都如此），大小在 `SizeOfRawData`。 */
+        s.size = (std::max)(uint64_t(raw_size), uint64_t(vsize));
+        /* `PointerToRawData == 0` 的节在文件里**没有原始数据**（`.bss` 的标准形态，内容隐含
+           全 0）—— 绝不能读：偏移 0 是 COFF 头（含编译时间戳），照读会把头和编译时刻当数据
+           搬进产物，于是同一源码两次编译的产物不再逐字节相同、`.bss` 的初值成了垃圾而不是 0
+           （`docs/notes/2026-10-17-assemble-bss.md`）。留空即可：payload 本来就是零初始化的，
+           上面 `size` 字节的零就是它该有的内容。 */
+        if (raw_size && raw_ptr) {
             if (size_t(raw_ptr) + raw_size > b.size()) { err = "节内容越界：" + s.name; return false; }
             s.data.assign(b.begin() + raw_ptr, b.begin() + raw_ptr + raw_size);
         }
@@ -206,12 +215,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
                     uint64_t a = parsed[i].secs[s].align ? parsed[i].secs[s].align : 1;
                     off = (off + a - 1) / a * a;
                     sec_base[i][s] = off;
-                    uint64_t sz = parsed[i].secs[s].data.size();
-                    if (classify(parsed[i].secs[s].name) == Cls::Bss) {
-                        sz = parsed[i].secs[s].vsize ? parsed[i].secs[s].vsize
-                                                     : parsed[i].secs[s].data.size();
-                    }
-                    off += sz;
+                    off += parsed[i].secs[s].size;
                     any = true;
                 }
             }
@@ -276,7 +280,13 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
             }
         }
         info.resolved = ok;
-        if (ok) res.stub_count++;
+        if (ok) {
+            res.stub_count++;
+            /* 记下落点：`cli/tcblob.cc` 拿它写 `<blob>.stubs` sidecar，宿主靠它
+               认出「这处 movabs 是 extern 跳板，不是游戏地址」并把地址换成宿主桩。
+               未解析的不记 —— 那种情况下 assemble() 本来就是失败返回，没有产物。*/
+            res.stubs.push_back(StubRef{info.addr, name});
+        }
         place_of.emplace(name, info);
         addr = info.addr;
         return ok;
@@ -325,12 +335,12 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
             const Section& sec = o.secs[s];
             uint64_t base = sec_base[i][s];
             if (base != UINT64_MAX) {
-                uint64_t sz = sec.data.size();
+                uint64_t sz = sec.size;
                 switch (classify(sec.name)) {
                     case Cls::Text:  res.text_size += sz; break;
                     case Cls::RData: res.rdata_size += sz; break;
                     case Cls::Data:  res.data_size += sz; break;
-                    case Cls::Bss:   res.bss_size += (sec.vsize ? sec.vsize : sz); break;
+                    case Cls::Bss:   res.bss_size += sz; break;
                     case Cls::Drop:  break;
                 }
             }
@@ -409,7 +419,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
     /* ---- 6. 头 + 机器码 ---- */
     uint64_t out_len = 8 + payload.size();
     if (out_len > opt.max_blob) {
-        res.status = AsmStatus::BadObject;
+        res.status = AsmStatus::TooLarge;
         res.detail = "产物超过上限";
         return res;
     }

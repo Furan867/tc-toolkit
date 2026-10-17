@@ -1477,7 +1477,7 @@ class Lower:
             return V(None, VOID)
         if name == 'memory_copy':
             if len(node.args) != 3:
-                raise Unsupported("memory_copy(dst, src, n) 的形态", node.src_line)
+                raise Unsupported("memory_copy(src, dst, n) 的形态", node.src_line)
             fn = self.ensure_prefix_fn('memory_copy', VOID, [PTR, PTR, I64])
             self._emit_call(fn, [self.llv(self.e(node.args[0])),
                                  self.llv(self.e(node.args[1])),
@@ -1569,8 +1569,8 @@ class Lower:
 
     def _body_memory_copy(self, param_tys):
         L = self.L
-        dst = L.BuildIntToPtr(self.bd, L.GetParam(self.fnref, 0), self.ptr, "dp0")
-        src = L.BuildIntToPtr(self.bd, L.GetParam(self.fnref, 1), self.ptr, "sp0")
+        src = L.BuildIntToPtr(self.bd, L.GetParam(self.fnref, 0), self.ptr, "sp0")
+        dst = L.BuildIntToPtr(self.bd, L.GetParam(self.fnref, 1), self.ptr, "dp0")
         slot, head, n = self._byte_loop_prologue(2)
         i = self.load_addr(slot, I64)
         cnd = L.BuildICmp(self.bd, L.IULT, self.llv(i), n, "lt")

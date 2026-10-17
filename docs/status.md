@@ -41,13 +41,18 @@
 
 **M1 spike：装配链路已跑通（进程内自测），未进游戏**（2026-10-17）
 - `LLVM-C.dll` 已取到并**用 MinGW 链上**（`gendef` + `dlltool` 造导入库）；`LLVMRunPasses(default<O2>)` +
-  `LLVMTargetMachineEmitToMemoryBuffer(ObjectFile)` 拿到 COFF 字节（`simplexc/shell/llvm_link_probe.cpp`）。
+  `LLVMTargetMachineEmitToMemoryBuffer(ObjectFile)` 拿到 COFF 字节（`simplexc/shell/llvm_link_probe.cc`）。
 - **装配器可用**：`simplexc/assemble/`（COFF 解析 → 节归并/丢弃 → REL32 打补丁 → extern 桩与 `__imp_` 指针槽
   → 8 字节头 + bit62 + entry）。`simplexc/shell/entry_shim.S`（入口 shim + `___chkstk_ms`）、
-  `simplexc/runtime/rt_min.cpp`（`thread_exit`）、`simplexc/cli/tcblob.cpp`（CLI + `--run` 自测）。
+  `simplexc/runtime/rt_min.cc`（`thread_exit`）、`simplexc/cli/tcblob.cc`（CLI + `--run` 自测）。
 - 判据（已跑）：`tcblob --obj rt_min.o --obj entry_shim.o --obj prog_empty.o --entry __tc_entry --run`
   → `RUN ok：blob 在 … 上跑完，线程退出码 0`；产物 128 字节，头 = `0x80 | bit62`，entry=0x10。
-- 仍未做：把 LLVM 模块接进来（`tc_main` 由 LLVM 提供）、游戏内实跑、壳的三模式开关。
+- **已部署并等游戏内验证**（2026-10-17）：游戏目录 `compile.dll` = 新转发层（md5 与 `build/compile_hook.dll` 一致），
+  `opt.ini` 里 `compiler = ours`（spike：不编译源码，直接返回预装配的空程序 blob `build/blob_empty.bin`）。
+  判据（负责人启动游戏、触发一次编译后查）：`work/hook/manifest.tsv` 新行 `impl=ours`、捕获产物的 sha256
+  = `0198cdb5d624d3305f2d47568f1d27c293e9605780c87831921270b0c2a1b751`、产物头带 bit62、游戏进程存活。
+  回退：把 `opt.ini` 的 `compiler` 改成 `reference`（**不用重新部署**，壳每次编译都重读该键）。
+- 仍未做：LLVM 模块接进壳（现在壳用的是预装配 blob）、VEH 熔断、游戏内差分（M2）。
 
 ### 下一步（已决定）
 

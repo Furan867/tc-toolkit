@@ -47,11 +47,15 @@
   `simplexc/runtime/rt_min.cc`（`thread_exit`）、`simplexc/cli/tcblob.cc`（CLI + `--run` 自测）。
 - 判据（已跑）：`tcblob --obj rt_min.o --obj entry_shim.o --obj prog_empty.o --entry __tc_entry --run`
   → `RUN ok：blob 在 … 上跑完，线程退出码 0`；产物 128 字节，头 = `0x80 | bit62`，entry=0x10。
-- **已部署并等游戏内验证**（2026-10-17）：游戏目录 `compile.dll` = 新转发层（md5 与 `build/compile_hook.dll` 一致），
-  `opt.ini` 里 `compiler = ours`（spike：不编译源码，直接返回预装配的空程序 blob `build/blob_empty.bin`）。
-  判据（负责人启动游戏、触发一次编译后查）：`work/hook/manifest.tsv` 新行 `impl=ours`、捕获产物的 sha256
-  = `0198cdb5d624d3305f2d47568f1d27c293e9605780c87831921270b0c2a1b751`、产物头带 bit62、游戏进程存活。
-  回退：把 `opt.ini` 的 `compiler` 改成 `reference`（**不用重新部署**，壳每次编译都重读该键）。
+- **已部署，但第一次进游戏把游戏卡住了**（2026-10-17，负责人报告“无法启动”）：
+  12:13:12 游戏确实调到我们的产物并接受了（`manifest.tsv` 该行 `impl=ours`、产物 sha256 = 我们的 blob、
+  `hook.log` 有 `impl=ours result=ok`），Windows Application 日志里**没有崩溃事件**（不是崩，是空程序
+  驱动不了仿真：启动时的“地图电路”编译拿到空程序后地图构建不出来 → 看着像卡死）。
+  `opt.ini` 已改回 `compiler = reference`。
+- **下一次进游戏的协议（避免再卡住启动）**：先用 `reference` 启动游戏 → 跑起来后再把 `compiler` 改成 `ours`
+  → 在**小电路的沙盒**里只触发一次编译 → 查 `work/tmp/blob_ran.log` 出现 `blob ran, tag=23063`
+  （blob 里 `tc_spike_mark` 的可观测副作用，同样是「游戏进程内真跑到了」的硬证据）+ 进程存活
+  → 改回 `reference` 再编译一次恢复。blob 当前 sha256 `3b378baa…`（含 marker，728 字节）。
 - 仍未做：LLVM 模块接进壳（现在壳用的是预装配 blob）、VEH 熔断、游戏内差分（M2）。
 
 ### 下一步（已决定）

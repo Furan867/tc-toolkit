@@ -374,13 +374,21 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
                     res.detail = "重定位落在节外";
                     return res;
                 }
-                uint32_t addend = r32(payload.data() + site);
+                /* COFF 的 addend **是有符号的**：GCC 会用 -1 表示「字面量地址减一」的偏置
+                   （它的复制循环再从 +1 读回），当无符号算会直接溢出 ±2GB。 */
+                int32_t addend = int32_t(r32(payload.data() + site));
                 /* COFF：值 = S + A - (P + 4 + n)，n 由 REL32_n 变体给出 */
                 int64_t delta = int64_t(target) + int64_t(addend) -
                                 int64_t(site + 4 + (r.type - REL_REL32));
                 if (delta < INT32_MIN || delta > INT32_MAX) {
+                    char buf[256];
+                    std::snprintf(buf, sizeof buf,
+                                  "%s+0x%X 的 REL32 超出 ±2GB：符号 %s target=0x%llX "
+                                  "site=0x%llX addend=%d",
+                                  sec.name.c_str(), r.offset, nm.c_str(),
+                                  (unsigned long long)target, (unsigned long long)site, addend);
                     res.status = AsmStatus::UnsupportedReloc;
-                    res.detail = "REL32 超出 ±2GB（blob 太大？）";
+                    res.detail = buf;
                     return res;
                 }
                 int32_t d32 = int32_t(delta);

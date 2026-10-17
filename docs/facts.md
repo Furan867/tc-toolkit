@@ -202,6 +202,14 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 验证：跑 `build/llvm/probe.exe build/llvm/probe_obj.obj` 后 `objdump -h/-t/-r build/llvm/probe_obj.obj`
 最后验证：2026-10-16
 
+### COFF 的 REL32 addend 是**有符号**的
+`IMAGE_REL_AMD64_REL32` 的字段内容按有符号 32 位参与 `S + A - (P + 4)`；GCC 会用 `A = -1` 表示
+「字面量地址减一」的偏置（它的逐字节复制循环从 `[r8 + i + 1]` 读回）。当无符号算，每处这类引用都会
+溢出 ±2GB。
+验证：`simplexc/assemble/assemble.cc` 里的 `int32_t addend = int32_t(r32(...))`；
+      `build/objs/rt_min.o` 的 `.text+0x27`（字段 `FF FF FF FF`，对 `.rdata`）与 w64devkit `ld` 链接后的位移一致
+最后验证：2026-10-17
+
 ## 组件映射
 
 ### 映射原理

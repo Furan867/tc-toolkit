@@ -203,6 +203,19 @@
       复跑观测：`PYTHONIOENCODING=utf-8 python simplexc/tools/host/host.py --src work/tmp/ul1/q2_store_unaligned.si --bin work/tmp/ul1/q2_store_unaligned.bin --ticks 1 --entry 0x212F --out <x>.jsonl --dump-pages <d>` → 页内字节 `aa 88 77 66 55 44 33 22 11 aa…`
 最后验证：2026-10-17
 
+### U-L7：位宽是**真语义** —— 转换与运算结果都按 `(1<<N)-1` 掩码
+- `U8 (250 + 10)` = `0x04`；`U1 (1 + 1)` = `0`；运行期值同样（`U8 (3000)` = `0xB8`、`U5 (33)` = `1`）。
+- 截断发生在**运算结果类型**上：`U5 31 + U5 1` = `0`，而 `U64 (U5 31) + U64 1` = `32`。
+- 非 2 的幂宽度**全部掩码**，含 33 位：`U33 0xFFFFFFFFF` → `0x1FFFFFFFF`，`2^33` → `0`。
+- 提升按**源类型的符号性**：`U64 (U32 0xFFFFFFFF)` 零扩展；`U64 (S32 -1)`、`S64 (S8 -1)`、`U64 (S8 -1)`
+  符号扩展；`S64 (U8 0xFF)` 零扩展。
+- `store(p, v)` 写入宽度 = `v` 类型的字节宽度（预填 `0xFF` 后 `store(p, U32 …)` 只覆盖 4 字节）。
+- 窄读掩码：`0xFF` 读成 `U5`→`0x1F`、`U3`→`0x07`、`U7`→`0x7F`、`U1`→`0x01`、`U8`→`0xFF`。
+- → lowering：**不要**用 LLVM 原生 `iN`（N∉{8,16,32,64}）承载这些宽度（后端对非标准宽度的假设不可控），
+  用「按 64/32 位算 + 显式掩码」，掩码点就两处：**转换**与**运算结果**。
+验证：`simplexc/dossier/ul7_promote_truncate.md`（7 片段 × 3 tick，`evidence.txt` 21 行 ok，字节证据在 `bytes.txt`）
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

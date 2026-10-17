@@ -74,3 +74,8 @@
 - 别把 `hook_src_NNN.si` 当成「我切到的那个电路」—— 它是**触发编译那一刻**游戏生成的源码。
   实测 008 是 `get_component_count() = 0`、`mode_refresh()` 空、`Input {}`/`Output {}` 的空电路
   （退出游戏时编的），每 tick 只 `cycle += 1`。拿到捕获先看 `get_component_count()` 与 `mode_refresh()` 再动手。
+- 别把 `tools/try_compile_dll.py` 的输出接到 `| head` 这类会提前退出的管道 —— 进程可能在刷新
+  `work/compile_out.bin` 之前就被杀，你拿到的是上一次/别人的产物（实测：9119 字节，头部 `0x239F`
+  正好是**别人**的 out_len），表现为产物一跑就 `thread_exit`，看着像语义问题。
+- `work/compile_out.bin` 是**共享路径**，多个任务同时编译会互相覆盖。判据必须「编译完先核对
+  `out[0] == 文件大小`，再 `cp` 到自己的名字」，然后只认自己那份。

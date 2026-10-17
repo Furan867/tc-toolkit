@@ -32,6 +32,10 @@ ARR_RE = re.compile(r"^\s*(?:var\s+(\w+)|const\s+#(\w+))\s*=\s*raw_cast\(\s*<Arr
                     re.M)
 NUM_RE = re.compile(r"0[xX][0-9a-fA-F]+|\b\d+\b")
 
+# `#RESET_DATA_*` 是「内存镜像的初值」那一组（`reset_sim` 每 tick 把它拷进 `#DATA_*`）。
+# 生成器按这个前缀区分三种块：`#DATA_*`（工作副本）/ `#RESET_DATA_*`（初值）/ `#SETTINGS_*`。
+RESET_DATA_PREFIX = "RESET_DATA_"
+
 # 元素宽度（字节）：只列语料里 Arr[...] 出现过的类型
 ELEM_SIZE = {"U64": 8, "Int": 8, "U32": 4, "U16": 2, "U8": 1, "Char": 1, "Bool": 1, "S64": 8,
              "S32": 4, "S16": 2, "S8": 1, "Uint": 8, "Sint": 8}
@@ -43,6 +47,7 @@ class SimSpec:
         self.scalars = []        # [(名字, 地址)]
         self.blocks = []         # [(名字, 地址, 块首回退字节, c_alloc 声明的字节数)]
         self.ranges = []         # [(lo, hi)]：memory_copy/memory_clear 实参算出的绝对区间
+        self.reset_copies = []   # [(声明名, 块首, 字节数)]：`memory_copy(#RESET_DATA_*, …)` 的**源**区间
         self.arrays = []         # [(名字, 地址, 元素字节)]
         self.literals = set()    # 源码里出现过的整数（判"这个立即数是常量不是地址"）
         self.path = ""
@@ -92,12 +97,15 @@ class SimSpec:
             self.ranges.append((lo, lo + int(m.group(3))))
         for m in MEMCOPY_RE.finditer(text):
             n = int(m.group(5))
-            for name, back in ((m.group(1), m.group(2)), (m.group(3), m.group(4))):
+            for idx, (name, back) in enumerate(((m.group(1), m.group(2)),
+                                                (m.group(3), m.group(4)))):
                 a = namemap.get(name)
                 if a is None:
                     continue
                 lo = a - int(back or 0)
                 self.ranges.append((lo, lo + n))
+                if idx == 0 and name.startswith(RESET_DATA_PREFIX):
+                    self.reset_copies.append((name, lo, n))
 
     # -- 查询 ------------------------------------------------------------
     def enum(self, name):
@@ -116,6 +124,34 @@ class SimSpec:
 
     def all_addrs(self):
         return [a for _n, a in self.scalars] + [a for _n, a, _s in self.arrays]
+
+    def named_addrs(self):
+        """[(名字, 地址)] —— 所有已声明对象（标量 + 数组），给「灌图案不许盖住别的对象」那条检查用。"""
+        return list(self.scalars) + [(n, a) for n, a, _e in self.arrays]
+
+    @property
+    def reset_data_blocks(self):
+        """[(名字, 块首, 字节数)] —— `#RESET_DATA_*` 那几块「内存镜像初值」的**实际区间**。
+
+        以 `memory_copy(#RESET_DATA_* − back, …, n)` 的**源**实参为准（宿主映射范围用的也是它，
+        见 `regions()`）：程序拷走的正是 [块首, 块首+n)。不能按 `c_alloc(N)` 的 N：声明块的
+        块首比程序用的记录地址低 2048，而记录窗口是 [记录, 记录+N) = [块首+2048, 块首+2048+N)，
+        两者只重叠前 N−2048 字节 —— rv32im 的 4620 组（`c_alloc(128)`）与 1757 组
+        （`c_alloc(1024)`）**一字节都重叠不到**，灌了等于没灌（rv32im 那 4 个组的 `n` 都比 N 多 4096）。
+
+        没有被任何 `memory_copy` 引用的 `#RESET_DATA_*` 退化成声明块（`c_alloc(N)` 的 N 字节）。
+        """
+        out, covered = [], set()
+        for name, lo, size in self.reset_copies:
+            if (name, lo) in covered:
+                continue
+            covered.add((name, lo))
+            out.append((name, lo, size))
+        seen = {n for n, _lo, _sz in out}
+        for name, addr, back, size in self.blocks:
+            if name.startswith(RESET_DATA_PREFIX) and name not in seen:
+                out.append((name, addr - back, size))
+        return out
 
     def regions(self):
         """[(lo, hi)] —— 宿主该映射的绝对区间（未页对齐）。

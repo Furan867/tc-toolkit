@@ -131,6 +131,10 @@ def main(argv=None):
     ap.add_argument("--budget", type=float, default=60.0)
     ap.add_argument("--region-hash-every", type=int, default=1, metavar="N",
                     help="透传给两条宿主命令（默认 1 = 每个 tick 都比段哈希；N>1 时只比 N 的倍数那个 tick）")
+    ap.add_argument("--seed-reset-data", default=None, choices=("seq", "xorshift"), metavar="PATTERN",
+                    help="透传给**两条**宿主命令，跑之前把 `#RESET_DATA_*` 填成确定性图案"
+                         "（默认不灌 = 全零的历史行为；见 host.py `_seed_reset_data`）。"
+                         "两边必须同一个值 —— 图案不同的话段哈希/pages 必报差异，那不是合法判据。")
     ap.add_argument("--workdir", default=None, help="中间文件目录（默认系统临时目录）")
     ap.add_argument("--report", default=None, help="机器可读报告写到这个 JSON")
     ap.add_argument("--keep", action="store_true", help="保留中间 JSONL")
@@ -150,12 +154,16 @@ def main(argv=None):
 
     spec = simspec.SimSpec.parse(args.src)
     report = {"src": args.src, "bin": args.bin, "entry": args.entry,
-              "ticks_requested": args.ticks}
-    extra = ["--entry", args.entry] if args.entry else None
+              "ticks_requested": args.ticks, "seed_reset_data": args.seed_reset_data}
+    extra = []
+    if args.entry:
+        extra += ["--entry", args.entry]
     if args.region_hash_every != 1:
-        extra = (extra or []) + ["--region-hash-every", str(args.region_hash_every)]
-    pa = run_host(args.src, args.bin, args.ticks, a_out, args.budget, extra)
-    pb = run_host(args.src, args.bin, args.ticks, b_out, args.budget, extra)
+        extra += ["--region-hash-every", str(args.region_hash_every)]
+    if args.seed_reset_data:
+        extra += ["--seed-reset-data", args.seed_reset_data]
+    pa = run_host(args.src, args.bin, args.ticks, a_out, args.budget, extra or None)
+    pb = run_host(args.src, args.bin, args.ticks, b_out, args.budget, extra or None)
     report["returncodes"] = [pa.returncode, pb.returncode]
     a, b = read_snaps(a_out), read_snaps(b_out)
     report["ticks_a"] = len(a)
@@ -200,6 +208,7 @@ def main(argv=None):
           f"逐 tick 全等={'是' if checks['tick_exact'] else '否'} · "
           f"段哈希 {len(report['segments'])} 段/{len(want)} tick="
           f"{'有' if checks['region_hash_present'] else '缺'} · "
+          f"`#RESET_DATA` 图案={args.seed_reset_data or '不灌（全零）'} · "
           f"仿真真在工作={'是' if checks['sim_made_work'] else '否'}（工作页 {len(work_pages)} 个）· "
           f"extern {extern_total} 条")
     for d in diffs:

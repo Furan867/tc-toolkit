@@ -10,6 +10,7 @@
 
 用法：
     python simplexc/tools/host/host.py --src <si> --bin <bin> --ticks 20 --out snap.jsonl
+    python simplexc/tools/host/host.py --src <si> --bin <bin> --seed-reset-data seq   # 先给 `#RESET_DATA_*` 灌图案
 """
 from __future__ import annotations
 
@@ -50,6 +51,15 @@ PAGE = 0x10000
 REGION = 0x100000                 # 每个地址给 1 MB（含前后 slack）：够放数组载荷与 UI 文本
 HASH_CHUNK = 1 << 20              # 段哈希的读块大小：rv32im 的 6 段共 278.5 MB，一次 string_at 到堆上白拷一份
 BAND = 1 << 26                    # 「像游戏地址」的邻域（±64 MB）—— 落在里面的 movabs 必须映射到
+
+# `--seed-reset-data` 的图案表（合法值只在这一处定义，见 docs/pitfalls.md）：
+#   seq      byte[i] = i & 0xFF
+#   xorshift xorshift64（13/7/17）固定种子的字节流，每步取 8 字节小端
+# 图案是**块内偏移**的函数：每个块都从同一个种子重新起（与块的顺序、个数无关），
+# 所以加/减一个块不会改变别的块的字节。
+SEED_PATTERNS = ("seq", "xorshift")
+XORSHIFT_SEED = 0x2545F4914F6CDD1D
+U64_MASK = (1 << 64) - 1
 MEM_COMMIT, MEM_RESERVE, MEM_RELEASE = 0x1000, 0x2000, 0x8000
 PAGE_RW, PAGE_RWX = 0x04, 0x40
 ARENA_BASE = 0x100000000          # 确定性 bump 分配器的固定首址（4 GB，x64 用户空间内）
@@ -150,6 +160,34 @@ def rd_u64(addr):
 
 def wr_u64(addr, val):
     ctypes.c_uint64.from_address(addr).value = val & 0xFFFFFFFFFFFFFFFF
+
+
+def pattern_bytes(pattern, size):
+    """`size` 字节的确定性图案（两边传同一个 `--seed-reset-data` 就得到同一串字节）。
+
+    大小不是 8 的倍数时，xorshift 的尾部用下一步的低位字节补 —— 语料里实际都是 8 的倍数。
+    """
+    if pattern == "seq":
+        base = bytes(range(256))
+        reps, tail = divmod(size, 256)
+        return base * reps + base[:tail]
+    if pattern == "xorshift":
+        out = bytearray(size)
+        mv = memoryview(out)
+        x = XORSHIFT_SEED
+        body = size - size % 8
+        for i in range(0, body, 8):
+            x ^= (x << 13) & U64_MASK
+            x ^= x >> 7
+            x ^= (x << 17) & U64_MASK
+            mv[i:i + 8] = x.to_bytes(8, "little")
+        if body < size:
+            x ^= (x << 13) & U64_MASK
+            x ^= x >> 7
+            x ^= (x << 17) & U64_MASK
+            mv[body:size] = x.to_bytes(8, "little")[:size - body]
+        return bytes(out)
+    raise SystemExit(f"未知图案 {pattern!r}（只有 {SEED_PATTERNS}）")
 
 
 def merge_spans(ranges):
@@ -399,13 +437,15 @@ class Detours:
 
 class Host:
     def __init__(self, spec, blob, entry_off, budget=120.0, dump_dir=None, verbose=True,
-                 stub_path=None, region_hash_every=1):
+                 stub_path=None, region_hash_every=1, seed_reset_data=None):
         self.spec = spec
         self.blob = blob
         self.entry = entry_off
         self.budget = budget
         self.dump_dir = dump_dir
         self.verbose = verbose
+        # `#RESET_DATA_*` 的图案（None = 不灌，保持全零的历史行为）
+        self.seed_pattern = seed_reset_data
         # 段哈希每几个 tick 取一次（1 = 每次都取）。N > 1 只是为了在慢靶子上压耗时，
         # 跳过的那一 tick 快照里 `regions` = null（`selftest.compare` 只在两边都是字典时比）。
         self.region_hash_every = region_hash_every
@@ -441,6 +481,7 @@ class Host:
         self._map_game_memory()
         self._install_detours()
         self._seed_memory()
+        self._seed_reset_data()
         self._snapshot_baseline()
         self._start_thread()
         return self
@@ -579,6 +620,54 @@ class Host:
             wr_u64(self.state + i * 8, 0)
         for _name, addr, _elem in self.spec.arrays:
             wr_u64(addr - 8, (ARR_LEN << 16) | ARR_CAP_LOG2)
+
+    def _seed_reset_data(self):
+        """跑第一个 tick **之前**把 `#RESET_DATA_*` 的块填成确定性图案。
+
+        为什么要有它：`reset_sim` 每 tick 把 `#RESET_DATA_*` 整块拷进 `#DATA_*`，而宿主把两边
+        都按零页摆出来 —— 这份拷贝等于没拷，rv32im 那 272.25 MB 的 RAM 镜像（游戏里是 ROM/
+        程序映像）从没被演练（见 `docs/facts.md` 同名边界）。
+
+        只灌 `#RESET_DATA_*`：`#DATA_*` 由程序自己的 `reset_sim` 灌，正是要走一遍的那条路径；
+        也不碰 `commands`/`settings`/`#SIMULATION_STATE`/`error_buffer` 这些协议区 —— 区间只认
+        `simspec.reset_data_blocks`（`memory_copy` 的源实参），不是「整个地址表」，还有一条硬检查：
+        灌的那段里不许出现**任何别的已声明对象**（包住就报错退出）。
+
+        时机：在 `_seed_memory` 之后、`_snapshot_baseline` 之前 —— 基线就带上了图案，
+        所以 `pages` 仍然是「程序相对 pre-run 基线改动了什么」，语义没变。
+
+        两个进程必须用**同一个**图案（`--seed-reset-data` 只收一个值、两条宿主命令都传它）；
+        图案不同的话段哈希与页都会报差异，那不算合法判据。
+        """
+        if not self.seed_pattern:
+            return
+        blocks = self.spec.reset_data_blocks
+        if not blocks:
+            print(f"[host] {self.spec.path} 里没有 `#RESET_DATA_*` 块 —— "
+                  f"--seed-reset-data {self.seed_pattern} 无事可做", file=sys.stderr)
+            return
+        t0 = time.perf_counter()
+        total = 0
+        declared = self.spec.named_addrs()
+        for name, lo, size in blocks:
+            hi = lo + size
+            if not any(rlo <= lo and hi <= rlo + rsize for rlo, rsize in self.regions):
+                raise SystemExit(f"[host] 硬错误：#RESET_DATA 块 {name} 的 [0x{lo:X}, 0x{hi:X}) "
+                                 f"不在已映射区间里 —— 灌图案会写坏宿主，拒绝")
+            # 硬检查：灌的那段里不许有别的已声明对象（否则就是把图案写进了协议区）
+            others = [(n, a) for n, a in declared if lo <= a < hi and n != name]
+            if others:
+                raise SystemExit(f"[host] 硬错误：#RESET_DATA 块 {name} 的 [0x{lo:X}, 0x{hi:X}) "
+                                 f"盖住了别的已声明对象 {[(n, hex(a)) for n, a in others]} "
+                                 f"—— 灌图案只允许碰 `#RESET_DATA_*`，拒绝")
+            ctypes.memmove(lo, pattern_bytes(self.seed_pattern, size), size)
+            total += size
+            if self.verbose:
+                print(f"[host] seed {name} [0x{lo:X}, 0x{hi:X}) {size / 1048576:.2f} MB "
+                      f"= {self.seed_pattern}", file=sys.stderr)
+        dt = time.perf_counter() - t0
+        print(f"[host] `#RESET_DATA_*` 已灌：{len(blocks)} 块 / {total / 1048576:.2f} MB / "
+              f"图案 {self.seed_pattern} / {dt:.2f} s", file=sys.stderr)
 
     def _snapshot_baseline(self):
         for lo, size in self.regions:
@@ -831,6 +920,10 @@ def main(argv=None):
     ap.add_argument("--region-hash-every", type=int, default=1, metavar="N",
                     help="每 N 个 tick 给每个映射段算一次内容 sha256（默认 1 = 每个 tick 都算；"
                          "跳过的 tick 快照里 regions=null）")
+    ap.add_argument("--seed-reset-data", default=None, choices=SEED_PATTERNS, metavar="PATTERN",
+                    help="跑第一个 tick 之前，把源码里 `#RESET_DATA_*` 指向的块填成确定性图案："
+                         "seq = byte[i] = i & 0xFF；xorshift = 固定种子 xorshift64 字节流。"
+                         "默认不灌（保持全零的历史行为）。**差分判据要求两边传同一个值**。")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
     if args.region_hash_every < 1:
@@ -843,7 +936,8 @@ def main(argv=None):
 
     host = Host(spec, blob, entry, budget=args.budget, dump_dir=args.dump_pages,
                 verbose=not args.quiet, stub_path=sidecar_path_for(args.bin),
-                region_hash_every=args.region_hash_every)
+                region_hash_every=args.region_hash_every,
+                seed_reset_data=args.seed_reset_data)
     install_veh(lambda: host.code_alloc, lambda: host.dll_base)   # 必须早于起线程
     host.setup()
     reason = "ok"

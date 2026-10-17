@@ -13,7 +13,11 @@ import contextlib
 import re
 
 ENUM_RE = re.compile(r"^type\s+(\w+)\s+Enum\[([^\]]*)\]", re.M)
-PTR_RE = re.compile(r"^\s*(?:var\s+(\w+)|const\s+#(\w+))\s*=\s*Ptr\s+(\d{10,})\s*$", re.M)
+PTR_RE = re.compile(r"^\s*(?:var\s+(\w+)|const\s+#(\w+))\s*=\s*Ptr\s+(\d{10,})\s*(?://.*)?$", re.M)
+# 生成器给 `const #DATA_* / #RESET_DATA_* / #SETTINGS_*` 的行尾加注释
+# （`// """ & $(c_alloc(134217728) + 2048) & "\n" & """`），所以上面必须容忍行尾注释 ——
+# 否则这批地址进不了地址表，`reset_sim()` 每个 tick 的 `memory_copy(#RESET_DATA_… - 2048, …)`
+# 会让宿主直接 AV（RV32IM 参考产物实测）。
 ARR_RE = re.compile(r"^\s*(?:var\s+(\w+)|const\s+#(\w+))\s*=\s*raw_cast\(\s*<Arr\[(\w+)\]>\s*,\s*(\d{10,})\s*\)",
                     re.M)
 NUM_RE = re.compile(r"0[xX][0-9a-fA-F]+|\b\d+\b")

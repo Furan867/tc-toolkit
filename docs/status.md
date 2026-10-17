@@ -18,7 +18,9 @@
 **设计与接口**：
 - **接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.1 + RelocMode=PIC 更正）**；
   主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md` 只定分区与纪律。
-- 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（决策已定；**实现未开始**）。
+- 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（架构定稿 + 5 项决策已确认；
+  **旧实现存在但没分层**：`tools/read_freq.py` / `watch_freq.py`（566 行）/ `bench_rewrite.py` 三份采样口径互不相同，
+  设计要求的 `tools/freq/` 包重构**未做**，正在做 —— 它是 M4 的前置，之前被漏掉。
 - 代码落库 `reversing/simplexc/`；LLVM 固定 **23.1.3**。
 
 **已完成**：
@@ -31,21 +33,27 @@
   除零不 trap、`asr` 饱和）· `/`、`%`（看被除数类型；折叠窄常量零扩展是参考实现的不自洽，要复刻）。
 - **前端**：`decls.py`（词法 + 顶层声明 + 函数体只配平）→ `expr.py`（语句 + 表达式 AST，`mode_run` 覆盖 100%，
   AST 保真：`src_line`、cast 带目标类型、字面量不折叠）。
+- **判据补强**：每 tick 对每个映射段算 sha256（`regions` 字段）+ `selftest.compare` 纳入比较；
+  `--seed-reset-data seq|xorshift` 给 `#RESET_DATA_*` 灌图案 —— 272 MB RAM 镜像才真的被读写。
+  **强判据下 rv32im 仍逐 tick 全等**，且因此抓出并修掉一个 `memory_copy` 方向反的 bug。
 - **M3 达成（宿主面）**：`lower/ir_build.py`（AST → LLVM-C → 目标码 → `tcblob`）。
   **006 与 rv32im 都与参考产物 10 tick 逐 tick 全等（差异 0 条）**；rv32im 产物 **58612 B vs 参考 219088 B**。
   全程没有手写 C 参与。接口级更正：`RelocMode` `Static` → **PIC**。
 
 ### 下一步（已决定，按顺序）
 
-1. **补强判据**（在跑）：现在只比「相对 pre-run 基线变过的页」，rv32im 每 tick 只变 3 页 ——
-   `#DATA_*` 的 128 MB RAM 镜像**没进比对**。把每个映射段的内容哈希纳入 tick 快照。
-2. **窄整数函数签名**（在跑）：内部函数参数/返回声明成了 `i8`/`i16`/`i32`，而 SSA 值一律 i64 ⇒
-   任何带窄整数参数或窄返回的可达 def 都会 `VerifyModule` 失败（rv32im 恰好没踩到）。
-3. **M4 游戏内主频对照**：把 rv32im 产物部署进游戏、切 `ours`，`watch_freq.py` 多轮取中位数、
-   同会话交替 `reference`/`ours`。⚠️ 前提三条：① `freq` 层实现（未开始）；② **游戏内必须重新捕获 rv32im 源码**
-   （产物里的地址只对捕获它的进程有效）；③ 需要负责人配合起游戏、让 RV32IM 持续跑。
-4. **M5 全量语料**：98 份逐份跑「能否装配 + 逐 tick 是否全等」，出一张覆盖表。
-5. **优化（M3 §11 U1–U4/U7）**：现在全 i64 + `alloca` + `align 1`，我们 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。
+1. **freq 重构（M4 前置，在跑）**：按 `docs/specs/2026-10-15-freq-measurement-design.md` §3/§8 建
+   `tools/freq/` 包。批 1 = 数据层（`probe` / `variants` / `products` + `read_freq` 降级薄 CLI）；
+   批 2 = `sampler`/`report`/`driver` + CLI，以及 `hook.log` 从 `work/opt/` 挪到 `work/hook/`
+   （后者涉及 C 侧 + 壳重编部署，主程另做）。
+2. **清 pi-lens 债（在跑）**：`simplexc/lower/ir_build.py` 17 条（`no-init-return`×3、`is True`×2、
+   未保护调用×11、裸 `int()`×1）。硬约束是**产物 md5 不变**（006 `9d888a41…`、rv32im `c043fd1b…`）。
+3. **M4 游戏内主频对照**（依赖 1）：把 rv32im 产物部署进游戏、切 `ours`，多轮取中位数、同会话交替
+   `reference`/`ours`。⚠️ **游戏内必须重新捕获 rv32im 源码**（产物里的地址只对捕获它的进程有效）；
+   需要负责人配合起游戏、让 RV32IM 持续跑。
+4. **M4.5 前端换 C++17**（M5 前置，见主设计 §9）：把 `frontend/` + `lower/` 从 Python 原型搬成 C++17。
+5. **M5 全量语料**：98 份逐份跑「能否装配 + 逐 tick 是否全等」，出一张覆盖表。
+6. **优化（M3 §11 U1–U4/U7）**：现在全 i64 + `alloca` + `align 1`，我们 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。
 
 ### 待定 / 未解
 

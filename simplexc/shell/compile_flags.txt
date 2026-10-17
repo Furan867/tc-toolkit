@@ -1,8 +1,4 @@
 --target=x86_64-w64-windows-gnu
+--gcc-toolchain=D:/bin/w64devkit
 -std=c++17
 -I../../build/llvm/include
--isystem D:/bin/w64devkit/x86_64-w64-mingw32/include
--isystem D:/bin/w64devkit/lib/gcc/x86_64-w64-mingw32/14.2.0/include
--isystem D:/bin/w64devkit/lib/gcc/x86_64-w64-mingw32/14.2.0/include/c++
--isystem D:/bin/w64devkit/lib/gcc/x86_64-w64-mingw32/14.2.0/include/c++/x86_64-w64-mingw32
--isystem D:/bin/w64devkit/lib/gcc/x86_64-w64-mingw32/14.2.0/include/c++/backward

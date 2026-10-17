@@ -48,19 +48,22 @@
   **006 与 rv32im 都与参考产物 10 tick 逐 tick 全等（差异 0 条）**；rv32im 产物 **58612 B vs 参考 219088 B**。
   全程没有手写 C 参与。接口级更正：`RelocMode` `Static` → **PIC**。
 
-### 进行中：M4.5 前端换 C++17（M5 前置，见主设计 §9）
+### 已完成：M4.5 前端换 C++17（M5 前置）
 
-把 `frontend/` + `lower/` 从 Python 原型（oracle，4123 行）搬成 C++17，**范围只到生成代码子集**。
-判据：①与参考产物逐 tick 等价 ②§7.5 的**延迟门**（`177.si` ≤4 s，单独记前端+lowering）与**依赖门**
-（`objdump -p build/compile_hook.dll | grep -i python` 为空）③判据入口的生产者切到 C++ 后全绿。
-M4 已部署的预编译 blob 不算「Python 进产线」的先例，例外只在 M4 期间有效。
+`frontend/` + `lower/` 已是 C++17 产品实现（Python 原型冻结为 oracle），范围限于生成代码子集。
+接口 `simplexc/frontend/ast.hh` 冻结（24 节点逐条对应原型的 dataclass）。
+产品路径入口：`build/simplexc_cli.exe --src <si> --out <blob>`（`build.py simplexc_cli`）。
 
-当前进度（拆解见 `docs/notes/2026-10-18-m45-plan.md`）：
-- **接口已冻结**：`simplexc/frontend/ast.hh`（24 节点逐条对应 `expr.py` 的 dataclass；已编过并验过类别校验）。
-- **两路并行**：A = `frontend/`（判据 = AST dump JSON 与 Python 原型 **deep-equal**，≥4 个 def + `--all` + 错误路径）；
-  B = `lower/`（判据 = 手写 AST → COFF 只有 `REL32` → `assemble::assemble()` → 合法 blob + 四条语义档案的 IR 证据）。
-- 主程待办：A/B 回来后跑判据 → 写 `cli/simplexc_cli.cc` → 四段耗时与两条门 → 折叠进账本。
+**三条判据全绿**：
+1. **逐 tick 等价** —— `rv32im.si` → 26340 B / entry `0x63A0`，与参考产物（`0x215B`）10 tick **差异 0 条**；
+   同源 IR 与 Python 版**逐字节相同**（md5 `869677f0…`）→ lowering 是精确搬运。
+2. **延迟门** —— `corpus/src/177.si`（479225 B）前端 27 ms + lowering 10 ms + LLVM 147 ms + 装配 1 ms ≈ **190–266 ms**
+   （门 ≤4 s）；**依赖门** —— `compile_hook.dll` 导入表只有 KERNEL32/msvcrt。
+3. **判据入口** —— `check.py` 五步全 PASS（新增的 `lower_equiv` 用的就是 C++ 生产者）。
 
+**顺带查清一个一直存在的 bug**：`ir_build.py` 把 `LLVMCodeGenLevelDefault` 写成 0（那是 `None`），
+所以 Python 原型的机器码一直是 **-O0**（只有 IR 层做了 O2）。C++ 走官方头文件拿正确值 2 → 产物小 2.2 倍。
+含义：M4 的 24.83 MHz 是 -O0 代码生成的成绩，C++ 产物有望显著更快（**待游戏内实测**）。
 ### 下一步（M4.5 之后，已决定）
 3. **M5 全量语料**：98 份逐份跑「能否装配 + 逐 tick 是否全等」，出一张覆盖表。
 4. **优化（M3 §11 U1–U4/U7）**：现在全 i64 + `alloca` + `align 1`，我们 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。

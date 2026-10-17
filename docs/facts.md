@@ -179,7 +179,7 @@
 `equiv_cc_and tc_main, sim_state=2270726717440`（= `0x210B1DC0000`，与该会话 `addrs.h` 里 `A_SIM_STATE` 逐字相同）。
 → 手写的 LLVM 产物确实被游戏 JIT 执行了，并跑进了协议主函数。标记走的是 kernel32 跳板（与游戏内存无关），
 所以它能在「后面写游戏内存时崩掉」的情况下依然留下证据。
-验证：`awk -F'\t' '$1=="007"' work/hook/manifest.tsv`；`grep 007 work/opt/hook.log`；`cat work/tmp/equiv/equiv_cc_and.log`
+验证：`awk -F'\t' '$1=="007"' work/hook/manifest.tsv`；`grep 007 work/hook/hook.log（迁移前的记录在 work/opt/hook.log）`；`cat work/tmp/equiv/equiv_cc_and.log`
 最后验证：2026-10-17
 
 ### 跨游戏进程复用含地址的产物 = 写未映射地址，崩在 JIT 代码里
@@ -584,7 +584,9 @@ DLL 的 `-o` 换成别的路径字符串会换掉 ld 挑的默认 image base（�
 最后验证：2026-10-11
 
 ### 日志的语义与格式
-`work/opt/hook.log` 是**唯一**的记录型日志，转发层与改写子进程共写、追加写；
+`work/hook/hook.log` 是**唯一**的记录型日志（2026-10-18 从 `work/opt/` 迁来），转发层与改写子进程共写、追加写；
+Python 侧取路径走 `tools/hook_log.py` 的 `resolve()`：两文件只存在一个就用它、都在取 mtime 更新的、
+都不存在则新路径，且 **`append()` 写到刚刚 `read()` 到的那个文件**（窗口期不分裂 `cfg`/`opt`）；
 每行 `时间 \t 编号 \t 事件 \t key=value…`（事件表与键表见 `tools/hook_log.py`，
 C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什么（原样搬运），
 `opt` 行 = 实际执行的模式 / 改写处数 / 产物 sha256 —— 两者不一致就是 short 退回了 on。

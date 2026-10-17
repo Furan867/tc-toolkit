@@ -18,6 +18,7 @@
     tcblob     build/tcblob.exe        装配器 CLI（--run 可不进游戏自测一次产物）
     llvm_prog  build/llvm_prog.exe     LLVM-C 生成程序根（M1 那条链的样本）
     hook       build/compile_hook.dll  转发层（tools/compile_hook.c）
+    ast_dump   build/ast_dump.exe     前端的判据入口（frontend/ 的 C++17 实现，不进产品 DLL）
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
 
@@ -160,6 +161,23 @@ def step_hook() -> None:
         hint="编译转发层失败 → 它是纯 C（不用 g++）；路径与 deploy_compile_hook.py 保持一致。")
 
 
+def step_ast_dump() -> None:
+    print("== ast_dump ==")
+    out = os.path.join(BUILD, "ast_dump.exe")
+    # 前端（simplexc/frontend/*.cc）的 C++17 实现 + 它自己的调试 main：不依赖 LLVM，
+    # 也不链进产品 DLL（判据入口，不是产线）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "simplexc/frontend/ast_dump_main.cc",
+         "simplexc/frontend/decls.cc",
+         "simplexc/frontend/lexer.cc",
+         "simplexc/frontend/parser.cc",
+         "simplexc/frontend/frontend.cc",
+         "simplexc/frontend/ast_dump.cc",
+         "simplexc/frontend/json.cc",
+         "-o", REL(out)], out=out,
+        hint="编译前端失败 → 看 frontend/*.cc 的报错；它只用 C++17 标准库（不需要 LLVM）。")
+
+
 def step_spike() -> None:
     print("== spike ==")
     out = os.path.join(BUILD, "blob_empty.bin")
@@ -181,9 +199,10 @@ STEPS = {
     "tcblob": step_tcblob,
     "llvm_prog": step_llvm_prog,
     "hook": step_hook,
+    "ast_dump": step_ast_dump,
     "spike": step_spike,
 }
-ALL = ["objs", "tcblob", "llvm_prog", "hook"]
+ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump"]
 DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"]}      # spike 单独跑时自动补做
 
 

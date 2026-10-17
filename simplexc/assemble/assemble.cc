@@ -170,17 +170,26 @@ Cls classify(const std::string& n) {
     return Cls::Drop;
 }
 
-struct StubInfo {
-    uint64_t addr = 0;
-    bool resolved = false;
-};
-
 /* 未定义符号在产物里的落点，两种形态（都不是内部绝对地址，只是跳板）：
  *   · 普通函数  → 代码桩 `movabs rax,imm64 ; jmp rax`（12 字节，调用方 `call rel32` 到它）
  *   · `__imp_X` → **数据槽**（8 字节，内容 = X 的绝对地址）
  *     —— mingw 对 `__declspec(dllimport)` 的声明会生成 `call *__imp_X(%rip)`，
  *        它**解引用**目标地址，拿代码桩去顶会被当成指针值，必崩。 */
 bool is_imp_slot(const std::string& name) { return name.rfind("__imp_", 0) == 0; }
+
+/* 桩/槽的字节形态只有一处定义：造的时候按这里写，返回前的自校验按这里查。 */
+constexpr size_t kCodeStubLen = 12;    /* `48 B8 <imm64> FF E0` */
+constexpr size_t kImpSlotLen = 8;      /* 8 字节绝对地址 */
+
+void write_le64(uint8_t* p, uint64_t v) {
+    for (int k = 0; k < 8; k++) p[k] = uint8_t((v >> (8 * k)) & 0xFF);
+}
+
+void encode_code_stub(uint64_t target, uint8_t* out) {
+    out[0] = 0x48; out[1] = 0xB8;                  /* movabs rax, imm64 */
+    write_le64(out + 2, target);
+    out[10] = 0xFF; out[11] = 0xE0;                /* jmp rax */
+}
 
 }  // namespace
 
@@ -252,46 +261,25 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
         }
     }
 
-    /* ---- 3. 未定义符号的落点：先扫一遗重定位决定要造哪些桩/槽 ---- */
-    std::vector<uint8_t> stubs;      /* 代码桩 */
-    std::vector<uint8_t> slots;      /* __imp_ 数据槽 */
-    std::unordered_map<std::string, StubInfo> place_of;
+    /* ---- 3. 未定义符号的落点：**收集与定址分开两趟** ----
+     *
+     * 一趟里增量算地址是错的：槽排在全部桩之后，而「桩总共多长」要扫完所有重定位才知道。
+     * 旧实现用 `body_end + stubs.size() + slots.size()` 当场算槽地址，之后扫到的裸名 extern
+     * 再往桩块追加字节，`stubs.size()` 变大 —— 已记下的槽地址整体前移，真身落到别处。后果是
+     * `<blob>.stubs` sidecar 与产物字节不一致：宿主/壳照 sidecar 去 patch，写错位置（实测 sidecar
+     * 说槽在 ae0/ae8/af0、真身在 afc/b04/b0c，宿主崩在 entry+0x14E）。触发条件 = `__imp_*` 引用
+     * 排在裸名 extern 引用之前（`docs/notes/2026-10-17-assemble-slot-addr.md`）。
+     */
+    struct Pending {
+        std::string name;
+        uint64_t target = 0;    /* resolver 解析出的绝对地址 */
+        uint64_t addr = 0;      /* 桩/槽的落点，造完才知道 */
+    };
+    /* 顺序 = 首次引用顺序（确定性）：sidecar 的条目顺序与产物字节都由它决定。 */
+    std::vector<Pending> pending;
+    std::unordered_map<std::string, size_t> pending_idx;
     bool unresolved = false;
     std::string unresolved_name;
-    auto place_for = [&](const std::string& name, uint64_t& addr) -> bool {
-        auto it = place_of.find(name);
-        if (it != place_of.end()) { addr = it->second.addr; return it->second.resolved; }
-        uint64_t target = 0;
-        bool ok = resolver.resolve(name, target);
-        StubInfo info{};
-        if (is_imp_slot(name)) {
-            size_t pad = (8 - (slots.size() & 7)) & 7;
-            slots.insert(slots.end(), pad, 0);
-            info.addr = body_end + stubs.size() + slots.size();
-            for (int k = 0; k < 8; k++) slots.push_back(uint8_t((target >> (8 * k)) & 0xFF));
-        } else {
-            size_t pad = (16 - (stubs.size() & 15)) & 15;
-            stubs.insert(stubs.end(), pad, 0x90);          /* nop 填充，保持 16 对齐 */
-            info.addr = body_end + stubs.size();
-            if (ok) {
-                stubs.push_back(0x48); stubs.push_back(0xB8);   /* movabs rax, imm64 */
-                for (int k = 0; k < 8; k++) stubs.push_back(uint8_t((target >> (8 * k)) & 0xFF));
-                stubs.push_back(0xFF); stubs.push_back(0xE0);   /* jmp rax */
-            }
-        }
-        info.resolved = ok;
-        if (ok) {
-            res.stub_count++;
-            /* 记下落点：`cli/tcblob.cc` 拿它写 `<blob>.stubs` sidecar，宿主靠它
-               认出「这处 movabs 是 extern 跳板，不是游戏地址」并把地址换成宿主桩。
-               未解析的不记 —— 那种情况下 assemble() 本来就是失败返回，没有产物。*/
-            res.stubs.push_back(StubRef{info.addr, name});
-        }
-        place_of.emplace(name, info);
-        addr = info.addr;
-        return ok;
-    };
-
     for (size_t i = 0; i < parsed.size(); i++) {
         const Obj& o = parsed[i];
         for (size_t s = 0; s < o.secs.size(); s++) {
@@ -301,11 +289,15 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
                 const std::string& nm = o.syms[r.sym].name;
                 if (sym_addr[i][r.sym] != UINT64_MAX) continue;       /* 本目标文件里定义的 */
                 if (!nm.empty() && defined.count(nm)) continue;        /* 别的目标文件里定义的 */
-                uint64_t dummy = 0;
-                if (!place_for(nm, dummy) && !unresolved) {
+                if (pending_idx.count(nm)) continue;                   /* 去重 */
+                Pending p;
+                p.name = nm;
+                if (!resolver.resolve(nm, p.target) && !unresolved) {
                     unresolved = true;
                     unresolved_name = nm;
                 }
+                pending_idx.emplace(nm, pending.size());
+                pending.push_back(std::move(p));
             }
         }
     }
@@ -315,9 +307,41 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
         return res;
     }
 
+    /* 造桩与槽：代码桩在前、`__imp_` 数据槽在后，各自内部保持首次引用顺序（与旧实现一致）；
+       地址在这里一次算完，之后就只读 —— 后面没有任何东西能让它再动。*/
+    std::vector<uint8_t> stubs;      /* 代码桩 */
+    std::vector<uint8_t> slots;      /* __imp_ 数据槽 */
+    for (Pending& p : pending) {
+        if (is_imp_slot(p.name)) continue;
+        size_t pad = (16 - (stubs.size() & 15)) & 15;
+        stubs.insert(stubs.end(), pad, 0x90);          /* nop 填充，保持 16 对齐 */
+        p.addr = body_end + stubs.size();
+        uint8_t code[kCodeStubLen];
+        encode_code_stub(p.target, code);
+        stubs.insert(stubs.end(), code, code + kCodeStubLen);
+    }
+    const uint64_t slots_base = body_end + stubs.size();
+    for (Pending& p : pending) {
+        if (!is_imp_slot(p.name)) continue;
+        size_t pad = (8 - (slots.size() & 7)) & 7;
+        slots.insert(slots.end(), pad, 0);
+        p.addr = slots_base + slots.size();
+        uint8_t bin[kImpSlotLen];
+        write_le64(bin, p.target);
+        slots.insert(slots.end(), bin, bin + kImpSlotLen);
+    }
+    /* 名字 → 落点 = 重定位要用的表；`res.stubs` 是 sidecar 的内容，顺序仍是首次引用顺序。 */
+    std::unordered_map<std::string, uint64_t> place_of;
+    for (const Pending& p : pending) {
+        place_of.emplace(p.name, p.addr);
+        res.stub_count++;
+        /* `cli/tcblob.cc` 拿它写 `<blob>.stubs` sidecar，宿主靠它认出「这处 movabs 是 extern
+           跳板，不是游戏地址」并把地址换成宿主桩。 */
+        res.stubs.push_back(StubRef{p.addr, p.name});
+    }
+
     /* ---- 4. 拼 payload（含桩与槽）并应用重定位 ---- */
     const uint64_t stubs_base = body_end;
-    const uint64_t slots_base = body_end + stubs.size();
     std::vector<uint8_t> payload(body_end + stubs.size() + slots.size(), 0);
     std::memcpy(payload.data() + stubs_base, stubs.data(), stubs.size());
     std::memcpy(payload.data() + slots_base, slots.data(), slots.size());
@@ -375,7 +399,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
                             res.detail = nm;
                             return res;
                         }
-                        target = it->second.addr;
+                        target = it->second;
                     }
                 }
                 const uint64_t site = base + r.offset;
@@ -407,7 +431,42 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
         }
     }
 
-    /* ---- 5. entry ---- */
+    /* ---- 5. 自校验：`res.stubs`（= `<blob>.stubs` sidecar 的内容）逐条与产物字节核对 ----
+     *
+     * 这个 bug 之所以致命，正是因为产物与 sidecar 说的不一样却没人查：宿主照 sidecar 去 patch，
+     * 写错位置，崩在游戏里。宁可装配失败，也不要发一份对不上的产物 —— 不通就报 BadObject 并写清
+     * 是哪个符号、哪个偏移，别让下游去猜。核对的是 `res.stubs` 本身（也就是 sidecar 会写出去
+     * 的那份数据），不是内部变量。
+     */
+    for (const StubRef& s : res.stubs) {
+        const Pending& p = pending[pending_idx.at(s.symbol)];
+        const bool slot = is_imp_slot(s.symbol);
+        const size_t len = slot ? kImpSlotLen : kCodeStubLen;
+        uint8_t want[kCodeStubLen];
+        if (slot) write_le64(want, p.target);
+        else encode_code_stub(p.target, want);
+        char buf[256];
+        if (s.offset + len > payload.size()) {
+            std::snprintf(buf, sizeof buf, "自校验失败：%s 的%s落点 0x%llX 越出产物（产物 %llu 字节）",
+                          s.symbol.c_str(), slot ? "槽" : "桩",
+                          (unsigned long long)s.offset, (unsigned long long)payload.size());
+            res.status = AsmStatus::BadObject;
+            res.detail = buf;
+            return res;
+        }
+        if (std::memcmp(payload.data() + s.offset, want, len) != 0) {
+            std::snprintf(buf, sizeof buf,
+                          "自校验失败：%s 的%s在 0x%llX，产物该处是 %02X %02X …（应为 %02X %02X …）"
+                          "—— sidecar 与产物不是一回事",
+                          s.symbol.c_str(), slot ? "槽" : "桩", (unsigned long long)s.offset,
+                          payload[s.offset], payload[s.offset + 1], want[0], want[1]);
+            res.status = AsmStatus::BadObject;
+            res.detail = buf;
+            return res;
+        }
+    }
+
+    /* ---- 6. entry ---- */
     auto e = defined.find(std::string(entry_symbol));
     if (e == defined.end()) {
         res.status = AsmStatus::UndefinedSymbol;
@@ -416,7 +475,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
     }
     res.blob.entry_off = e->second;
 
-    /* ---- 6. 头 + 机器码 ---- */
+    /* ---- 7. 头 + 机器码 ---- */
     uint64_t out_len = 8 + payload.size();
     if (out_len > opt.max_blob) {
         res.status = AsmStatus::TooLarge;

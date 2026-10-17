@@ -107,6 +107,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="M2 参考产物自比对")
     ap.add_argument("--src", required=True)
     ap.add_argument("--bin", required=True)
+    ap.add_argument("--entry", default=None,
+                    help="入口偏移（传给 host.py；不给则 host 从 corpus/manifest.tsv 查 —— "
+                         "捕获的产物不在那张表里，这时必须显式给）")
     ap.add_argument("--ticks", type=int, default=20)
     ap.add_argument("--budget", type=float, default=60.0)
     ap.add_argument("--workdir", default=None, help="中间文件目录（默认系统临时目录）")
@@ -125,9 +128,11 @@ def main(argv=None):
     rm_quiet(b_out)
 
     spec = simspec.SimSpec.parse(args.src)
-    report = {"src": args.src, "bin": args.bin, "ticks_requested": args.ticks}
-    pa = run_host(args.src, args.bin, args.ticks, a_out, args.budget)
-    pb = run_host(args.src, args.bin, args.ticks, b_out, args.budget)
+    report = {"src": args.src, "bin": args.bin, "entry": args.entry,
+              "ticks_requested": args.ticks}
+    extra = ["--entry", args.entry] if args.entry else None
+    pa = run_host(args.src, args.bin, args.ticks, a_out, args.budget, extra)
+    pb = run_host(args.src, args.bin, args.ticks, b_out, args.budget, extra)
     report["returncodes"] = [pa.returncode, pb.returncode]
     a, b = read_snaps(a_out), read_snaps(b_out)
     report["ticks_a"] = len(a)

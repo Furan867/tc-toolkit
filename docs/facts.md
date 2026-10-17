@@ -201,12 +201,16 @@
 验证：`sha256sum simplexc/corpus/rv32im/rv32im.{si,bin}`；`grep -c '' simplexc/corpus/rv32im/rv32im.si`
 最后验证：2026-10-17
 
-### RV32IM 的 reset_sim 每 tick 整块拷贝 128 MB 内存镜像
+### 宿主该映射多大，由 `memory_copy`/`memory_clear` 的**实参**决定（不是 `c_alloc`）
 参考产物 `+0x2391` 是 `rep movs`：`rsi = #RESET_DATA_7069020504170261741 - 0x800`、
-`rdi = #DATA_7069020504170261741 - 0x800`、`ecx = 0x8001000`（= 134221824 = 128 MB + 4096）。
-块尺寸写在生成源码的行尾注释里：`// """ & $(c_alloc(134217728) + 2048) & "\n" & """`（SETTINGS 是 `c_alloc(4096)`）。
-→ 宿主必须按这个尺寸映射（4 组 × 约 256 MB ≈ 1 GB 虚拟内存），只按「地址」映射一小块会越界 AV。
-验证：`objdump -D -b binary -m i386:x86-64 -M intel --start-address=0x2360 simplexc/corpus/rv32im/rv32im.bin`
+`rdi = #DATA_7069020504170261741 - 0x800`、`ecx = 0x8001000`。源码里对应
+`memory_copy(…, 134221824)` —— **134221824 = 128 MB + 4096**。
+⚠️ 行尾注释里的 `c_alloc(134217728)` 只是数据大小，**照它映射会少 4096 字节**：
+AV 地址 `0x18928150000` 正好落在「按 128 MB 算出的映射末尾」（实测，差一个页就崩）。
+→ `simspec` 解析 `memory_copy/memory_clear` 实参算绝对区间，`host.merge_spans` 按它页对齐并合并；
+RV32IM 合计 **278.5 MB / 6 段**（1 号组 128 MB×2 + 3 号组 8 MB×2 + 小的）。
+验证：`PYTHONIOENCODING=utf-8 python simplexc/tools/host/selftest.py --src simplexc/corpus/rv32im/rv32im.si --bin simplexc/corpus/rv32im/rv32im.bin --entry 0x215B --ticks 10`
+      → `tick 10/10 · 逐 tick 全等=是 · 仿真真在工作=是`（修复前是 AV，tick 0/0）
 最后验证：2026-10-17
 
 ### 生成器给块地址的行尾都带注释，`Ptr` 解析必须容忍

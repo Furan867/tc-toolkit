@@ -151,8 +151,21 @@ def wr_u64(addr, val):
     ctypes.c_uint64.from_address(addr).value = val & 0xFFFFFFFFFFFFFFFF
 
 
-def merge_spans(addrs):
-    spans = sorted((a & ~(PAGE - 1), (a & ~(PAGE - 1)) + REGION) for a in addrs)
+def merge_spans(ranges):
+    """ranges: [(lo, hi)] 绝对区间（未页对齐）→ [(lo, size)]，页对齐并合并重叠。
+
+    `hi <= lo` = 「只知道有这么个地址、不知道多大」→ 给默认 REGION。
+    有尺寸的区间来自源码 `memory_copy`/`memory_clear` 的实参（见 `simspec._collect_ranges`）：
+    参考产物的 `reset_sim` **每 tick** 整块拷一遍内存镜像（RV32IM 是 128 MB 的 `rep movs`），
+    映射小一点就在拷贝末尾越界 AV（实测：按 128 MB 给、实际拷 128 MB + 4096 → 崩）。
+    """
+    spans = []
+    for lo, hi in ranges:
+        lo2 = lo & ~(PAGE - 1)
+        end = max(hi, lo + (REGION if hi <= lo else 0))
+        hi2 = (end + PAGE - 1) & ~(PAGE - 1)
+        spans.append((lo2, max(hi2, lo2 + PAGE)))
+    spans.sort()
     out = []
     for lo, hi in spans:
         if out and lo <= out[-1][1]:
@@ -517,8 +530,8 @@ class Host:
         raise SystemExit(EXIT_MAPPED_MOVABS)
 
     def _map_game_memory(self):
-        addrs = self.spec.all_addrs() + self.game_like
-        self.regions = merge_spans(addrs)
+        items = self.spec.regions() + [(a, a) for a in self.game_like]
+        self.regions = merge_spans(items)
         for lo, size in self.regions:
             mem_alloc(lo, size)
         if self.verbose:

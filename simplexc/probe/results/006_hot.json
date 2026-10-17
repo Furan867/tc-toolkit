@@ -5,7 +5,7 @@
   "src_si": "simplexc\\corpus\\src\\006.si",
   "ref_bin": "simplexc\\corpus\\ref\\006.bin",
   "page_whitelist": {},
-  "when": "2026-10-17 17:14:12",
+  "when": "2026-10-17 17:56:01",
   "clang_version": "clang version 23.1.3 (https://github.com/llvm/llvm-project 0d261d1ca552c95a8f007e061c787ac7132fbcbc)",
   "clang_sha256": "9584244d83bb095c5a2983f814692cb50e0b8d2916585516cad8f3e8596d8261",
   "ref_sha256": "290b644196b94ff21324b7035e12a3adc85ec6be70014f9e17c2d6fe3c83871b",
@@ -71,7 +71,7 @@
       "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin"
     ],
     "assemble_stdout": "blob: out_len=2292 entry=0x5F0 text=2106 rdata=80 data=8 bss=8 stubs=6 relocs=28\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin（2292 字节）\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin.stubs（6 处 extern 跳板）",
-    "obj_sha256": "2529b45091e36d86df42850dcaccb519ddaa58ca32d63ed6443ae8ef30edbf56",
+    "obj_sha256": "8a2a0b7b70eee36aac29246557ed0acc48dcc89125b2b77fa03106a516d7810f",
     "blob_sha256": "3565c3383f56a1c0b80051a4599c09a7813b39c299ad0b7a48b7baca674c0ad5"
   },
   "tick_compare": {
@@ -120,10 +120,10 @@
     ],
     "host_stderr_tail": [
       [
-        "[host] VEH ��װ handle=0x268BC919C60"
+        "[host] VEH 已装 handle=0x19594234580"
       ],
       [
-        "[host] VEH ��װ handle=0x1E2DE99ECB0"
+        "[host] VEH 已装 handle=0x24BE8F9CBE0"
       ]
     ]
   },
@@ -131,247 +131,13 @@
     "ref_raw": [
       {
         "target": 1000000,
-        "seconds_median": 0.012463200138881803,
+        "seconds_median": 0.012547400081530213,
         "seconds_all": [
-          0.01174909994006157,
-          0.011754700215533376,
-          0.012463200138881803,
-          0.012852300191298127,
-          0.013115499867126346
-        ],
-        "pacing": {
-          "GetSystemTimePreciseAsFileTime": 1415,
-          "Sleep": 32
-        },
-        "sim_cycle": 1000000,
-        "reason": "ok"
-      },
-      {
-        "target": 10000000,
-        "seconds_median": 0.047613499918952584,
-        "seconds_all": [
-          0.046300499932840466,
-          0.04699649987742305,
-          0.047613499918952584,
-          0.06028359988704324,
-          0.06216370011679828
-        ],
-        "pacing": {
-          "GetSystemTimePreciseAsFileTime": 4473,
-          "Sleep": 88
-        },
-        "sim_cycle": 10000000,
-        "reason": "ok"
-      },
-      {
-        "target": 100000000,
-        "seconds_median": 0.2192610998172313,
-        "seconds_all": [
-          0.21446849987842143,
-          0.21533969999291003,
-          0.2192610998172313,
-          0.21937819989398122,
-          0.22068189992569387
-        ],
-        "pacing": {
-          "GetSystemTimePreciseAsFileTime": 14143,
-          "Sleep": 262
-        },
-        "sim_cycle": 100000000,
-        "reason": "ok"
-      },
-      {
-        "target": 1000000000,
-        "seconds_median": 1.3565231999382377,
-        "seconds_all": [
-          1.3547752001322806,
-          1.3559973000083119,
-          1.3565231999382377,
-          1.365581899881363,
-          1.511723400093615
-        ],
-        "pacing": {
-          "GetSystemTimePreciseAsFileTime": 44722,
-          "Sleep": 780
-        },
-        "sim_cycle": 1000000000,
-        "reason": "ok"
-      }
-    ],
-    "ref": {
-      "per_tick_seconds_median": 0.004976700060069561,
-      "per_tick_rounds": [
-        {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
-          "entry": 8495,
-          "target": 0,
-          "kind": "ticks",
-          "tick_seconds": [
-            0.006257900036871433,
-            0.005253500072285533,
-            0.004976700060069561,
-            0.004635100020095706,
-            0.005245300009846687,
-            0.004808200057595968,
-            0.004536400083452463,
-            0.00474089989438653,
-            0.0047176000662148,
-            0.005735099781304598
-          ],
-          "ticks": 10,
-          "pacing": {
-            "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 9376
-          },
-          "extern_records": 0,
-          "close": "exited_clean"
-        },
-        {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
-          "entry": 8495,
-          "target": 0,
-          "kind": "ticks",
-          "tick_seconds": [
-            0.005769099807366729,
-            0.005632400047034025,
-            0.0045831999741494656,
-            0.004408699925988913,
-            0.004506200086325407,
-            0.005327200051397085,
-            0.004799900110810995,
-            0.0053235001396387815,
-            0.005812800023704767,
-            0.004592099925503135
-          ],
-          "ticks": 10,
-          "pacing": {
-            "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 9321
-          },
-          "extern_records": 0,
-          "close": "exited_clean"
-        },
-        {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
-          "entry": 8495,
-          "target": 0,
-          "kind": "ticks",
-          "tick_seconds": [
-            0.004780499963089824,
-            0.004513599909842014,
-            0.004297100007534027,
-            0.003983199829235673,
-            0.0050928001292049885,
-            0.004949300084263086,
-            0.004483599914237857,
-            0.005586900049820542,
-            0.0044565999414771795,
-            0.004834300139918923
-          ],
-          "ticks": 10,
-          "pacing": {
-            "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 8870
-          },
-          "extern_records": 0,
-          "close": "exited_clean"
-        },
-        {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
-          "entry": 8495,
-          "target": 0,
-          "kind": "ticks",
-          "tick_seconds": [
-            0.005350599996745586,
-            0.006080299848690629,
-            0.0060384999960660934,
-            0.004667300032451749,
-            0.00537659996189177,
-            0.005371999926865101,
-            0.005582300014793873,
-            0.005316100083291531,
-            0.004919999977573752,
-            0.004786200122907758
-          ],
-          "ticks": 10,
-          "pacing": {
-            "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 10416
-          },
-          "extern_records": 0,
-          "close": "exited_clean"
-        },
-        {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
-          "entry": 8495,
-          "target": 0,
-          "kind": "ticks",
-          "tick_seconds": [
-            0.006712600123137236,
-            0.005903999786823988,
-            0.005804399959743023,
-            0.005551700014621019,
-            0.004280300112441182,
-            0.004267300013452768,
-            0.005881799850612879,
-            0.004900600062683225,
-            0.004244599957019091,
-            0.005586700048297644
-          ],
-          "ticks": 10,
-          "pacing": {
-            "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 9952
-          },
-          "extern_records": 0,
-          "close": "exited_clean"
-        }
-      ],
-      "points": [
-        {
-          "target": 1000000,
-          "bursts": 1414,
-          "seconds": 0.012463200138881803
-        },
-        {
-          "target": 10000000,
-          "bursts": 4472,
-          "seconds": 0.047613499918952584
-        },
-        {
-          "target": 100000000,
-          "bursts": 14142,
-          "seconds": 0.2192610998172313
-        },
-        {
-          "target": 1000000000,
-          "bursts": 44721,
-          "seconds": 1.3565231999382377
-        }
-      ],
-      "fit": {
-        "a_ns_per_burst": 8730.026421787536,
-        "b_ns_per_cycle": 0.9670624111198339,
-        "c_ns_per_tick": -951454.9312883455,
-        "residual_ns": [
-          103335.29864273855,
-          -146347.41919127005,
-          46279.979616925535,
-          -3267.8590682344575
-        ],
-        "largest_point_ns_per_cycle": 1.3565231999382377
-      }
-    },
-    "ours_raw": [
-      {
-        "target": 1000000,
-        "seconds_median": 0.011730799917131662,
-        "seconds_all": [
-          0.011526100104674697,
-          0.011707799974828959,
-          0.011730799917131662,
-          0.011838899925351143,
-          0.01190609997138381
+          0.012407999951392412,
+          0.012477500131353736,
+          0.012547400081530213,
+          0.012555999914184213,
+          0.012580000096932054
         ],
         "pacing": {
           "GetSystemTimePreciseAsFileTime": 1415,
@@ -382,180 +148,180 @@
       },
       {
         "target": 10000000,
-        "seconds_median": 0.03519540000706911,
+        "seconds_median": 0.0463966999668628,
         "seconds_all": [
-          0.03486779984086752,
-          0.034910800168290734,
-          0.03519540000706911,
-          0.048919899854809046,
-          0.04907399998046458
+          0.046160100027918816,
+          0.04624269995838404,
+          0.0463966999668628,
+          0.04657089989632368,
+          0.04730080021545291
         ],
         "pacing": {
           "GetSystemTimePreciseAsFileTime": 4473,
-          "Sleep": 58
+          "Sleep": 70
         },
         "sim_cycle": 10000000,
         "reason": "ok"
       },
       {
         "target": 100000000,
-        "seconds_median": 0.1192857997957617,
+        "seconds_median": 0.2148702999111265,
         "seconds_all": [
-          0.11877390020526946,
-          0.1191145998891443,
-          0.1192857997957617,
-          0.11930759996175766,
-          0.11935469997115433
+          0.2127594999037683,
+          0.21336059994064271,
+          0.2148702999111265,
+          0.21523889992386103,
+          0.22311610006727278
         ],
         "pacing": {
           "GetSystemTimePreciseAsFileTime": 14143,
-          "Sleep": 283
+          "Sleep": 267
         },
         "sim_cycle": 100000000,
         "reason": "ok"
       },
       {
         "target": 1000000000,
-        "seconds_median": 0.4631302000489086,
+        "seconds_median": 1.3502042999025434,
         "seconds_all": [
-          0.46101299999281764,
-          0.46291080000810325,
-          0.4631302000489086,
-          0.46541619999334216,
-          0.6163224000483751
+          1.3448534000199288,
+          1.345297500025481,
+          1.3502042999025434,
+          1.3592505999840796,
+          1.5459136001300067
         ],
         "pacing": {
           "GetSystemTimePreciseAsFileTime": 44722,
-          "Sleep": 759
+          "Sleep": 748
         },
         "sim_cycle": 1000000000,
         "reason": "ok"
       }
     ],
-    "ours": {
-      "per_tick_seconds_median": 0.005432999925687909,
+    "ref": {
+      "per_tick_seconds_median": 0.005188999930396676,
       "per_tick_rounds": [
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
-          "entry": 1520,
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "entry": 8495,
           "target": 0,
           "kind": "ticks",
           "tick_seconds": [
-            0.0065079000778496265,
-            0.005088499980047345,
-            0.005045299883931875,
-            0.0045508998446166515,
-            0.0049616999458521605,
-            0.00522130005992949,
-            0.004518000176176429,
-            0.005713599966838956,
-            0.0052212998270988464,
-            0.004404399776831269
+            0.006665399996563792,
+            0.005188999930396676,
+            0.005912699969485402,
+            0.004885699832811952,
+            0.0040536001324653625,
+            0.004895300138741732,
+            0.004722399869933724,
+            0.005210499977692962,
+            0.005221500061452389,
+            0.00531869987025857
           ],
           "ticks": 10,
           "pacing": {
             "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 10003
+            "Sleep": 9999
           },
           "extern_records": 0,
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
-          "entry": 1520,
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "entry": 8495,
           "target": 0,
           "kind": "ticks",
           "tick_seconds": [
-            0.007505800109356642,
-            0.0075895998161286116,
-            0.00619739992544055,
-            0.006576700136065483,
-            0.0069882001262158155,
-            0.006281600100919604,
-            0.006427299929782748,
-            0.006376699777320027,
-            0.004934699973091483,
-            0.005272299982607365
+            0.0057201997842639685,
+            0.004841699963435531,
+            0.004844999872148037,
+            0.00514979986473918,
+            0.005378099856898189,
+            0.005660700146108866,
+            0.0055356998927891254,
+            0.004664300009608269,
+            0.004272599937394261,
+            0.005560100078582764
           ],
           "ticks": 10,
           "pacing": {
             "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 7256
+            "Sleep": 10094
           },
           "extern_records": 0,
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
-          "entry": 1520,
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "entry": 8495,
           "target": 0,
           "kind": "ticks",
           "tick_seconds": [
-            0.005765300011262298,
-            0.005682300077751279,
-            0.005763200111687183,
-            0.0049438998103141785,
-            0.0047287000343203545,
-            0.005432999925687909,
-            0.004894899902865291,
-            0.0050113999750465155,
-            0.00501949992030859,
-            0.004765599966049194
+            0.006012100027874112,
+            0.005305500002577901,
+            0.005127499811351299,
+            0.005207600072026253,
+            0.004810599843040109,
+            0.004422199912369251,
+            0.005243399878963828,
+            0.005797900026664138,
+            0.005270000081509352,
+            0.0058726000133901834
           ],
           "ticks": 10,
           "pacing": {
             "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 9180
+            "Sleep": 10056
           },
           "extern_records": 0,
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
-          "entry": 1520,
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "entry": 8495,
           "target": 0,
           "kind": "ticks",
           "tick_seconds": [
-            0.006926700007170439,
-            0.006948199821636081,
-            0.006070900009945035,
-            0.005493399919942021,
-            0.0070051997900009155,
-            0.006697800010442734,
-            0.006552200065925717,
-            0.0061941000167280436,
-            0.006391400005668402,
-            0.006189699983224273
+            0.005077900132164359,
+            0.004810400074347854,
+            0.004931499948725104,
+            0.006406599888578057,
+            0.005288199987262487,
+            0.005130999954417348,
+            0.004341399995610118,
+            0.004334599943831563,
+            0.004949799971655011,
+            0.005518199875950813
           ],
           "ticks": 10,
           "pacing": {
             "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 6896
+            "Sleep": 9801
           },
           "extern_records": 0,
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
-          "entry": 1520,
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "entry": 8495,
           "target": 0,
           "kind": "ticks",
           "tick_seconds": [
-            0.005391099955886602,
-            0.0042628999799489975,
-            0.0044346998911350965,
-            0.004665999906137586,
-            0.0044502997770905495,
-            0.004896000027656555,
-            0.0053165999706834555,
-            0.004377900157123804,
-            0.005482099950313568,
-            0.004151599947363138
+            0.006445200182497501,
+            0.0054808000568300486,
+            0.005632699932903051,
+            0.0049211999867111444,
+            0.004602300003170967,
+            0.004916799953207374,
+            0.005047300131991506,
+            0.005461200140416622,
+            0.0048454999923706055,
+            0.004930299939587712
           ],
           "ticks": 10,
           "pacing": {
             "GetSystemTimePreciseAsFileTime": 21,
-            "Sleep": 9251
+            "Sleep": 9665
           },
           "extern_records": 0,
           "close": "exited_clean"
@@ -565,50 +331,284 @@
         {
           "target": 1000000,
           "bursts": 1414,
-          "seconds": 0.011730799917131662
+          "seconds": 0.012547400081530213
         },
         {
           "target": 10000000,
           "bursts": 4472,
-          "seconds": 0.03519540000706911
+          "seconds": 0.0463966999668628
         },
         {
           "target": 100000000,
           "bursts": 14142,
-          "seconds": 0.1192857997957617
+          "seconds": 0.2148702999111265
         },
         {
           "target": 1000000000,
           "bursts": 44721,
-          "seconds": 0.4631302000489086
+          "seconds": 1.3502042999025434
         }
       ],
       "fit": {
-        "a_ns_per_burst": 7457.613684039272,
-        "b_ns_per_cycle": 0.1287746714589959,
-        "c_ns_per_tick": 850127.8375169527,
+        "a_ns_per_burst": 8275.476015501386,
+        "b_ns_per_cycle": 0.9803709680168806,
+        "c_ns_per_tick": -250560.5330976436,
         "residual_ns": [
-          206831.65892418363,
-          -292922.94006141863,
-          92632.09266179017,
-          -6540.81152456909
+          116066.56069201512,
+          -164377.92153055352,
+          51981.83131549516,
+          -3670.470477112886
         ],
-        "largest_point_ns_per_cycle": 0.4631302000489086
+        "largest_point_ns_per_cycle": 1.3502042999025434
+      }
+    },
+    "ours_raw": [
+      {
+        "target": 1000000,
+        "seconds_median": 0.012030999874696136,
+        "seconds_all": [
+          0.011315400013700128,
+          0.011474699946120381,
+          0.012030999874696136,
+          0.015494900057092309,
+          0.015700999880209565
+        ],
+        "pacing": {
+          "GetSystemTimePreciseAsFileTime": 1415,
+          "Sleep": 36
+        },
+        "sim_cycle": 1000000,
+        "reason": "ok"
+      },
+      {
+        "target": 10000000,
+        "seconds_median": 0.035130799980834126,
+        "seconds_all": [
+          0.03469559992663562,
+          0.034920199774205685,
+          0.035130799980834126,
+          0.03515280014835298,
+          0.04928519995883107
+        ],
+        "pacing": {
+          "GetSystemTimePreciseAsFileTime": 4473,
+          "Sleep": 80
+        },
+        "sim_cycle": 10000000,
+        "reason": "ok"
+      },
+      {
+        "target": 100000000,
+        "seconds_median": 0.11812249990180135,
+        "seconds_all": [
+          0.11762650008313358,
+          0.11773509997874498,
+          0.11812249990180135,
+          0.11862359987571836,
+          0.11879800003953278
+        ],
+        "pacing": {
+          "GetSystemTimePreciseAsFileTime": 14143,
+          "Sleep": 252
+        },
+        "sim_cycle": 100000000,
+        "reason": "ok"
+      },
+      {
+        "target": 1000000000,
+        "seconds_median": 0.45353759988211095,
+        "seconds_all": [
+          0.45025729993358254,
+          0.4511629000771791,
+          0.45353759988211095,
+          0.4538354999385774,
+          0.46167460014112294
+        ],
+        "pacing": {
+          "GetSystemTimePreciseAsFileTime": 44722,
+          "Sleep": 720
+        },
+        "sim_cycle": 1000000000,
+        "reason": "ok"
+      }
+    ],
+    "ours": {
+      "per_tick_seconds_median": 0.005028599873185158,
+      "per_tick_rounds": [
+        {
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "entry": 1520,
+          "target": 0,
+          "kind": "ticks",
+          "tick_seconds": [
+            0.005883400095626712,
+            0.004890899872407317,
+            0.005935100140050054,
+            0.005402000155299902,
+            0.004508200101554394,
+            0.004848300013691187,
+            0.0043935999274253845,
+            0.00520200002938509,
+            0.004686499945819378,
+            0.005166599992662668
+          ],
+          "ticks": 10,
+          "pacing": {
+            "GetSystemTimePreciseAsFileTime": 21,
+            "Sleep": 9601
+          },
+          "extern_records": 0,
+          "close": "exited_clean"
+        },
+        {
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "entry": 1520,
+          "target": 0,
+          "kind": "ticks",
+          "tick_seconds": [
+            0.005778999999165535,
+            0.006167900050058961,
+            0.004911399912089109,
+            0.004445299971848726,
+            0.004546500043943524,
+            0.00522559997625649,
+            0.005936600035056472,
+            0.004940100014209747,
+            0.004791500046849251,
+            0.004584399983286858
+          ],
+          "ticks": 10,
+          "pacing": {
+            "GetSystemTimePreciseAsFileTime": 21,
+            "Sleep": 10179
+          },
+          "extern_records": 0,
+          "close": "exited_clean"
+        },
+        {
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "entry": 1520,
+          "target": 0,
+          "kind": "ticks",
+          "tick_seconds": [
+            0.00629710010252893,
+            0.0055929000955075026,
+            0.004666199907660484,
+            0.005347599973902106,
+            0.0043784999288618565,
+            0.004520999966189265,
+            0.005028599873185158,
+            0.005184900015592575,
+            0.005072399973869324,
+            0.005856500007212162
+          ],
+          "ticks": 10,
+          "pacing": {
+            "GetSystemTimePreciseAsFileTime": 21,
+            "Sleep": 9883
+          },
+          "extern_records": 0,
+          "close": "exited_clean"
+        },
+        {
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "entry": 1520,
+          "target": 0,
+          "kind": "ticks",
+          "tick_seconds": [
+            0.005898999981582165,
+            0.004735299851745367,
+            0.004428100073710084,
+            0.004073799820616841,
+            0.004957499913871288,
+            0.005422400077804923,
+            0.005507900146767497,
+            0.005268299952149391,
+            0.004185799974948168,
+            0.004510000115260482
+          ],
+          "ticks": 10,
+          "pacing": {
+            "GetSystemTimePreciseAsFileTime": 21,
+            "Sleep": 8994
+          },
+          "extern_records": 0,
+          "close": "exited_clean"
+        },
+        {
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "entry": 1520,
+          "target": 0,
+          "kind": "ticks",
+          "tick_seconds": [
+            0.006624900037422776,
+            0.005316500086337328,
+            0.004671600181609392,
+            0.005313500063493848,
+            0.004653699928894639,
+            0.00493669998832047,
+            0.005593399982899427,
+            0.0049195000901818275,
+            0.004652600036934018,
+            0.005098999943584204
+          ],
+          "ticks": 10,
+          "pacing": {
+            "GetSystemTimePreciseAsFileTime": 21,
+            "Sleep": 9833
+          },
+          "extern_records": 0,
+          "close": "exited_clean"
+        }
+      ],
+      "points": [
+        {
+          "target": 1000000,
+          "bursts": 1414,
+          "seconds": 0.012030999874696136
+        },
+        {
+          "target": 10000000,
+          "bursts": 4472,
+          "seconds": 0.035130799980834126
+        },
+        {
+          "target": 100000000,
+          "bursts": 14142,
+          "seconds": 0.11812249990180135
+        },
+        {
+          "target": 1000000000,
+          "bursts": 44721,
+          "seconds": 0.45353759988211095
+        }
+      ],
+      "fit": {
+        "a_ns_per_burst": 7403.239465304059,
+        "b_ns_per_cycle": 0.12128514748071297,
+        "c_ns_per_tick": 1180437.162349482,
+        "residual_ns": [
+          261096.96092600081,
+          -369775.54516223754,
+          116935.47305055562,
+          -8256.888814339725
+        ],
+        "largest_point_ns_per_cycle": 0.45353759988211095
       }
     },
     "ratio": {
-      "fit_ours_over_ref_percent": 13.3160662619363,
+      "fit_ours_over_ref_percent": 12.371352420405884,
       "fit_b_note": "a/b 互相分配，b 只作参考；见 paired",
       "paired": {
         "target": 1000000000,
-        "ns_per_cycle_ref": 1.3565231999382377,
-        "ns_per_cycle_ours": 0.4631302000489086,
-        "delta_ns_per_cycle": -0.8933929998893291,
-        "ours_over_ref_percent": 34.14097157129306,
-        "speedup_ours_over_ref": 2.929032051451153,
+        "ns_per_cycle_ref": 1.3502042999025434,
+        "ns_per_cycle_ours": 0.45353759988211095,
+        "delta_ns_per_cycle": -0.8966667000204325,
+        "ours_over_ref_percent": 33.59029444024485,
+        "speedup_ours_over_ref": 2.9770504149016643,
         "how": "同一 N、同一个 k → a·k 抵消；(T_ours − T_ref)/N"
       },
-      "per_tick_ours_over_ref_percent": 109.16872345350808
+      "per_tick_ours_over_ref_percent": 96.90884449097966
     }
   },
   "static": {

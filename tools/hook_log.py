@@ -1,5 +1,14 @@
 #!python3
-"""`work/opt/hook.log` 的唯一读写实现（Python 侧）。
+"""`work/hook/hook.log` 的唯一读写实现（Python 侧）。
+
+路径为什么不是常量：`hook.log` 于 2026-10-18 从 `work/opt/` 迁到 `work/hook/`（freq
+设计 §7 决策 4），而 C 侧的新壳是**另一趟部署** —— 过渡期里旧壳仍写 `work/opt/hook.log`。
+所以生效路径由 `resolve()` 决定（规则见它自己的 docstring），`hook_log.PATH` 取到的就是
+它的结果。读写都走这一个入口：`cfg`（转发层）与 `opt`（改写器）两行落在两个文件里，
+归属就会静默错位。
+
+要判「日志还没出现过」，用 `os.path.exists(hook_log.resolve())` —— 空的日志与「没编译」
+不是一回事，别把前者当后者报成功。
 
 格式（制表符分隔，一行一条记录）：
 
@@ -43,7 +52,37 @@ from collections.abc import Iterator
 from typing import NamedTuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PATH = os.path.normpath(os.path.join(HERE, os.pardir, "work", "opt", "hook.log"))
+_WORK = os.path.normpath(os.path.join(HERE, os.pardir, "work"))
+NEW_PATH = os.path.join(_WORK, "hook", "hook.log")        # 迁移目标（C 侧新壳写这里）
+LEGACY_PATH = os.path.join(_WORK, "opt", "hook.log")      # 迁移前的位置（旧壳还写这里）
+
+
+def resolve() -> str:
+    """当前生效的日志路径 —— 读、写、过滤全部走它。
+
+    1. 只有一边存在 → 用它；
+    2. 两边都存在 → 取 **mtime 更新**的那个（过渡期就这么闭合成一个文件：旧壳在写旧文件，
+       于是旧文件 mtime 新，Python 跟着旧壳读旧、写旧；新壳部署后开始写新文件，自动切过去）；
+    3. 都不存在 → 新路径（写入时按它创建，读就是空日志）；
+    4. mtime 相同 → 新路径（确定性，不抖）。
+
+    `append()` 也必须跟随解析结果：另建一个新文件就会让 `cfg` 与 `opt` 分家。
+    """
+    if os.path.exists(NEW_PATH) and os.path.exists(LEGACY_PATH):
+        try:
+            if os.path.getmtime(LEGACY_PATH) > os.path.getmtime(NEW_PATH):
+                return LEGACY_PATH
+        except OSError:
+            pass        # 取不到 mtime（刚被另一个写入者清掉）→ 按规则 4 落到新路径
+        return NEW_PATH
+    return LEGACY_PATH if os.path.exists(LEGACY_PATH) else NEW_PATH
+
+
+def __getattr__(name: str) -> str:
+    """`PATH` 是解析结果（不是常量）—— 长驻进程（watch / bench）因此也会跟着切换。"""
+    if name == "PATH":
+        return resolve()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class Line(NamedTuple):
@@ -73,9 +112,10 @@ def append(seq: int | str, event: str, **kv) -> None:
     cols = [time.strftime("%Y-%m-%d %H:%M:%S"), _seq3(seq), event]
     cols += [f"{k}={_clean(v)}" for k, v in kv.items() if v is not None]
     line = ("\t".join(cols) + "\n").encode("utf-8")
+    target = resolve()          # 写到**刚读到的那一个**（见 resolve 的 docstring）
     try:
-        os.makedirs(os.path.dirname(PATH), exist_ok=True)
-        fd = os.open(PATH, os.O_APPEND | os.O_CREAT | os.O_WRONLY)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        fd = os.open(target, os.O_APPEND | os.O_CREAT | os.O_WRONLY)
     except OSError:
         return
     try:
@@ -89,7 +129,7 @@ def append(seq: int | str, event: str, **kv) -> None:
 def read(path: str | None = None) -> Iterator[Line]:
     """逐行解析。列数不足的行跳过 —— 并发追加时可能读到只写了一半的行。"""
     try:
-        with open(path or PATH, encoding="utf-8", errors="replace") as f:
+        with open(path or resolve(), encoding="utf-8", errors="replace") as f:
             for raw in f:
                 parts = raw.rstrip("\r\n").split("\t")
                 if len(parts) < 3:

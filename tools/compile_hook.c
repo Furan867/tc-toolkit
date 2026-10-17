@@ -27,7 +27,7 @@
  *
  * 编号：**一次 compile() 调用取一个号，src 与 out 共用同一个号** ——
  *       hook_src_005.si 与 hook_out_005.bin 就是一对。计数器是本 DLL 的全局变量，**每次加载（游戏启动）都从 1 重新编号**，
- *       因此加载时会清空目录里的 .si/.bin/.tsv（不含子目录），并把 OPT_DIR 里的
+ *       因此加载时会清空目录里的 .si/.bin/.tsv 与 hook.log（不含子目录），并把 OPT_DIR 里的
  *       中间产物（NNN.raw.bin / NNN.opt.bin / *.log）一并清掉 —— 两边的编号
  *       是同一套，只清一边就会新旧同号混在一起。
  *
@@ -72,11 +72,19 @@
 
 /* 路径宏一律可以 -D 覆盖（默认值与以前逐字符相同）—— 离线判据要用**测试专用路径**
  * 跑四种情形，不能碰活的数据：转发层加载时会清空 OUT_DIR / OPT_DIR（见 purge_*），
- * 测试构建若共用真路径就会把游戏抓到的捕获和 work/opt/hook.log 一起洗掉。
+ * 测试构建若共用真路径就会把游戏抓到的捕获和 work/hook/hook.log 一起洗掉。
  * 覆盖 = 只在**测试构建**的命令行上给 -D，正式构建（tools/deploy_compile_hook.py build）
  * 一个都不给，行为与以前完全一致。 */
 #ifndef OUT_DIR
 #define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\hook"
+#endif
+
+/* hook.log 的目录：默认就落在捕获目录（OUT_DIR = work/hook）里。
+ *
+ * 为什么单列一个宏：离线判据（simplexc/tools/hook_offline.py）从 case 的 opt/ 下读
+ * 日志，得把它 -D 到那里的同一个位置；正式构建一个 -D 都不给，于是取默认值。 */
+#ifndef HOOK_LOG_DIR
+#define HOOK_LOG_DIR OUT_DIR
 #endif
 
 /* 产物改写器（MVP：把产物交给外部 Python 走一趟，再**就地**写回原缓冲）
@@ -554,9 +562,9 @@ static BOOL read_entry(const char* path, long long* val) {
  * 系统保证；日志的价值也全在历史。
  */
 static void hook_log(LONG seq, const char* event, const char* kv) {
-    CreateDirectoryA(OPT_DIR, NULL);
+    CreateDirectoryA(HOOK_LOG_DIR, NULL);
     char path[MAX_PATH];
-    sprintf(path, "%s%chook.log", OPT_DIR, SEP);
+    sprintf(path, "%s%chook.log", HOOK_LOG_DIR, SEP);
     HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -707,7 +715,11 @@ static void purge_captures(void) {
     if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在，没什么可清的 */
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   /* 不碰子目录 */
-        if (!ends_with_ci(fd.cFileName, ".si") &&
+        /* hook.log 与捕获同批清：它是**一次游戏会话**的记录（编号随加载从 1 重来），
+           留着上一会话的同号行，按编号回查归属时（ownership 同号取最后一条）会摸到
+           上一会话的值 —— 与 purge_workdir 挡的是同一个坑。 */
+        if (lstrcmpiA(fd.cFileName, "hook.log") != 0 &&
+            !ends_with_ci(fd.cFileName, ".si") &&
             !ends_with_ci(fd.cFileName, ".bin") &&
             !ends_with_ci(fd.cFileName, ".tsv")) continue;   /* manifest.tsv 同批清 */
         lstrcpyA(path, OUT_DIR);

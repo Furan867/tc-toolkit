@@ -40,6 +40,8 @@
 `baseline_differs` 会如实报 False —— 别把它当成「参考不回归」的证据。
 
 ⚠ 不碰 `work/hook/` 与 `work/opt/`：路径宏全部 `-D` 到 `work/tmp/hook_offline/` 下。
+`HOOK_LOG_DIR`（hook.log 所在的目录，工作区壳的默认值是 OUT_DIR = `work/hook/`）也 `-D`
+到 case 的 `opt/` —— `snapshot()` 就是从那里读日志的。
 
 用法
 ----
@@ -153,6 +155,9 @@ def defs(v):
     return [
         f'-DOUT_DIR="{d["out"].replace(chr(92), "/")}"',
         f'-DOPT_DIR="{d["opt"].replace(chr(92), "/")}"',
+        # 工作区壳默认把 hook.log 写进 OUT_DIR；pin 到 opt/ 才与 snapshot() 读的位置一致
+        # （HEAD 基线壳本来就写 OPT_DIR = opt/，多一个 -D 对它无害）。
+        f'-DHOOK_LOG_DIR="{d["opt"].replace(chr(92), "/")}"',
         f'-DOURS_BLOB="{d["blob"].replace(chr(92), "/")}"',
         f'-DOPT_INI="{d["ini"].replace(chr(92), "/")}"',
         f'-DOPT_SCRIPT="{STUB.replace(chr(92), "/")}"',

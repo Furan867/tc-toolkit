@@ -219,11 +219,17 @@
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。
-规模：`get_component_count() = 532`、`mode_refresh()` **6252 行**、组件种类里 `com_custom` 33 个
-（→ 含**子元件层级**，前端不能只做平铺）。参考产物 ≈46600 条指令，与设计 §2.5 的 46591 条吻合。
+规模：`get_component_count() = 532`、`mode_refresh()` **6252 行**、43 个 def 名 / 89 条顶层声明；
+**可达闭包 = 10 个名字 / 5090 代码行**（从 `run_sim` 顶层块起按调用图名字匹配，`decls.py` 的 strict 口径），
+加顶层骨架 91 行 = **M3.0 规模 5181 行**。
+⚠️ 口径坑：`work/tmp/dossier/reachability.py` 给出的「19 个可达」把 `def name(` **声明头**也当调用
+（8 处单行/空体 def + 嵌套 `handle_test_result` 头），多算 9 个；以 `decls.py` 的 10 个为准。
+`com_custom`(33) 与 `com_probe_wire_bit`(48) 本体是**空块、0 行代码**（代码已在 `mode_refresh` 里平铺），
+所以「子元件层级」不构成额外 lowering 工作量。参考产物 ≈46600 条指令，与设计 §2.5 的 46591 条吻合。
 为什么必须存仓里：`work/hook/` 每次游戏内编译都覆盖同名文件（实测 17:12 那批被 17:21 整批替换），
 而且产物里的游戏内存地址按进程实例变 —— 判据不能依赖会被冲掉的路径或活着的进程。
-验证：`sha256sum simplexc/corpus/rv32im/rv32im.{si,bin}`；`grep -c '' simplexc/corpus/rv32im/rv32im.si`
+验证：`sha256sum simplexc/corpus/rv32im/rv32im.{si,bin}`；`grep -c '' simplexc/corpus/rv32im/rv32im.si`；
+      可达闭包：`python simplexc/frontend/decls.py --src simplexc/corpus/rv32im/rv32im.si`（看 stderr 的 strict 口径）
 最后验证：2026-10-17
 
 ### 宿主该映射多大，由 `memory_copy`/`memory_clear` 的**实参**决定（不是 `c_alloc`）

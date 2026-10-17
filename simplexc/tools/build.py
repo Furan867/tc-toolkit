@@ -178,6 +178,28 @@ def step_ast_dump() -> None:
         hint="编译前端失败 → 看 frontend/*.cc 的报错；它只用 C++17 标准库（不需要 LLVM）。")
 
 
+def step_simplexc_cli() -> None:
+    print("== simplexc_cli ==")
+    out = os.path.join(BUILD, "simplexc_cli.exe")
+    # M4.5 的产品路径入口：frontend + lower + assemble，`.si` -> blob。
+    # 只有这一条命令会把三段串起来（判据入口与将来的壳都复用它）。
+    run([CXX, "-std=c++17", "-O2",
+         "-I", "simplexc", "-I", LLVM_INC,
+         "simplexc/cli/simplexc_cli.cc",
+         "simplexc/frontend/decls.cc",
+         "simplexc/frontend/lexer.cc",
+         "simplexc/frontend/parser.cc",
+         "simplexc/frontend/frontend.cc",
+         "simplexc/frontend/ast_dump.cc",
+         "simplexc/frontend/json.cc",
+         "simplexc/lower/lower.cc",
+         "simplexc/lower/llvm_ffi.cc",
+         "simplexc/assemble/assemble.cc",
+         "-L", LLVM_LIB, "-lLLVM-C",
+         "-o", REL(out)], out=out,
+        hint="编译 CLI 失败 → 需要 build/llvm/{include,lib}（头 + 导入库）；静态库顺序要压在源文件之后。")
+
+
 def step_spike() -> None:
     print("== spike ==")
     out = os.path.join(BUILD, "blob_empty.bin")
@@ -195,6 +217,7 @@ def step_spike() -> None:
 
 
 STEPS = {
+    "simplexc_cli": step_simplexc_cli,
     "objs": step_objs,
     "tcblob": step_tcblob,
     "llvm_prog": step_llvm_prog,

@@ -62,17 +62,17 @@
    行尾注释的 `c_alloc(134217728)` 也不对（差 4096 字节就崩）。现按 `memory_copy`/`memory_clear`
    实参算区间（RV32IM 合计 **278.5 MB / 6 段**）。
    **M3 判据基线已建立**：参考 vs 参考 10 tick → `tick 10/10 · 逐 tick 全等=是 · 仿真真在工作=是`。
-4. **语义档案（一次一条）**：M3.0 卡住 9 条 U-L（U-L1/2/4/5/7/8/10/12/14），每条都已配最小实验配方
-   （`simplexc/dossier/m3_0_constructs.tsv` 的 `experiment` 列 + notes §5）。
-   **U-L1 已定死**（`simplexc/dossier/ul1_load_store.md`）：`p` 是**字节地址**（`p+1` = 下一字节，
-   `Ptr` 算术不缩放）、**无对齐要求**（非 8 对齐的 U64 读写静默成功、不向下对齐、不越写邻居）、
-   **窄类型写只写该宽度**（`store(p, U8)` 写 1 字节）。→ `load`/`store` 的 `align` 只能声明 1，
-   且不得插入对齐检查。**U-L7（提升/截断）在跑** —— 它决定那 5053 行模板代码（95.7%）怎么翻译。
-   最大风险仍是闭包捕获语义（`halt`/`handle_test_result`/`get_target_cycle`）：错的表现是控制流，
-   不是数值差。
-5. **前端落地通道**：先只做「可达闭包 + 62 个组件模板」一条表达式树通道，离线 CLI 打通再接壳。
-   非 2 的幂位宽（U5/U7/U33 等 300+ 行）统一「按 64/32 位算 + 显式掩码」，不用 LLVM 原生 `iN`
-   （后端对非 8/16/32/64 位宽的假设不可控）。
+4. **语义档案：已定 4 条，其余跟着 lowering 走**（不再串行做实验）。
+   已定：`U-L1`（load/store 字节地址、无对齐、窄写只写该宽度）· `U-L7`+运行期复核（常量按符号性、
+   运行期一律 `zext(trunc_W)`）· `U-L8`（`>>` 永远 lshr、移位量按 W 取模、除零不 trap、`asr` 饱和）·
+   `/`、`%`（看被除数类型，除数不参与；折叠窄常量零扩展是参考实现的不自洽，要复刻）。
+   剩余 `U-L2`（数组下标）/`U-L4`（struct）/`U-L5`（enum 宽度）/`U-L10`（字符串）/`U-L12`（min/max）/
+   `U-L14`（`in_scope`）—— **写一条验一条**。
+5. **前端两刀已落地**：`simplexc/frontend/decls.py`（词法 + 顶层声明 + 函数体只配平）→
+   `simplexc/frontend/expr.py`（语句 + 表达式 AST）。判据：`mode_run` 1117 语句 / 5800 表达式节点 /
+   **覆盖 1257/1257 = 100%**、未支持构造 0；AST 保真（带 `src_line`、显式 cast 带目标类型、
+   **字面量解析期不折叠** —— 这条是除法语义能复刻的前提）；三种故意破坏都报错带行列号。
+   下一步 = **lowering v0**：AST → LLVM IR（LLVM-C API），先吃 `006` 做最小闭环。
 6. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行消费。
    与壳抢同一份 `tools/compile_hook.c` → 串行，锁 `work/tmp/locks/compile-hook.lock`。
 

@@ -191,6 +191,18 @@
 验证：`%LOCALAPPDATA%\CrashDumps` 里 16:47 / 16:50 两份 dump + `wevtutil` 的 Application 日志（Id 1000）
 最后验证：2026-10-17
 
+## M3 语义档案（实验后定死；没测的别当已定）
+
+### U-L1：`load`/`store` 的 `p` 是**字节地址**，无对齐要求，窄类型写只写该宽度
+- `p + 1` = 下一字节（不是下一个元素）；`p + Int k` → lowering 里直接 `add` `k`，**不乘元素宽度**。
+- 非 8 对齐的 `U64` 读/写都**静默成功**：精确落在「该地址起的 8 个字节」，**不向下对齐**、**不越写邻居**、不 AV。
+- `store(p, U8 v)` 只写 1 字节，邻居保留（不是提升成 8 字节写）。
+- → lowering：`load`/`store` 的 `align` 只能声明 **1**，且**不得插入对齐检查/陷阱**（参考实现没有这个假设）。
+- 未测：`U32/U16/U1/U5/U3` 的读写宽度（属 U-L7）、`Arr[i]`/`Str[i]` 的单位（属 U-L2）、跨页边界的非对齐读写。
+验证：`simplexc/dossier/ul1_load_store.md`（5 个片段 × 编译 + 宿主分页转储，片段正文抄在文件里，含三条命令）
+      复跑观测：`PYTHONIOENCODING=utf-8 python simplexc/tools/host/host.py --src work/tmp/ul1/q2_store_unaligned.si --bin work/tmp/ul1/q2_store_unaligned.bin --ticks 1 --entry 0x212F --out <x>.jsonl --dump-pages <d>` → 页内字节 `aa 88 77 66 55 44 33 22 11 aa…`
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

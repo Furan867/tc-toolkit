@@ -39,17 +39,20 @@
 - U10：extern 调用走 Win64 ABI，且调用目标 = `compile_real.dll` 自己的导入 thunk → 参考产物绑定 DLL 加载基址，
   **产物跨 boot 不能逐字节相等**。
 
-**M1 spike：第一个验收点已过**（2026-10-16）
+**M1 spike：装配链路已跑通（进程内自测），未进游戏**（2026-10-17）
 - `LLVM-C.dll` 已取到并**用 MinGW 链上**（`gendef` + `dlltool` 造导入库）；`LLVMRunPasses(default<O2>)` +
-  `LLVMTargetMachineEmitToMemoryBuffer(ObjectFile)` 拿到 COFF 字节（`simplexc/shell/llvm_link_probe.cpp`，
-  最后验证输出 `RESULT: OK`）。
-- 装配器的**输入形状已实测**（节、三类 REL32 目标、`.pdata` 的 `ADDR32NB`、未定义符号形态）→ 见 `facts.md`。
+  `LLVMTargetMachineEmitToMemoryBuffer(ObjectFile)` 拿到 COFF 字节（`simplexc/shell/llvm_link_probe.cpp`）。
+- **装配器可用**：`simplexc/assemble/`（COFF 解析 → 节归并/丢弃 → REL32 打补丁 → extern 桩与 `__imp_` 指针槽
+  → 8 字节头 + bit62 + entry）。`simplexc/shell/entry_shim.S`（入口 shim + `___chkstk_ms`）、
+  `simplexc/runtime/rt_min.cpp`（`thread_exit`）、`simplexc/cli/tcblob.cpp`（CLI + `--run` 自测）。
+- 判据（已跑）：`tcblob --obj rt_min.o --obj entry_shim.o --obj prog_empty.o --entry __tc_entry --run`
+  → `RUN ok：blob 在 … 上跑完，线程退出码 0`；产物 128 字节，头 = `0x80 | bit62`，entry=0x10。
+- 仍未做：把 LLVM 模块接进来（`tc_main` 由 LLVM 提供）、游戏内实跑、壳的三模式开关。
 
 ### 下一步（已决定）
 
-1. **M1 继续**：写 `simplexc/assemble`（COFF 解析 → 合并节 → REL32 应用 → 外部符号 stub pool → 8 字节头 bit62
-   → entry 偏移 + 生命周期）+ 手写 entry shim（保存寄存器 + 对齐栈）+ 壳里加 `compiler` 三模式开关
-   → 游戏内跑通空程序（不崩、bit62 生效）。`tools/compile_hook.c` 这段时间只归 spike 用。
+1. **M1 继续**：把 LLVM 模块接进装配链（程序根符号 `tc_main`）→ 游戏内跑通空程序（不崩、bit62 生效）；
+   然后写壳里的 `compiler` 三模式开关。`tools/compile_hook.c` 这段时间只归 spike 用。
 2. **定 MVP 必须支持的构造集合**：以 `corpus/coverage.tsv` 的 98/98 构造为下界，加上 stdlib 前缀里出现的那 6 个
    （`type alias`/`@Any`/`$ 参数`/`asm`/`extern`/`big_int_*`），交负责人确认。
 3. **M3 语义档案**：接口文档 §9 的 U-L1…U-L14 **必须实验后才写死**（`load`/`store` 的地址单位是地基）。

@@ -26,11 +26,13 @@
   `#!python3`；`build_component_map` 会打印每次编译耗时，十几秒就是选错解释器了。
 - 别用 `objdump -g`（不加 `--dwarf=`）判断 DWARF 里有没有 Nim 符号 —— 它打印的
   `…@spasses@sfront_end@stokenizer.nim.c:` 来自 **COFF `.file` 记录**，不是 `.debug_info` 的内容。
-- 别把 pi-lens 的 C/C++ 诊断当编译错误 —— `cpp-check` 是**单文件 `-fsyntax-only`，不带 include 路径**
-  （它源码里自己这么写）。报 `printf`/`NULL`/`stderr` 未声明、`inttypes.h` 找不到都是它找不到系统头，
-  真判据只有 `g++` 编译。缓解办法：在源文件旁放 `compile_flags.txt`（已放
-  `simplexc/shell/compile_flags.txt`，里面写 `--target` + w64devkit 的 `-isystem` 路径），
-  并把 C 头换成 C++ 头（`<cstdio>` 而不是 `<stdio.h>`）、调用加 `std::` 前缀。
+- 别把 pi-lens 的 C/C++ 诊断当编译错误 —— 报「找不到系统头」的是它的 **lsp runner（自带 clangd 22.1.0，
+  windows-msvc 版）**，不是 `cpp-check`（后者落到 `g++`，从没报过）。真判据只有 `g++` 编译。缓解已就位：
+  机器级 `%LOCALAPPDATA%\clangd\config.yaml` + 源文件旁 `compile_flags.txt`（`--target` + `--gcc-toolchain` + `-I`，
+  见 `simplexc/compile_flags.txt`）。**别用逐行 `-isystem` 拼 mingw 头目录** —— libstdc++ 用 `#include_next`
+  取 `stdlib.h`，重复且顺序不对的 `-isystem` 会让它找不到（要用 `-idirafter`）。
+- `.h` 会被 pi-lens 按 **C** 检查，`compile_flags.txt` 里的 `-std=c++17` 于是非法 —— C++ 头一律用 `.hpp`。
+  另一个陷阱：同一文件重复 write 时 harness 不重复报 —— 「第二次写没报错」不能当修好的证据。
 - 别让 git 的行尾归一化碰语料 —— `core.autocrlf=true` 会把 CRLF 折成 LF 存（`src/001.si` 少 74 字节）、
   检出时再折回来；只要语料路径在 `.gitattributes` 里标了 `-text` 才安全。
   自检：`git show :<file> | wc -c` 必须等于工作区字节数。

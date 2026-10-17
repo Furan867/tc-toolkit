@@ -1,0 +1,4 @@
+--target=x86_64-w64-windows-gnu
+--gcc-toolchain=D:/bin/w64devkit
+-std=c++17
+-I../build/llvm/include

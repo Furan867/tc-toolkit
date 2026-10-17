@@ -144,7 +144,8 @@ tools/freq/                 # 包（位置与命名已确认）
 2. `products`（合并两份 `latest_product`，保留 `wait_new_product` 的失败解释）+ `hook_log` 路径迁移 + per-call `impl` 行。
 3. `sampler`（统一 median/丢首个/相位对齐/停机判据）+ `report`（人读表 + JSON schema 1）。
 4. `driver`（薄封装 simctl + 前置断言）+ `cli_bench` 支持 `--variant`。
-5. 回归：用现有三份数据逐字符比对；补最小测试；更新 `docs/map.md` / `docs/facts.md`（仓库里没有 `TOOLS.md`）。
+5. 回归：用现有三份数据逐字符比对；补最小测试；更新 `docs/map.md` / `docs/facts.md` / **`TOOLS.md`**
+   （`TOOLS.md` 一直都在，见 `docs/map.md` §工具清单；工具的行为约定写那里，不是 `facts.md`）。
 
 ---
 

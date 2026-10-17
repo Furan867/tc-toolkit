@@ -331,8 +331,8 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
 | **ours**（我们的 lowering） | 24.843 | 24.818 | **24.83 MHz** | 58612 B / entry `0xE1F0` |
 | **reference**（游戏自带编译器） | 5.204 | 5.169 | **5.19 MHz** | 219088 B / entry `0x215B` |
 
-采样波动 2.1–3.0%。每轮都是 `simctl recompile`（注入 Ctrl+Z）触发编译、`simctl run`（F6）恢复运行后再采 ——
-**切换 `compiler` 必须重编译才生效**（壳在编译时读 `opt.ini`）。
+采样波动 2.1–3.0%。每轮都是 `simctl recompile` 触发编译、`simctl run` 恢复运行后再采
+（工具语义与操作约定见 `TOOLS.md` 的 simctl 一节）。
 reference 的 5.19 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合，说明靶子与量法都没跑偏。
 验证：`work/tmp/m4/{summary_ours_2.txt,summary_ref_2.txt,freq_log.tsv}`；`work/hook/hook.log` 的 seq 007/009/010
 最后验证：2026-10-18

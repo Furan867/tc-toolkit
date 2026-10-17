@@ -17,6 +17,7 @@
 | 事件 | 写入者 | 含义 | 键 |
 |---|---|---|---|
 | `cfg`       | 转发层 | 起改写子进程前读到的配置 | `rewrite` |
+| `impl`      | 转发层 | **这一次实际走了哪个实现**（与 `cfg` 的 `compiler` 可能不同：回退就是不同） | `impl` `result` |
 | `writeback` | 转发层 | 产物已就位写回原缓冲     | `len` |
 | `entry`     | 转发层 | 缩短后锚点已同步更新     | `offset` |
 | `error`     | 转发层 | 任一环节放弃             | `stage` + `code`/`timeout`/`detail` |

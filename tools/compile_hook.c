@@ -26,11 +26,16 @@
  *                        全字段是「每次调用的结构化事实」，塞进去会搅混语义。
  *
  * 编号：**一次 compile() 调用取一个号，src 与 out 共用同一个号** ——
- *       hook_src_005.si 与 hook_out_005.bin 就是一对。
- *       计数器是本 DLL 的全局变量，**每次加载（游戏启动）都从 1 重新编号**，
+ *       hook_src_005.si 与 hook_out_005.bin 就是一对。计数器是本 DLL 的全局变量，**每次加载（游戏启动）都从 1 重新编号**，
  *       因此加载时会清空目录里的 .si/.bin/.tsv（不含子目录），并把 OPT_DIR 里的
  *       中间产物（NNN.raw.bin / NNN.opt.bin / *.log）一并清掉 —— 两边的编号
  *       是同一套，只清一边就会新旧同号混在一起。
+ *
+ * 入口
+ * ----
+ * `opt.ini` 的 `[opt] compiler=` 选实现：`reference`（默认）/ `ours` / `ours_with_fallback`，
+ * 语义见 `docs/specs/2026-10-15-simplexc-interfaces.md` §5；每次都写一条 `impl` 事件到 `hook.log`
+ * （“配置了什么”与“实际走了哪个”是两件事，只认后者）。
  *
  * 契约（已由反汇编独立验证，2026-09-15 / 09-17 两次复核）
  * ------------------------------------------------------
@@ -68,8 +73,14 @@
 #define OPT_DIR     "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\opt"
 #define OPT_PROJ    "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing"
 #define OPT_SCRIPT  OPT_PROJ "\\tools\\optimize_image.py"
+#define OPT_INI     OPT_PROJ "\\opt.ini"
 #define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
 #define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
+
+/* 自研实现的产物（spike 占位：真正的编译器还没有，先拿一个装配好的固定 blob 走通整条链）。
+ * 由 `simplexc/cli/tcblob.cc` 生成 —— 里面是「空程序」：shim → tc_main（空）→ thread_exit。
+ * 一旦前端接进来，这个读文件的函数就被真正的编译器核心取代。 */
+#define OURS_BLOB   OPT_PROJ "\\build\\blob_empty.bin"
 
 typedef void* (*compile_fn)(void* out, void* src, int flags);
 typedef void  (*void_fn)(void);
@@ -77,6 +88,92 @@ typedef void  (*void_fn)(void);
 static HMODULE    g_real = NULL;
 static compile_fn g_compile = NULL;
 static LONG       g_seq = 0;
+static void*      g_ours_prev = NULL;    /* 我们上次给游戏的产物缓冲（bit62 置位 → 游戏不 free） */
+
+/* ---- 选实现：`opt.ini` 的 `[opt] compiler=`（见 docs/specs/…interfaces.md §5）
+ *
+ * 合法值只在 `resolve_compiler()` 里定义一次（“静默改值”远比报错难查，见 pitfalls）。
+ * 读不到 / 非法 → **reference**：绝不能把「没配」当成「我们的实现」。
+ */
+static const char* resolve_compiler(void) {
+    static char mode[32] = "";
+    GetPrivateProfileStringA("opt", "compiler", "reference", mode, sizeof(mode), OPT_INI);
+    if (lstrcmpA(mode, "ours") == 0) return "ours";
+    if (lstrcmpA(mode, "ours_with_fallback") == 0) return "ours_with_fallback";
+    return "reference";
+}
+
+/* 自研路径的产物：现在只把预先装配好的 blob 读进来、交给游戏（spike 占位）。
+ *
+ * 三条不变量（写错了会崩游戏，别动）：
+ *   · 缓冲是 **malloc** 的，头 word 的 **bit62 置位** → 游戏不会拿 Nim 的分配器去 free 我们的指针；
+ *   · `out[0]` = 缓冲总长（含 8 字节头），缓冲实际分配 **out[0] + 8** 字节（游戏会多读 8 字节）；
+ *   · 上一次的缓冲在下一次编译开始时释放（产品生命周期由我们持有）。
+ */
+static int ours_compile_spike(void* out) {
+    if (g_ours_prev) { free(g_ours_prev); g_ours_prev = NULL; }
+    HANDLE h = CreateFileA(OURS_BLOB, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 16 || sz.QuadPart > (64LL << 20)) {
+        CloseHandle(h);
+        return 0;
+    }
+    long long n = sz.QuadPart;
+    void* buf = malloc((size_t)n + 8);          /* 多 8 字节：游戏 memcpy 会读到末尾之外 */
+    if (!buf) { CloseHandle(h); return 0; }
+    memset(buf, 0, (size_t)n + 8);
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buf, (DWORD)n, &got, NULL);
+    CloseHandle(h);
+    if (!ok || got != (DWORD)n) { free(buf); return 0; }
+    unsigned long long header = *(unsigned long long*)buf;
+    if (!(header & (1ULL << 62))) {             /* 产物头必须带 bit62，否则游戏会 free 它 */
+        free(buf);
+        return 0;
+    }
+    /* entry 偏移不在产物里（它是 Result 的字段）—— tcblob 把它写成 `<blob>.entry`（十六进制）。 */
+    long long entry = 0;
+    char epath[MAX_PATH];
+    sprintf(epath, "%s.entry", OURS_BLOB);
+    HANDLE he = CreateFileA(epath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (he == INVALID_HANDLE_VALUE) { free(buf); return 0; }
+    char ebuf[32];
+    DWORD egot = 0;
+    BOOL eok = ReadFile(he, ebuf, sizeof(ebuf) - 1, &egot, NULL);
+    CloseHandle(he);
+    if (!eok || egot == 0) { free(buf); return 0; }
+    ebuf[egot] = 0;
+    if (sscanf(ebuf, "%llx", (unsigned long long*)&entry) != 1) { free(buf); return 0; }
+    if (entry < 0 || entry >= n) { free(buf); return 0; }
+
+    g_ours_prev = buf;
+    *(long long*)((char*)out + 0) = n;
+    *(void**)((char*)out + 8) = buf;
+    *(long long*)((char*)out + 16) = entry;     /* 8 字节写全（游戏按 32 位读、按 64 位用） */
+    *(long long*)((char*)out + 24) = 0;         /* err_len = 0 */
+    *(long long*)((char*)out + 32) = 0;         /* err_ptr = 0 */
+    return 1;
+}
+
+/* `ours` 模式的失败 Result：**必须给非 0 的 out[3]**，否则游戏会走成功路径、
+ * 在 jit 里因 len<=0 抛 index error（见 docs/facts.md）。返回值的形状由游戏自己拼，
+ * 这里返回 NULL 即可（真正决定走向的是 out[3]）。 */
+static void ours_fail_result(void* out, long long seq, const char* why) {
+    long long n = (long long)strlen(why);
+    unsigned long long* desc = (unsigned long long*)malloc((size_t)n + 9);
+    if (!desc) return;
+    desc[0] = ((unsigned long long)n) | (1ULL << 62);   /* bit62 → 游戏不 free */
+    memcpy((char*)desc + 8, why, (size_t)n + 1);
+    *(long long*)((char*)out + 0) = 0;
+    *(void**)((char*)out + 8) = NULL;
+    *(long long*)((char*)out + 16) = 0;
+    *(long long*)((char*)out + 24) = n;
+    *(void**)((char*)out + 32) = (char*)desc + 8;
+    (void)seq;
+}
 
 static void ensure_real(void) {
     /* 延迟加载：绝不能在 DllMain 里 LoadLibrary（loader lock 会死锁）。
@@ -229,7 +326,7 @@ done:
 static void manifest_line(LONG seq, int flags,
                           const char* src_name, long long src_len, const char* src_sha,
                           const char* out_name, long long out_len, const char* out_sha,
-                          const void* out) {
+                          const void* out, const char* impl) {
     if (!out) return;                      /* 没有 out 缓冲就没什么可记 */
     CreateDirectoryA(OUT_DIR, NULL);
     char path[MAX_PATH];
@@ -245,15 +342,15 @@ static void manifest_line(LONG seq, int flags,
     int n = 0;
     if (fresh)
         n += sprintf(line + n, "seq\ttime\tflags\tsrc\tsrc_len\tsrc_sha256"
-                               "\tout\tout_len\tout_sha256\tr0\tr1\tr2\tr3\tr4\r\n");
+                               "\tout\tout_len\tout_sha256\tr0\tr1\tr2\tr3\tr4\timpl\r\n");
     n += sprintf(line + n,
                  "%03ld\t%04d-%02d-%02d %02d:%02d:%02d\t0x%X\t%s\t%lld\t%s\t%s\t%lld\t%s"
-                 "\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\r\n",
+                 "\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t%s\r\n",
                  seq, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
                  (unsigned)flags, src_name, src_len, src_sha, out_name, out_len, out_sha,
                  (unsigned long long)r[0], (unsigned long long)r[1],
                  (unsigned long long)r[2], (unsigned long long)r[3],
-                 (unsigned long long)r[4]);
+                 (unsigned long long)r[4], impl ? impl : "-");
     DWORD w = 0;
     WriteFile(h, line, (DWORD)n, &w, NULL);
     CloseHandle(h);
@@ -519,18 +616,42 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         }
     }
     if (!g_compile) return NULL;
-    void* ret = g_compile(out, src, flags);
+
+    const char* mode = resolve_compiler();          /* reference / ours / ours_with_fallback */
+    const char* impl = mode;
+    int ours_ok = 0;
+    if (out && lstrcmpA(mode, "reference") != 0) {
+        ours_ok = ours_compile_spike(out);
+        if (!ours_ok) {
+            if (lstrcmpA(mode, "ours") == 0) {
+                /* 不转交：给一个形状合法的失败 Result（out[3] ≠ 0），游戏不跑新代码也不会崩 */
+                impl = "ours_failed";
+                hook_log(seq, "impl", "impl=ours\tresult=fail");
+                ours_fail_result(out, seq, "ours: no product available");
+                return NULL;
+            }
+            impl = "fallback";
+        } else {
+            hook_log(seq, "impl", "impl=ours\tresult=ok");
+        }
+    }
+
+    void* ret = NULL;
+    if (!ours_ok) {
+        ret = g_compile(out, src, flags);
+        if (lstrcmpA(mode, "reference") != 0)
+            hook_log(seq, "impl", "impl=fallback\tresult=reference");
+    }
     if (out) {
         long long olen = *(long long*)out;
         void* optr = *(void**)((char*)out + 8);
         int o_wrote = 0;
         if (optr) {
             o_wrote = dump("out", ".bin", optr, olen, seq);
-            /* MVP：让产物去 Python 里转一圈，原样写回。任何一步失败都不影响返回。 */
-            optimize_inplace(optr, olen, seq, out);
+            /* 改写器是给**参考产物**准备的（它按参考实现的指令形状做等长改写）：
+               我们自己的产物不过它 —— 否则就是拿别人尺子改自己的衣服。 */
+            if (!ours_ok) optimize_inplace(optr, olen, seq, out);
         }
-        /* 放在写回之后：r2 记录的是改写器更新后的最终锚点。
-           sha 失败留 "-"，文件名按 dump 是否真的落了盘来写。 */
         char ssha[65] = "-", osha[65] = "-", sname[32] = "-", oname[32] = "-";
         if (s_wrote) {
             sprintf(sname, "hook_src_%03ld.si", seq);
@@ -540,7 +661,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
             sprintf(oname, "hook_out_%03ld.bin", seq);
             sha256_hex(optr, olen, osha);
         }
-        manifest_line(seq, flags, sname, slen, ssha, oname, olen, osha, out);
+        manifest_line(seq, flags, sname, slen, ssha, oname, olen, osha, out, impl);
     }
     return ret;
 }

@@ -15,13 +15,17 @@
     py tools/fetch_llvm.py                          # 最新稳定版 → D:/downloads + build/llvm
     py tools/fetch_llvm.py --tag llvmorg-23.1.3
     py tools/fetch_llvm.py --list                   # 只列资产（含 sha256），不下载
+    py tools/fetch_llvm.py --extra bin/clang.exe     # 额外多解一个成员（可重复）
+    py tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe   # 不联网重解一遍
 
 产出
 ----
     <dest>/<asset 名>              压缩包（默认保留，`--no-keep` 删）
     <repo>/build/llvm/bin/LLVM-C.dll
     <repo>/build/llvm/include/llvm-c/*.h
-    <repo>/build/llvm/llvm.json    版本 / 资产名 / sha256 / 大小（供 facts.md 与重验）
+    <repo>/build/llvm/lib/LLVM-C.lib
+    <repo>/build/llvm/<--extra 给的路径>   例 `bin/clang.exe`（M1.5 用它编译 C 等价物）
+    <repo>/build/llvm/llvm.json    版本 / 资产名 / sha256 / 大小 / 每个文件的 sha256
 """
 from __future__ import annotations
 
@@ -36,13 +40,19 @@ import tarfile
 
 API = "https://api.github.com/repos/llvm/llvm-project/releases/{ref}"
 ASSET_KEY = "x86_64-pc-windows-msvc.tar.zst"
+# 默认成员（LLVM-C 链接那一套）；`--extra` 的成员追加在后面，默认行为不变
 MEMBERS = ("bin/LLVM-C.dll", "include", "lib/LLVM-C.lib")
 ZSTD = r"D:\bin\msys2\usr\bin\zstd.exe"
 
 
 def api(refl: str) -> dict:
-    """查 GitHub 发行信息。走 curl 而不是 urllib —— 同一个工具里只留一条取网络的路径。"""
-    url = API.format(ref=refl)
+    """查 GitHub 发行信息。走 curl 而不是 urllib —— 同一个工具里只留一条取网络的路径。
+
+    ⚠ `releases/{ref}` 只在 ref=latest 时合法；按 tag 查必须走 `releases/tags/<tag>`
+    （写错会 404，而 curl 的报错里看不出是路径问题）。
+    """
+    ref = refl if refl == "latest" else f"tags/{refl}"
+    url = API.format(ref=ref)
     if not url.startswith("https://"):
         raise SystemExit(f"拒绝非 https 地址：{url}")
     r = subprocess.run(["curl", "-sS", "-L", "--fail", "--retry", "3",
@@ -62,6 +72,34 @@ def pick_asset(rel: dict) -> dict:
         if ASSET_KEY in a["name"]:
             return a
     raise SystemExit(f"{rel.get('tag_name')} 里没有 {ASSET_KEY} 资产")
+
+
+def local_asset(dest: str, tag: str, out_root: str) -> dict:
+    """不查 API 时的资产描述：名字从 tag 推，期望 sha256 从上次的 llvm.json 拿。
+
+    为什么要这条路：GitHub 的匿名 API 有额度（60/h，用完返回 403），而“重解一遍 clang.exe”
+    这种日常操作不该依赖网络，更不该依赖“今天的 latest 还是 23.1.3”。
+      · 资产名 = `clang+llvm-<tag 去掉 llvmorg->-x86_64-pc-windows-msvc.tar.zst`；
+      · 期望 sha256 = llvm.json 里记的（tag 对得上就用），没有就只报实际值、不假装核过。
+    """
+    if tag == "latest":
+        raise SystemExit("--offline 必须配 `--tag llvmorg-<版本>`（latest 得问 API 才知道是哪个）")
+    ver = tag.split("llvmorg-", 1)[-1]
+    name = f"clang+llvm-{ver}-{ASSET_KEY}"
+    path = os.path.join(dest, name)
+    if not os.path.isfile(path):
+        raise SystemExit(f"--offline 但本地没有 {path}")
+    sha, size = "", os.path.getsize(path)
+    meta_path = os.path.join(out_root, "llvm.json")
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            old = json.load(f)
+        if old.get("tag") == tag and old.get("asset") == name:
+            sha = str(old.get("sha256") or "")
+    except (OSError, ValueError):
+        pass
+    return {"name": name, "size": size, "digest": f"sha256:{sha}" if sha else "",
+            "browser_download_url": ""}
 
 
 def sha256_of(path: str) -> str:
@@ -96,12 +134,21 @@ def download(url: str, dest: str) -> None:
         raise SystemExit(f"下载失败（curl 返回 {r.returncode}）")
 
 
-def extract(archive: str, top: str, out_root: str) -> list[str]:
-    """只解 MEMBERS 里的文件，落到 out_root（保留 bin/ include/ lib/ 结构）。
+def wanted(rel: str, extras: tuple[str, ...]) -> bool:
+    """tar 内相对路径要不要解：默认三个成员 + 调用者显式要的（`--extra`）。"""
+    if rel in extras:
+        return True
+    return rel == "bin/LLVM-C.dll" or rel == "lib/LLVM-C.lib" or rel.startswith("include/")
+
+
+def extract(archive: str, top: str, out_root: str, extras: tuple[str, ...] = ()) -> list[str]:
+    """只解 MEMBERS（+ extras）里的文件，落到 out_root（保留 bin/ include/ lib/ 结构）。
 
     用 Python 的 `tarfile` 流式解，**不走外部的 tar**：Windows PATH 里的 tar 未必是 GNU tar
     （bsdtar 没有 `--wildcards`），而我们只需要挑几个文件。
     这份 zst 用 1 GB 窗口压缩，zstd 必须加 `--long=30` 才肯解。
+
+    幂等：重复跑就是重写同样的文件。`--extra` 漏解不出来会**报错**（不静默少给）。
     """
     if not os.path.isfile(ZSTD):
         raise SystemExit(f"找不到 zstd：{ZSTD}")
@@ -118,8 +165,7 @@ def extract(archive: str, top: str, out_root: str) -> list[str]:
                 rel = member.name
                 if rel.startswith(top + "/"):
                     rel = rel[len(top) + 1:]
-                if not (rel == "bin/LLVM-C.dll" or rel == "lib/LLVM-C.lib"
-                        or rel.startswith("include/")):
+                if not wanted(rel, extras):
                     continue
                 src = tf.extractfile(member)
                 if src is None:
@@ -138,6 +184,9 @@ def extract(archive: str, top: str, out_root: str) -> list[str]:
         pz.stdout.close()
     if pz.wait() != 0:
         raise SystemExit("zstd 非零退出（压缩包可能损坏）")
+    missing = [e for e in extras if e not in got]
+    if missing:
+        raise SystemExit(f"压缩包里没有这些成员（路径写错了？）：{missing}")
     return got
 
 
@@ -156,25 +205,37 @@ def main() -> int:
     ap.add_argument("--out", default=None, help="解出目录（默认 <repo>/build/llvm）")
     ap.add_argument("--list", action="store_true", help="只列资产")
     ap.add_argument("--no-keep", action="store_true", help="解完删压缩包")
+    ap.add_argument("--extra", action="append", default=[], metavar="PATH",
+                    help="额外解出的成员，tar 内相对路径（可重复；例 bin/clang.exe）")
+    ap.add_argument("--offline", action="store_true",
+                    help="不查 GitHub API（用本地压缩包 + 上次 llvm.json 里记的 sha256；需配 --tag）")
     a = ap.parse_args()
+    extras = tuple(a.extra)
 
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
     out_root = a.out or os.path.join(root, "build", "llvm")
 
-    rel = api(a.tag)
-    asset = pick_asset(rel)
+    if a.offline:
+        asset = local_asset(a.dest, a.tag, out_root)
+        tag = a.tag
+    else:
+        rel = api(a.tag)
+        asset = pick_asset(rel)
+        tag = rel["tag_name"]
     digest = ""
     if asset.get("digest"):
         digest = str(asset["digest"]).split(":")[-1]
-    print(f"tag      : {rel['tag_name']}")
+    print(f"tag      : {tag}")
     print(f"asset    : {asset['name']}  ({asset['size'] / 1048576:.1f} MB)")
-    print(f"sha256   : {digest or '（API 未提供）'}")
+    print(f"sha256   : {digest or '（无期望值，只看实际）'}")
     if a.list:
         return 0
 
     archive = os.path.join(a.dest, asset["name"])
     if not (os.path.isfile(archive) and os.path.getsize(archive) == asset["size"]):
+        if a.offline:
+            raise SystemExit(f"--offline 但压缩包大小对不上：{archive}")
         download(asset["browser_download_url"], archive)
     else:
         print(f"已有完整压缩包：{archive}")
@@ -185,14 +246,18 @@ def main() -> int:
     print(f"下载校验通过：sha256 {got_sha}")
 
     top = asset["name"].replace(".tar.zst", "")
-    got = extract(archive, top, out_root)
+    got = extract(archive, top, out_root, extras)
     print(f"解出 {len(got)} 个文件 → {out_root}")
     for g in sorted(got):
         print(f"  {g}")
+    # 每个文件的 sha256 也记下来：换机器/重解之后能直接比对（事实账本里记的就是这份数字）
+    file_sha = {g: sha256_of(os.path.join(out_root, *g.split("/"))) for g in sorted(got)}
+    for g in sorted(got):
+        print(f"  sha256 {file_sha[g]}  {g}")
 
     write_meta(os.path.join(out_root, "llvm.json"),
-               {"tag": rel["tag_name"], "asset": asset["name"], "size": asset["size"],
-                "sha256": got_sha, "files": sorted(got)})
+               {"tag": tag, "asset": asset["name"], "size": asset["size"],
+                "sha256": got_sha, "files": sorted(got), "file_sha256": file_sha})
     print(f"元数据 → {os.path.join(out_root, 'llvm.json')}")
     if a.no_keep:
         try:

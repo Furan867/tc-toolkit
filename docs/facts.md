@@ -305,6 +305,24 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
       `regions` 字段逐段相同（6 段 / 10 tick）
 最后验证：2026-10-17
 
+### `memory_copy(src, dst, n)`：第一参数是**源**
+我们的 lowering 曾把 `GetParam(0)` 当 dst —— 调用点传的是 `(源, 目的, n)`（源码
+`memory_copy(#RESET_DATA_x - 2048, #DATA_x - 2048, N)`），于是 272 MB 镜像被**反向**拷贝并销毁。
+这个 bug 在 RAM 全零时**完全看不见**（两边都读零）；灌确定性图案后第一 tick 就炸：
+参考侧把图案拷进 `#DATA_*` 且 `#RESET_DATA_*` 完好，我们的两侧全零。
+修法：`_body_memory_copy` 里 `GetParam(0)`→src、`GetParam(1)`→dst（`simplexc/lower/ir_build.py`）。
+验证：`--seed-reset-data seq` 下 `work/tmp/fixmc/seq_{ref,ours}.jsonl` 的 `regions` 段哈希
+最后验证：2026-10-17
+
+### M3 强判据：灌图案后 rv32im 逐 tick 全等（含 272 MB 镜像真的被读写）
+`--seed-reset-data seq|xorshift`（两边同图案；灌 `#RESET_DATA_*` 的 4 块 / 136.02 MB）
+→ rv32im ours vs 参考产物 10 tick **差异 0 条**，6 段哈希逐段相同且**非零**
+（DATA 段 `6165fb5d…` / `3e6dae7f…`；默认不灌时是 `cbcb79a5…` = 全零哈希）。
+这条比不灌图案强得多：RAM 镜像被真写、真拷、真读，CPU 行为不再被简化。
+验证：`selftest.py --src simplexc/corpus/rv32im/rv32im.si --bin <ours> --entry <e> --ticks 10 --seed-reset-data seq`
+      + 我复跑的 `work/tmp/fixmc/{seq,xorshift}_{ref,ours}.jsonl`
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

@@ -48,11 +48,20 @@
   **006 与 rv32im 都与参考产物 10 tick 逐 tick 全等（差异 0 条）**；rv32im 产物 **58612 B vs 参考 219088 B**。
   全程没有手写 C 参与。接口级更正：`RelocMode` `Static` → **PIC**。
 
-### 下一步（已决定，按顺序）
+### 进行中：M4.5 前端换 C++17（M5 前置，见主设计 §9）
 
-1. **M4.5 前端换 C++17**（M5 前置，见主设计 §9）：把 `frontend/` + `lower/` 从 Python 原型搬成 C++17。
-   判据：①与参考产物逐 tick 等价（复用 M3 的做法）②§7.5 的延迟门与依赖门 ③判据入口的生产者切到 C++ 后全绿。
-   M4 已部署的预编译 blob 不算「Python 进产线」的先例，例外只在 M4 期间有效。
+把 `frontend/` + `lower/` 从 Python 原型（oracle，4123 行）搬成 C++17，**范围只到生成代码子集**。
+判据：①与参考产物逐 tick 等价 ②§7.5 的**延迟门**（`177.si` ≤4 s，单独记前端+lowering）与**依赖门**
+（`objdump -p build/compile_hook.dll | grep -i python` 为空）③判据入口的生产者切到 C++ 后全绿。
+M4 已部署的预编译 blob 不算「Python 进产线」的先例，例外只在 M4 期间有效。
+
+当前进度（拆解见 `docs/notes/2026-10-18-m45-plan.md`）：
+- **接口已冻结**：`simplexc/frontend/ast.hh`（24 节点逐条对应 `expr.py` 的 dataclass；已编过并验过类别校验）。
+- **两路并行**：A = `frontend/`（判据 = AST dump JSON 与 Python 原型 **deep-equal**，≥4 个 def + `--all` + 错误路径）；
+  B = `lower/`（判据 = 手写 AST → COFF 只有 `REL32` → `assemble::assemble()` → 合法 blob + 四条语义档案的 IR 证据）。
+- 主程待办：A/B 回来后跑判据 → 写 `cli/simplexc_cli.cc` → 四段耗时与两条门 → 折叠进账本。
+
+### 下一步（M4.5 之后，已决定）
 3. **M5 全量语料**：98 份逐份跑「能否装配 + 逐 tick 是否全等」，出一张覆盖表。
 4. **优化（M3 §11 U1–U4/U7）**：现在全 i64 + `alloca` + `align 1`，我们 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。
 

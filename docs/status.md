@@ -47,21 +47,21 @@
   `simplexc/runtime/rt_min.cc`（`thread_exit`）、`simplexc/cli/tcblob.cc`（CLI + `--run` 自测）。
 - 判据（已跑）：`tcblob --obj rt_min.o --obj entry_shim.o --obj prog_empty.o --entry __tc_entry --run`
   → `RUN ok：blob 在 … 上跑完，线程退出码 0`；产物 128 字节，头 = `0x80 | bit62`，entry=0x10。
-- **已部署，但第一次进游戏把游戏卡住了**（2026-10-17，负责人报告“无法启动”）：
-  12:13:12 游戏确实调到我们的产物并接受了（`manifest.tsv` 该行 `impl=ours`、产物 sha256 = 我们的 blob、
-  `hook.log` 有 `impl=ours result=ok`），Windows Application 日志里**没有崩溃事件**（不是崩，是空程序
-  驱动不了仿真：启动时的“地图电路”编译拿到空程序后地图构建不出来 → 看着像卡死）。
-  `opt.ini` 已改回 `compiler = reference`。
-- **下一次进游戏的协议（避免再卡住启动）**：先用 `reference` 启动游戏 → 跑起来后再把 `compiler` 改成 `ours`
-  → 在**小电路的沙盒**里只触发一次编译 → 查 `work/tmp/blob_ran.log` 出现 `blob ran, tag=23063`
-  （blob 里 `tc_spike_mark` 的可观测副作用，同样是「游戏进程内真跑到了」的硬证据）+ 进程存活
-  → 改回 `reference` 再编译一次恢复。blob 当前 sha256 `3b378baa…`（含 marker，728 字节）。
+**M1 spike：已完成**（2026-10-17）—— 自研 blob 在游戏内被 JIT 执行、游戏没崩。
+- 装配链在进程内与**游戏内**都跑通：LLVM 模块（`tc_main`）或 g++ 目标文件 → 装配器（+ runtime + shim）→ blob
+  → 游戏 `jit` 分配可执行内存、从 blob+8 拷、`jmp entry`。
+- **进游戏实测**（详情 `docs/notes/2026-10-17-m1-spike-游戏内.md`）：`manifest.tsv` seq 006 = 我们的产物
+  （728 字节 / `3b378baa…`）、`impl=ours`、`hook.log` 有 `impl=ours result=ok`、
+  `work/tmp/blob_ran.log` 出现 `blob ran, tag=23063`（blob 里 `tc_spike_mark` 写的，证明确实在游戏进程里跑到了）、
+  进程存活且窗口有应答、Windows Application 日志无崩溃事件（bit62 的间接证据：否则游戏会拿 Nim 分配器 free 我们的指针）。
+- ⚠️ 姿势：**先用 `reference` 启动游戏，再热切 `compiler = ours`**，且只在小电路上触发一次编译；
+  带着 `ours` 启动会因地图电路拿到空程序而看着像起不来（实测过）。
 - 仍未做：LLVM 模块接进壳（现在壳用的是预装配 blob）、VEH 熔断、游戏内差分（M2）。
 
 ### 下一步（已决定）
 
-1. **M1 继续**：把 LLVM 模块接进装配链（程序根符号 `tc_main`）→ 游戏内跑通空程序（不崩、bit62 生效）；
-   然后写壳里的 `compiler` 三模式开关。`tools/compile_hook.c` 这段时间只归 spike 用。
+1. **M2 观测设施（下一步）**：离线差分宿主（假游戏内存 + extern 桩 + 逐 tick 驱动），
+   先用「参考产物 vs 参考产物」自比对证明宿主可靠 —— 它必须先于前端存在，否则前端写完也没有尺子。
 2. **定 MVP 必须支持的构造集合**：以 `corpus/coverage.tsv` 的 98/98 构造为下界，加上 stdlib 前缀里出现的那 6 个
    （`type alias`/`@Any`/`$ 参数`/`asm`/`extern`/`big_int_*`），交负责人确认。
 3. **M3 语义档案**：接口文档 §9 的 U-L1…U-L14 **必须实验后才写死**（`load`/`store` 的地址单位是地基）。

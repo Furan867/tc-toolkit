@@ -323,6 +323,28 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
       + 我复跑的 `work/tmp/fixmc/{seq,xorshift}_{ref,ours}.jsonl`
 最后验证：2026-10-17
 
+### M4 结果：游戏内 RV32IM 主频 —— ours **24.83 MHz** vs reference **5.19 MHz**（**4.78×**）
+同一游戏会话（PID 21816）、同一电路运行、交替 2 轮各 41 样本（`tools/watch_freq.py --seconds 40`）：
+
+| 变体 | 轮 1 | 轮 2 | 中位数 | 产物 |
+|---|---|---|---|---|
+| **ours**（我们的 lowering） | 24.843 | 24.818 | **24.83 MHz** | 58612 B / entry `0xE1F0` |
+| **reference**（游戏自带编译器） | 5.204 | 5.169 | **5.19 MHz** | 219088 B / entry `0x215B` |
+
+采样波动 2.1–3.0%。每轮都是 `simctl recompile`（注入 Ctrl+Z）触发编译、`simctl run`（F6）恢复运行后再采 ——
+**切换 `compiler` 必须重编译才生效**（壳在编译时读 `opt.ini`）。
+reference 的 5.19 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合，说明靶子与量法都没跑偏。
+验证：`work/tmp/m4/{summary_ours_2.txt,summary_ref_2.txt,freq_log.tsv}`；`work/hook/hook.log` 的 seq 007/009/010
+最后验证：2026-10-18
+
+### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
+`manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
+`hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；
+游戏不崩、撤销历史可用、`sim_read` 能读到 RV32IM 的真实主频。
+此前游戏内只跑过**手写 C** 的产物（M1/M1.5），这次是 `decls → expr → ir_build → LLVM → tcblob` 全链产物。
+验证：`awk -F'	' '$1=="007"||$1=="009"' work/hook/manifest.tsv`；`grep -c error work/hook/hook.log` = 0
+最后验证：2026-10-18
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

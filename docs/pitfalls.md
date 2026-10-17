@@ -52,3 +52,11 @@
   （实测 120：`sim_test_result=win` → halt → `sim_cycle` 停在 0），会把正常完成当成超时。
 - 别拿 extern 调用条数当判据 —— `Sleep`/读时钟是节奏类，条数随真实时间变化（实测两次跑差 650 万条），
   而仿真状态可以逐字节全等。
+- 别拿 `VirtualQuery` 返回非空当「已映射」—— `MEM_RESERVE`-only 的区间也返回非空且 `Protect=0`，
+  能解引用的判据是 `Protect != 0`（宿主判「表外 movabs」硬错误时踩过）。
+- 别以为 COFF 里 `PointerToRawData == 0` 是「没有这个节」—— 它是「节没有原始数据」（`.bss` 的标准形态），
+  按 rawptr 读 rawsize 字节读到的是**文件开头的 COFF 头**（含编译时间戳）→ 产物不可复现、`.bss` 初值成垃圾。
+- 别用 `SOURCE_DATE_EPOCH` 去固定 clang 写的 COFF 时间戳 —— 实测**无效**（要产物确定只能在装配后的 blob 上看）。
+- 别以为「同一份源码 → 同一份 `.obj`」—— clang 每次写的 COFF header 时间戳都不同，比 sha 要拿**装配后的 blob**。
+- 别在宿主里指望我们的产物「没有 extern 跳板」—— 它把 kernel32 绝对地址写死在 `.text` 尾部的桩里，
+  不读 `<blob>.stubs` sidecar 就会把它当未知地址拒跑（实测就是这么被挡住的）。

@@ -64,6 +64,17 @@
 验证：离线探针（空源码 / 仅定义函数 / 顶层 store 三例对比）+ 反汇编 exe `jit`/`jit_function`
 最后验证：2026-10-15
 
+### 壳的失败路径与熔断（三模式 + per-call `impl` 行）
+- ours 失败不再早返回：写 `error` 行（`stage=ours kind=<§8 分类串>`）+ `impl` 行 + manifest 行（`impl=ours_failed`）。
+- ours 段超时预算：`TC_OURS_TIMEOUT_MS` > `opt.ini [opt] ours_timeout_ms` > 5000 ms；超预算丢产物、按模式失败/回退，
+  与只管改写子进程的 `OPT_TIMEOUT` 无关。
+- VEH 只包 ours 段（`g_in_ours` 卡作用域）：命中 → `error stage=ours_fault`、本进程永久熔断（之后全走 reference）、
+  按模式返回。恢复原语 = `RtlCaptureContext` + 把上下文搬回恢复点 + `EXCEPTION_CONTINUE_EXECUTION`；
+  窗口外的异常照常穿透（独立进程验过；游戏进程内未验）。
+- `impl` 行 per-call（含 reference）：`impl=<reference|ours|fallback|ours_failed> mode=<配置值> result=<ok|reference|fail>`。
+验证：`python simplexc/tools/hook_offline.py`（8 个 case 全过）；原始证据 `work/tmp/hook_test/evidence/*`
+最后验证：2026-10-17
+
 ### compile() 的内部流程
 `rawNewString(len + 27711)` → 拷 27711 字节固定前缀 → 拷用户源码 → `compile_source__OOZcore_u145`。
 验证：静态核对（`objdump -s` 27711 字节前缀）
@@ -147,6 +158,13 @@
 
 ## 语料与判据
 
+### 判据入口：一条命令跑完现有判据
+`python simplexc/tools/check.py`（`--list` / `--only <name>` / `--json <path>`）= `corpus`（manifest 三项断言）
++ `host_selftest`（M2 自比对）+ `hook_offline`（壳的 8 个 case）+ `probe_006`（M1.5，可选）。
+当前 4 PASS / 0 FAIL / 0 SKIP；一步失败不影响其它步，JSON 里每步有 rc/秒数/摘要。
+验证：跑它看每步 rc；故意让一步失败时该步 rc≠0 且 JSON 如实记录
+最后验证：2026-10-17
+
 ### simplexc/corpus：98 份唯一源码 + 含 entry 的 manifest
 `work/hook/all/` 的 180 份捕获按源码字节去重 → 98 份（重复分布 1×91、2×3、3×2、4×1、73×1，
 最多的是 004 出现 73 次）；离线重编译后 `entry` 全部非 0（53 个不同值，`0x212f` 出现 15 次）
@@ -173,6 +191,23 @@ ref_match ref_match_rebased rebased_delta`；`corpus/ref/*.bin` **不进 git**�
 拿返回值当实际基址。
 验证：`python -c` 对 `work/hook/all/hook_src_001.si` 里的 `Ptr <digits>` 逐个 VirtualAlloc
 最后验证：2026-10-16
+
+### 宿主对「地址表外且已提交」的 movabs 硬错误
+判据 = 值不在地址表内、且 `VirtualQuery` 的 `Protect != 0` —— **不是**「返回非空」（`MEM_RESERVE`-only 也非空但 `Protect=0`）。
+命中就打印偏移/值/映射区间并非 0 退出；检查要在宿主摆假内存**之前**跑（否则自己摆的内存会造假阳性）。
+每份参考产物本来有 4 处**未映射**的大整数常量（`0x2540be400`、`0x19db1ded53e8000`），它们只统计不报错。
+验证：`work/tmp/iface/005_fixed.bin`（一处 movabs 改成 `0x7FFE0000`）→ rc=2 并打印；原版 005 照常跑
+最后验证：2026-10-17
+
+### 我们自己的产物靠 `<blob>.stubs` sidecar 才跑得起来
+产物里的 movabs 有三种来源：`compile_real.dll` 镜像（参考产物）、我们自己的 extern 跳板、大整数常量。
+跳板由装配器造（`AsmResult::stubs`），`tcblob` 写成 `<out>.stubs`（TSV `offset\tkind\tsymbol`，
+kind = `stub` 12 字节代码桩 / `slot` 8 字节 `__imp_` 数据槽）；宿主读它后这些位置豁免硬错误，
+并按符号接宿主桩（与 IAT 槽**同一条 handler 与记录格式**，两边 extern 序列才可比）；命中不了桩就报名字退出。
+游戏内不需要 sidecar（壳自己 `GetProcAddress` 填桩）。
+验证：006 的产物 6 处跳板（`Sleep` / `GetSystemTimePreciseAsFileTime` + 4 个 rt_min 的 `__imp_`）；
+      `python simplexc/tools/probe_006.py --ticks 10` 靠它跑通
+最后验证：2026-10-17
 
 ### 判据入口的基线：参考产物 vs 参考产物
 宿主可靠性得证前不得接我们的产物（主设计 §7.2）。
@@ -234,6 +269,13 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
       编译通过，运行输出 `RESULT: OK`
 最后验证：2026-10-16
 
+同一个包里解出的 `bin/clang.exe`（M1.5 的产物必须由 clang 生成）：
+`python tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe`，sha256 `9584244d83bb…`。
+`--offline` 用本地压缩包 + `llvm.json` 里记的 sha256 重解（GitHub 临时 API 会 403）；
+顺手修了旧实现的一个 404：按 tag 查要走 `releases/tags/<tag>`（`releases/{ref}` 只对 `latest` 合法）。
+验证：`build/llvm/bin/clang.exe --version` → `clang version 23.1.3 (…0d261d1ca552…)`
+最后验证：2026-10-17
+
 ### LLVM 产出的 COFF：装配器的输入形状
 `x86_64-pc-windows-gnu` + `RelocMode=Static` + `CodeModel=Small` + `default<O2>`：
 - 节：`.text` / `.data` / `.bss`（空的也在）；有栈帧的函数额外带 `.pdata` / `.xdata`；
@@ -250,6 +292,13 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 溢出 ±2GB。
 验证：`simplexc/assemble/assemble.cc` 里的 `int32_t addend = int32_t(r32(...))`；
       `build/objs/rt_min.o` 的 `.text+0x27`（字段 `FF FF FF FF`，对 `.rdata`）与 w64devkit `ld` 链接后的位移一致
+最后验证：2026-10-17
+
+### 链接产物随 `-L` 写法与 `-o` 路径变化
+`-L` 写绝对路径与写相对路径时 link map 逐行相同、产物字节**不同**（import thunk 表布局变了）；
+DLL 的 `-o` 换成别的路径字符串会换掉 ld 挑的默认 image base（产物差 ~150 字节）。
+`simplexc/tools/build.py` 因此固定「相对 `-L` + 与 `deploy_compile_hook.py` 同一种绝对 `-o` 拼法」。
+验证：`work/tmp/flagcheck/` 里两份 link map 与 md5 清单；`build.py hook` 与 `deploy_compile_hook.py build` 产物逐字节相同
 最后验证：2026-10-17
 
 ### 产物必须是能驱动仿真的程序：空/桩程序会让游戏在**下一次**编译请求时 abort
@@ -346,6 +395,9 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 每行 `时间 \t 编号 \t 事件 \t key=value…`（事件表与键表见 `tools/hook_log.py`，
 C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什么（原样搬运），
 `opt` 行 = 实际执行的模式 / 改写处数 / 产物 sha256 —— 两者不一致就是 short 退回了 on。
+`impl` 行 = **实际走了哪个实现**（每次编译都写、含 reference），键 `impl`/`mode`/`result`（ours 行可选 `budget_ms`、
+首次加 `guard=veh`）；⚠️ `impl` 行的 `mode` 是配的 `compiler`，与 `opt` 行的 `mode`（改写器实际做了什么）**不是一个东西**；
+词表唯一出处是 `docs/specs/2026-10-15-simplexc-interfaces.md` §5。
 `opt_stderr.log` 是子进程 stdout/stderr 的原样重定向（多行、非结构化、**GBK 编码**，
 不是 UTF-8），**不是**记录项，单独放。
 验证：静态核对（`tools/hook_log.py` + `compile_hook.c`）+ 游戏内 10 次编译实测：
@@ -417,3 +469,56 @@ C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什�
 但从未观测到实际不平衡（现存源远小于窗口）。
 验证：静态核对（`tools/scan_game_mem.py:205,212,220-221,230,237`）
 最后验证：2026-10-11
+
+### 契约重验脚本（Steam 更新后先跑它）
+`python simplexc/tools/verify_game_contract.py`：按**符号名**定位（自己解析 PE 的导出表/COFF 符号/`.pdata` 取函数边界，
+不复用 `work/symbols/*` 快照），断言 A–E：`compile` 导出 + 全 exe 唯一调用点 + `flags` 置 0 / `jit` 内 memcpy(`ptr+8`) 与尾跳 /
+`handle_request_compile_and_run` 内 `out[3]` 的 test+jne 失败分支（跳过 `send_command`/`createThread`）/ `eqdestroy` 的
+`testb $0x40,0x7(p)` + `rawDealloc` bit62 门控 / 产物头除 bit62 外不被读。
+退出码：无 FAIL=0、有 FAIL=1、跑不起来=2。E 是**否定性命题**，静态判定不了 → 恒 `UNKNOWN`（真判定要动态实验）。
+实测当前 buildid 25294874：A–D PASS、E UNKNOWN。
+验证：跑该脚本看每条断言的定位方式与反汇编证据；变异自检 `work/tmp/negtest/make_mutants.py`
+最后验证：2026-10-17
+
+## 装配器与产物确定性
+
+### 产物逐字节可复现的前提：不读「没有原始数据」的节
+COFF 对象文件里 `.bss` 是 `SizeOfRawData=N / PointerToRawData=0` —— 文件里没有它的数据（内容隐含全 0）。
+装配器若按 rawptr 读 rawsize 字节，读到的是**文件开头的 COFF 头**（Machine + NumberOfSections + TimeDateStamp）
+→ 产物带编译时间戳（同一源码两次编译的 blob 不同）且 `.bss` 初值是垃圾。
+修法：`raw_ptr==0` 的节留空（payload 本来就零初始化）；节大小 = `max(SizeOfRawData, VirtualSize)`。
+⚠️ 对象文件里 `VirtualSize` 实测恒为 0（clang 与 gcc），大小在 `SizeOfRawData`。
+验证：同一份 `simplexc/probe/006_equiv.c` 用 clang 连编两次（两个 `.obj` 只差 header 时间戳 1 字节）
+      → `build/tcblob.exe` 装配出的两个 blob 逐字节相同；blob 内搜输入 `.obj` 的 COFF 头/时间戳 0 命中
+      （修复前的对照与脚本见 `docs/notes/2026-10-17-assemble-bss.md`）
+最后验证：2026-10-17
+
+### `.obj` 本身不可复现（clang 每次写 COFF TimeDateStamp），`SOURCE_DATE_EPOCH` 无效
+所以「产物确定」只能在**装配后的 blob** 上说；比 sha / 做 A/B 记录都要拿 blob，不要拿 `.obj`。
+验证：连编两次 `cmp -l` 只差 offset 4 的 1 字节；设 `SOURCE_DATE_EPOCH=0` 两次仍是不同时间戳
+最后验证：2026-10-17
+
+## M1.5 收益探针（006）
+
+### 逐 tick 全等：clang -O2 等价物 == 参考产物
+`simplexc/probe/006_equiv.c`（手写 006 等价物，自实现整套仿真协议）经
+`clang --target=x86_64-pc-windows-gnu -O2` → 装配 → 宿主 10 tick 比对参考产物：
+页哈希 / 状态字段 / extern 序列逐条相同，**白名单为空**。
+验证：`python simplexc/tools/probe_006.py --ticks 10`（fold 与 hot 两变体都 10/10、差异 0 条）
+最后验证：2026-10-17
+
+### 收益来自「热状态进寄存器」，不是「直译成 C 交给 clang」
+同驱动配对量每 cycle（大 N 下每爆发开销相消）：参考 1.37 ns、直译 fold 1.71 ns（慢 ~25%）、
+把每周期计数器先放局部变量再写回的 hot 变体 0.467 ns（快 ~2.95×，语义等价且逐 tick 仍全等）。
+机制：游戏内存是 `volatile`，`cycle` 是 u64 全局 → LLVM 不敢假设两者不别名，只能每周期溢出到内存。
+**对 M3 的指示**：lowering 要让私有热状态有「有序但不与游戏内存别名」的语义，照抄全 volatile 会把收益吃光。
+验证：`simplexc/probe/results/006_{fold,hot}.{json,tsv}`（含每点 5 轮原始秒数、pacing 计数、拟合残差）
+最后验证：2026-10-17
+
+### 006 的语义（从参考产物实验得出，别重猜）
+- `Time` 单位是**纳秒**（`33.ms()` = 33e6 ns）。
+- 宿主驱动的每个 tick 只推进 **1 个 cycle**（`sim_target_cycle = 1..N`）→「每 tick 墙钟」量的是宿主粒度。
+- `#if in_scope("get_input" / "check_output" / "on_ui_update")` 三处在 006 里都**不生成代码**。
+- `mode_refresh()` 从内存回读刚写的位再算 NAND（不是用局部变量）。
+验证：`docs/notes/2026-10-17-m1.5-probe.md` §「从参考产物实验出来的 006 语义」
+最后验证：2026-10-17

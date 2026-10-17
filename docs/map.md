@@ -14,10 +14,11 @@
 ```
 tools/        分析脚本与工具（已固化的）
 docs/         本套文档 + 专题记录（specs/ 下是设计文档）
-simplexc/     自研编译器（接口冻结见 docs/specs/2026-10-15-simplexc-interfaces.md）
+simplexc/     自研编译器（**接口权威 = docs/specs/2026-10-15-simplexc-interfaces.md**，冻结版 1.1）
   frontend/ lower/ runtime/ assemble/ shell/ cli/   代码
-  tools/     语料重编译、地址分类等脚本    corpus/ 98 份语料 + manifest（ref/ 不进 git）
+  tools/     语料重编译、地址分类、判据入口、差分宿主等脚本    corpus/ 98 份语料 + manifest（ref/ 不进 git）
   dossier/   语义档案（M3，未开始）
+  probe/     M1.5 收益探针：006 的 C 等价物 + results/（判据产物）
 work/hook/    转发层捕获：hook_src_NNN.si ↔ hook_out_NNN.bin（同号即一对）
 work/opt/     转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log / opt_stderr.log
 work/freq/    主频采样输出：freq_log.tsv（事件）与 freq_summary.txt（给人读）
@@ -46,6 +47,15 @@ sim_ctl ──→ 机器码改写 ──→ 主频监听 ──→ 热点分析 
 | **热点分析** | 五层管道：抓源码 → 识别 → 建映射 → 采样 → 出组件报告 | 已建成、在用 | `facts.md` §组件映射、§采样 |
 | **compile.dll 转发** | 转发层劫持 `compile()`，拿源码与产物 | 已建成、在用 | `facts.md` §compile.dll 转发层 |
 | **游戏反编译** | 反编译 exe/dll、符号表、字符串 | **已降级，非主线** | `facts.md` §静态逆向 |
+
+## 判据入口
+
+| 判据 | 命令 |
+|---|---|
+| 一条命令跑现有全部（corpus / M2 宿主自比对 / 壳离线 8 例 / M1.5 探针） | `python simplexc/tools/check.py` |
+| Steam 更新后契约重验（主设计 §10 的 A–E） | `python simplexc/tools/verify_game_contract.py` |
+| M1.5 单跑（逐 tick 等价 + 吞吐） | `python simplexc/tools/probe_006.py --ticks 10 [--variant hot]` |
+| 壳的离线失败路径（8 个 case） | `python simplexc/tools/hook_offline.py` |
 
 ## 工具清单
 

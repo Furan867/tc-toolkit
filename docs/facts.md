@@ -191,6 +191,16 @@
 验证：`%LOCALAPPDATA%\CrashDumps` 里 16:47 / 16:50 两份 dump + `wevtutil` 的 Application 日志（Id 1000）
 最后验证：2026-10-17
 
+### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
+`simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
+`rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。
+规模：`get_component_count() = 532`、`mode_refresh()` **6252 行**、组件种类里 `com_custom` 33 个
+（→ 含**子元件层级**，前端不能只做平铺）。参考产物 ≈46600 条指令，与设计 §2.5 的 46591 条吻合。
+为什么必须存仓里：`work/hook/` 每次游戏内编译都覆盖同名文件（实测 17:12 那批被 17:21 整批替换），
+而且产物里的游戏内存地址按进程实例变 —— 判据不能依赖会被冲掉的路径或活着的进程。
+验证：`sha256sum simplexc/corpus/rv32im/rv32im.{si,bin}`；`grep -c '' simplexc/corpus/rv32im/rv32im.si`
+最后验证：2026-10-17
+
 ### simplexc/corpus：98 份唯一源码 + 含 entry 的 manifest
 `work/hook/all/` 的 180 份捕获按源码字节去重 → 98 份（重复分布 1×91、2×3、3×2、4×1、73×1，
 最多的是 004 出现 73 次）；离线重编译后 `entry` 全部非 0（53 个不同值，`0x212f` 出现 15 次）

@@ -17,6 +17,7 @@ docs/         本套文档 + 专题记录（specs/ 下是设计文档）
 simplexc/     自研编译器（**接口权威 = docs/specs/2026-10-15-simplexc-interfaces.md**，冻结版 1.1）
   frontend/ lower/ runtime/ assemble/ shell/ cli/   代码
   tools/     语料重编译、地址分类、判据入口、差分宿主等脚本    corpus/ 98 份语料 + manifest（ref/ 不进 git）
+             M3 的靶子固定为 corpus/rv32im/（RV32IM 电路的源码 + 参考产物快照，见该目录 README）
   dossier/   语义档案（M3，未开始）
   probe/     M1.5 收益探针：006 的 C 等价物 + results/（判据产物）
 work/hook/    转发层捕获：hook_src_NNN.si ↔ hook_out_NNN.bin（同号即一对）

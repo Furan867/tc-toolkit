@@ -163,7 +163,9 @@ class SimSpec:
         for _n, a in self.scalars:
             out.append((a, a))
         for _n, a, _e in self.arrays:
-            out.append((a, a))
+            # 数组的 seq 头在 `p - 8`（`.len()` = `load i64, p-8` 再 `>>16`）。地址落在页边界上时
+            # p-8 会掉进上一页 —— 不扩这 8 字节，宿主就没映射它，参考产物读 len 时 AV（RV32IM 实测）。
+            out.append((a - 8, a))
         return out
 
     @property

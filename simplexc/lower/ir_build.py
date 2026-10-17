@@ -53,6 +53,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, fields as dc_fields
+from functools import partial
 
 for _stream in (sys.stdout, sys.stderr):
     _rec = getattr(_stream, "reconfigure", None)
@@ -99,6 +100,25 @@ fe_expr = load_module(os.path.join(SIMPLEXC, "frontend", "expr.py"), "si_expr")
 # 只绑用到的那几十个符号。句柄一律 `c_void_p`（LLVM-C 的不透明指针），数组参数用
 # `POINTER(c_void_p)` —— 与 `LLVMOpaqueValue **` 的 ABI 一致。
 
+def _bind(lib, name, res, *args):
+    """取一个 LLVM-C 符号，绑上 ctypes 签名，返回可调用的东西。
+
+    放模块级而不是 `LLVM.__init__` 里：嵌套函数里的 `return` 会被 lint 当成
+    构造函数在返回值。
+    """
+    fn = getattr(lib, name)
+    fn.restype = res
+    fn.argtypes = list(args)
+    if not any(a is ct.c_char_p for a in args):
+        return fn
+
+    def call(*a):
+        # 名字参数（`const char*`）容忍 Python str：统一在这里转 bytes
+        return fn(*[x.encode('utf-8') if isinstance(x, str) else x for x in a])
+
+    return call
+
+
 class LLVM:
     def __init__(self, dll=LLVM_DLL):
         if not os.path.isfile(dll):
@@ -106,19 +126,7 @@ class LLVM:
         lib = ct.CDLL(dll)
         p, u, i, b, s = (ct.c_void_p, ct.c_uint, ct.c_int, ct.c_int, ct.c_char_p)
         arr = ct.POINTER(ct.c_void_p)
-
-        def f(name, res, *args):
-            fn = getattr(lib, name)
-            fn.restype = res
-            fn.argtypes = list(args)
-            if not any(a is s for a in args):
-                return fn
-
-            def call(*a):
-                # 名字参数（`const char*`）容忍 Python str：统一在这里转 bytes
-                return fn(*[x.encode('utf-8') if isinstance(x, str) else x for x in a])
-
-            return call
+        f = partial(_bind, lib)          # `f(name, res, *argtypes)`，见模块级 `_bind`
 
         self.ContextCreate = f("LLVMContextCreate", p)
         self.ContextDispose = f("LLVMContextDispose", None, p)
@@ -665,10 +673,10 @@ class Lower:
         cases = []
         for case in st.cases:
             decided = self.in_scope_const(case.cond)
-            if decided is True:
-                self.lower_block(case.block)
-                return
-            if decided is False:
+            if decided is not None:      # `is True`/`is False` 过不了 lint；这就是那个三态
+                if decided:
+                    self.lower_block(case.block)
+                    return
                 continue
             cases.append(case)
         if not cases:
@@ -1786,7 +1794,11 @@ class Program(Lower):
             return self.structs[base]
         m = SIZED_RE.fullmatch(base)
         if m:
-            bits = int(m.group(2))
+            digits = m.group(2)
+            try:
+                bits = int(digits)
+            except ValueError:      # `\d+` 保证是十进制数字；真变了要报出来而不是裸 ValueError
+                raise Unsupported(f"位宽 {name}（{digits!r} 不是十进制数）", line) from None
             if not 1 <= bits <= 64:
                 raise Unsupported(f"位宽 {name}", line)
             return sized(bits, m.group(1) == 'S')
@@ -2138,8 +2150,11 @@ def assemble(obj, blob):
                         "--entry", "__tc_entry", "--out", blob])
     if rc != 0:
         raise CompileFail(f"tcblob 失败 rc={rc}\n{out}\n{err}")
-    with open(blob + ".entry", encoding='ascii') as f:
-        entry = int(f.read().strip(), 16)
+    try:
+        with open(blob + ".entry", encoding='ascii') as f:
+            entry = int(f.read().strip(), 16)
+    except (OSError, ValueError) as e:
+        raise CompileFail(f"读不了 {blob}.entry（装配器写出的 entry 文件）：{e}") from e
     return entry, out.strip()
 
 
@@ -2149,11 +2164,16 @@ def host_run(src, binpath, entry, ticks, out):
                        "--quiet"], timeout=max(300, ticks * 120))
     snaps = []
     if os.path.isfile(out):
-        with open(out, encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    with contextlib.suppress(json.JSONDecodeError):
-                        snaps.append(json.loads(line))
+        try:
+            with open(out, encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            snaps.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue        # 半截行（host 被杀）不该当崩
+        except OSError as e:
+            print(f"读不了 {out}（host 的逐 tick 输出）：{e}", file=sys.stderr)
     return rc, snaps, se.strip()
 
 
@@ -2161,12 +2181,18 @@ def check_against_ref(src, our_bin, our_entry, ref_bin, ref_entry, ticks, workdi
     """ours vs ref 的逐 tick 比对。判据逻辑复用 `tools/probe_006.py:compare_ticks`
     （「判据只有一处定义」），白名单恒为空。"""
     probe = load_module(PROBE_PY, 'probe006')
-    os.makedirs(workdir, exist_ok=True)
+    try:
+        os.makedirs(workdir, exist_ok=True)
+    except OSError as e:
+        print(f"检查失败：建不了目录 {workdir}：{e}", file=sys.stderr)
+        return False
     ours_jsonl = os.path.join(workdir, "ours.jsonl")
     ref_jsonl = os.path.join(workdir, "ref.jsonl")
     for p in (ours_jsonl, ref_jsonl):
-        with contextlib.suppress(OSError):
+        try:
             os.remove(p)
+        except OSError:
+            continue                    # 上一轮的产物，不存在就没什么可删
     rc_o, ours, err_o = host_run(src, our_bin, our_entry, ticks, ours_jsonl)
     rc_r, ref, err_r = host_run(src, ref_bin, ref_entry, ticks, ref_jsonl)
     diffs, whitelisted = probe.compare_ticks(ref, ours, {})
@@ -2187,8 +2213,12 @@ def check_against_ref(src, our_bin, our_entry, ref_bin, ref_entry, ticks, workdi
 
 def resolve_ref(src):
     manifest = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
-    with open(manifest, encoding='utf-8') as f:
-        rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
+    try:
+        with open(manifest, encoding='utf-8') as f:
+            rows = [ln.rstrip("\n").split("\t") for ln in f if ln.strip()]
+    except OSError as e:
+        print(f"读不了 {manifest}（可用 --ref/--ref-entry 直推）：{e}", file=sys.stderr)
+        return None, None
     head = rows[0]
     stem = os.path.splitext(os.path.basename(src))[0]
     for row in rows[1:]:
@@ -2245,12 +2275,20 @@ def main(argv=None):
             print(f"UNSUPPORTED: {msg} @ 第 {line} 行", file=sys.stderr)
         return 1
 
-    os.makedirs(args.workdir, exist_ok=True)
+    try:
+        os.makedirs(args.workdir, exist_ok=True)
+    except OSError as e:
+        print(f"建不了中间目录 {args.workdir}：{e}", file=sys.stderr)
+        return 2
     ir = prog.ir_text()
     ir_path = args.ir_out or os.path.join(args.workdir, os.path.basename(src) + ".ll")
-    os.makedirs(os.path.dirname(os.path.abspath(ir_path)) or ".", exist_ok=True)
-    with open(ir_path, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(ir)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(ir_path)) or ".", exist_ok=True)
+        with open(ir_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(ir)
+    except OSError as e:
+        print(f"写不了 IR 文件 {ir_path}：{e}", file=sys.stderr)
+        return 2
     print(f"[lower] IR {len(ir)} B（函数 {prog.fn_seen + 1} 个）→ {rel(ir_path)}")
 
     try:
@@ -2261,14 +2299,22 @@ def main(argv=None):
     obj_path = args.obj_out or ((args.out + ".o") if args.out else
                                 os.path.join(args.workdir,
                                              os.path.basename(src) + ".o"))
-    with open(obj_path, "wb") as f:
-        f.write(obj)
+    try:
+        with open(obj_path, "wb") as f:
+            f.write(obj)
+    except OSError as e:
+        print(f"写不了 COFF 文件 {obj_path}：{e}", file=sys.stderr)
+        return 2
     print(f"[lower] COFF {len(obj)} B → {rel(obj_path)}")
 
     if not args.out:
         return 0
     out = os.path.abspath(args.out)
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    except OSError as e:
+        print(f"建不了产物目录 {os.path.dirname(out) or '.'}：{e}", file=sys.stderr)
+        return 2
     try:
         entry, _ = assemble(obj_path, out)
     except CompileFail as e:

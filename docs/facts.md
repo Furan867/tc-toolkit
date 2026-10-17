@@ -296,6 +296,15 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
       两边各跑 `--ticks 10`（ref entry `0x215B` / ours 看自己的 `.entry`）比 pages/sim_cycle/extern
 最后验证：2026-10-17
 
+### 宿主里那 272 MB RAM 镜像是**全零** —— 「逐 tick 全等」的强度边界
+`#DATA_*` / `#RESET_DATA_*`（rv32im：128 MB×2 + 8 MB×2 等，合计 272.25 MB）在宿主里**从没被灌过内容**：
+`regions` 段哈希实测等于「同长度全零缓冲的 sha256」。所以 rv32im 的「逐 tick 全等」只证明
+**两边写出的内容一样**，**不证明复现了游戏里的 RAM 镜像**（游戏里那块是 ROM/程序映像，非零）。
+→ 要真正演练这块，得给 `#RESET_DATA_*` 灌确定性图案（两边同图案）再跑 —— 宿主行为改动，未做。
+验证：`simplexc/tools/host/host.py` 的 `_region_hashes`；`work/tmp/mirror/**`；两份 rv32im 快照的
+      `regions` 字段逐段相同（6 段 / 10 tick）
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

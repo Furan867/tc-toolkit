@@ -1,11 +1,13 @@
 #!python3
 """M2 判据：参考产物自比对（宿主可靠性得证）。
 
-两个**独立宿主进程**跑同一份参考产物，逐 tick 快照必须逐字节相等。三条防伪检查同样算判据 ——
+两个**独立宿主进程**跑同一份参考产物，逐 tick 快照必须逐字节相等。四条防伪检查同样算判据 ——
 空跑的"全等"没有意义：
   1. 跑到的 tick 数够；
   2. 至少有一个变化页**不在**命令块/设置块所在页（证明仿真真的在动，不只是进度计数器）；
-  3. extern 序列非空。
+  3. extern 序列非空；
+  4. 段哈希（`regions`：每个映射段的**绝对内容**哈希，见 host.py `_region_hashes`）真的进了快照
+     —— 字段缺了上面那条比较两边都是 null，会「静默全等」。
 
 用法：
     python simplexc/tools/host/selftest.py --src <si> --bin <bin> --ticks 20
@@ -75,7 +77,11 @@ def rm_quiet(path):
 
 
 def compare(a, b):
-    """逐 tick 比 pages / extern / sim_cycle。返回差异列表（前若干条）。"""
+    """逐 tick 比 regions（每段绝对内容）/ pages / extern / sim_cycle。返回差异列表（前若干条）。
+
+    `regions` 在两边都是 null 时（`--region-hash-every N` 跳过的 tick）**不作判断** ——
+    但「一边有一边没有」本身算差异：那说明两边跑的不是同一套参数，后面的结论不能信。
+    """
     diffs = []
     for i in range(max(len(a), len(b))):
         if i >= len(a):
@@ -85,6 +91,17 @@ def compare(a, b):
             diffs.append(f"tick {i + 1}: B 没有这一 tick（A 有）")
             continue
         x, y = a[i], b[i]
+        rx, ry = x.get("regions"), y.get("regions")
+        if rx != ry:
+            if rx is None or ry is None:
+                diffs.append(f"tick {i + 1}: 段哈希 {'A 有' if rx is not None else 'A 无'}/"
+                             f"{'B 有' if ry is not None else 'B 无'}（两边参数不一致？）")
+            else:
+                for seg in sorted(set(rx) | set(ry)):
+                    if rx.get(seg) != ry.get(seg):
+                        diffs.append(f"tick {i + 1}: 段 {seg} 哈希不同 A={rx.get(seg)} / B={ry.get(seg)}")
+                        if len(diffs) >= 8:
+                            break
         if x["pages"] != y["pages"]:
             only_a = {k: v for k, v in x["pages"].items() if y["pages"].get(k) != v}
             only_b = {k: v for k, v in y["pages"].items() if x["pages"].get(k) != v}
@@ -112,10 +129,14 @@ def main(argv=None):
                          "捕获的产物不在那张表里，这时必须显式给）")
     ap.add_argument("--ticks", type=int, default=20)
     ap.add_argument("--budget", type=float, default=60.0)
+    ap.add_argument("--region-hash-every", type=int, default=1, metavar="N",
+                    help="透传给两条宿主命令（默认 1 = 每个 tick 都比段哈希；N>1 时只比 N 的倍数那个 tick）")
     ap.add_argument("--workdir", default=None, help="中间文件目录（默认系统临时目录）")
     ap.add_argument("--report", default=None, help="机器可读报告写到这个 JSON")
     ap.add_argument("--keep", action="store_true", help="保留中间 JSONL")
     args = ap.parse_args(argv)
+    if args.region_hash_every < 1:
+        raise SystemExit(f"--region-hash-every 要 >= 1（给了 {args.region_hash_every}）")
 
     workdir = args.workdir or os.path.join(tempfile.gettempdir(), "tc_host_selftest")
     try:
@@ -131,6 +152,8 @@ def main(argv=None):
     report = {"src": args.src, "bin": args.bin, "entry": args.entry,
               "ticks_requested": args.ticks}
     extra = ["--entry", args.entry] if args.entry else None
+    if args.region_hash_every != 1:
+        extra = (extra or []) + ["--region-hash-every", str(args.region_hash_every)]
     pa = run_host(args.src, args.bin, args.ticks, a_out, args.budget, extra)
     pb = run_host(args.src, args.bin, args.ticks, b_out, args.budget, extra)
     report["returncodes"] = [pa.returncode, pb.returncode]
@@ -154,6 +177,13 @@ def main(argv=None):
         extern_total += len(snap["extern"])
     checks["sim_made_work"] = bool(work_pages)
     report["extern_total"] = extern_total
+    # 4) 段哈希真的进了快照 —— 字段缺失时上面的 compare 两边都是 None，会「静默全等」
+    want = [n for n in range(1, min(len(a), args.ticks) + 1)
+            if n % args.region_hash_every == 0]
+    checks["region_hash_present"] = (sum(1 for s in a if s.get("regions")) == len(want)
+                                     and sum(1 for s in b if s.get("regions")) == len(want))
+    report["region_hashed_ticks"] = len(want)
+    report["segments"] = sorted(a[0].get("regions") or {}) if a else []
     # 防伪：唯一个硬要求是「仿真真在工作」。extern 非空**不能**当硬条件 ——
     # 合法电路可以一个语义 extern 都不调（实测 005）。
     checks["not_vacuous"] = bool(work_pages) or extern_total > 0
@@ -168,6 +198,8 @@ def main(argv=None):
     print(f"自比对 {'通过' if report['passed'] else '失败'}："
           f"tick {len(a)}/{len(b)}（要 {args.ticks}）· "
           f"逐 tick 全等={'是' if checks['tick_exact'] else '否'} · "
+          f"段哈希 {len(report['segments'])} 段/{len(want)} tick="
+          f"{'有' if checks['region_hash_present'] else '缺'} · "
           f"仿真真在工作={'是' if checks['sim_made_work'] else '否'}（工作页 {len(work_pages)} 个）· "
           f"extern {extern_total} 条")
     for d in diffs:

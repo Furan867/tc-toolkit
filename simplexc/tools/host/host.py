@@ -48,6 +48,7 @@ CORPUS_MANIFEST = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
 
 PAGE = 0x10000
 REGION = 0x100000                 # 每个地址给 1 MB（含前后 slack）：够放数组载荷与 UI 文本
+HASH_CHUNK = 1 << 20              # 段哈希的读块大小：rv32im 的 6 段共 278.5 MB，一次 string_at 到堆上白拷一份
 BAND = 1 << 26                    # 「像游戏地址」的邻域（±64 MB）—— 落在里面的 movabs 必须映射到
 MEM_COMMIT, MEM_RESERVE, MEM_RELEASE = 0x1000, 0x2000, 0x8000
 PAGE_RW, PAGE_RWX = 0x04, 0x40
@@ -398,18 +399,22 @@ class Detours:
 
 class Host:
     def __init__(self, spec, blob, entry_off, budget=120.0, dump_dir=None, verbose=True,
-                 stub_path=None):
+                 stub_path=None, region_hash_every=1):
         self.spec = spec
         self.blob = blob
         self.entry = entry_off
         self.budget = budget
         self.dump_dir = dump_dir
         self.verbose = verbose
+        # 段哈希每几个 tick 取一次（1 = 每次都取）。N > 1 只是为了在慢靶子上压耗时，
+        # 跳过的那一 tick 快照里 `regions` = null（`selftest.compare` 只在两边都是字典时比）。
+        self.region_hash_every = region_hash_every
         # extern 跳板清单（`<blob>.stubs`，可能不存在 → 老行为：产物里不许有 extern 桩）
         self.stub_path = stub_path
         self.stub_decl = read_stub_sidecar(stub_path)
 
         self.regions = []
+        self.spec_regions = []
         self.baseline = {}
         self.detours = Detours()
         self.thread = None
@@ -532,11 +537,18 @@ class Host:
     def _map_game_memory(self):
         items = self.spec.regions() + [(a, a) for a in self.game_like]
         self.regions = merge_spans(items)
+        # 段哈希要比的是**同一些字节**，所以不能用 `self.regions`：它的几何随产物变
+        # （产物 movabs 里的游戏地址也各给 1 MB，合并边界跟着变 —— 实测 278.6 vs 278.7 MB，
+        #  两个产物永远比不出「相等」）。`spec_regions` 只由源码算：地址表 + `memory_copy`/
+        # `memory_clear` 实参 —— 同一份 `.si` 的两个产物几何逐字节相同（含 `#DATA_*` 的 128 MB）。
+        self.spec_regions = merge_spans(self.spec.regions())
         for lo, size in self.regions:
             mem_alloc(lo, size)
         if self.verbose:
             print(f"[host] 游戏内存：{len(self.regions)} 段、"
-                  f"{sum(s for _l, s in self.regions) / 1048576:.1f} MB", file=sys.stderr)
+                  f"{sum(s for _l, s in self.regions) / 1048576:.1f} MB（段哈希按源码算的 "
+                  f"{len(self.spec_regions)} 段、"
+                  f"{sum(s for _l, s in self.spec_regions) / 1048576:.1f} MB）", file=sys.stderr)
 
     def _install_detours(self):
         seen = set()
@@ -691,7 +703,10 @@ class Host:
                 break
             time.sleep(0.0005)
         changed, stabilized = self._settled_pages()
-        return self._snapshot(n, reason, self.detours.records[before:], changed, stabilized)
+        # 段哈希紧跟稳定判定取：它只多花一次读，但断的是「跑完这一 tick 之后的整段内容」
+        regions = self._region_hashes() if n % self.region_hash_every == 0 else None
+        return self._snapshot(n, reason, self.detours.records[before:], changed, stabilized,
+                              regions)
 
     def _changed_pages(self, dump=False):
         changed = {}
@@ -703,6 +718,21 @@ class Host:
                     if dump:
                         self._dump_page(self.tick_no, p, cur)
         return changed
+
+    def _region_hashes(self):
+        """`self.spec_regions` 每段的**绝对内容** sha256 → `{hex(lo): 64 位小写十六进制}`。
+
+        `_changed_pages` 给的是「相对 pre-run 基线变过的页」—— 基线不进快照，所以那份判据
+        只证明「两边的**增量**一样」。段哈希补上的是绝对内容：整段（rv32im 是 6 段、
+        278.5 MB，含 `#DATA_*` 的 128 MB RAM 镜像）逐字节一致，与基线是什么无关。
+        """
+        out = {}
+        for lo, size in self.spec_regions:
+            h = hashlib.sha256()
+            for off in range(0, size, HASH_CHUNK):
+                h.update(ctypes.string_at(lo + off, min(HASH_CHUNK, size - off)))
+            out[hex(lo)] = h.hexdigest()
+        return out
 
     def _settled_pages(self, tries=20):
         """等内存稳定后再取快照。
@@ -720,7 +750,7 @@ class Host:
             time.sleep(0.001)
         return prev or {}, False
 
-    def _snapshot(self, tick, reason, recs, changed, stabilized):
+    def _snapshot(self, tick, reason, recs, changed, stabilized, regions):
         self.tick_no = tick
         if self.dump_dir:
             self._changed_pages(dump=True)          # 只在最终快照时落盘
@@ -735,6 +765,7 @@ class Host:
             "sim_running": rd_u64(self.state + self.ST["sim_running"] * 8),
             "sim_test_result": rd_u64(self.state + self.ST["sim_test_result"] * 8),
             "pages": changed,
+            "regions": regions,
             "extern": recs,
             "pacing": dict(self.detours.pacing),
         }
@@ -797,15 +828,22 @@ def main(argv=None):
     ap.add_argument("--out", default=None, help="快照 JSONL 输出路径")
     ap.add_argument("--budget", type=float, default=120.0, help="每 tick 预算（秒）")
     ap.add_argument("--dump-pages", default=None, help="把变化页的字节也落盘到这个目录")
+    ap.add_argument("--region-hash-every", type=int, default=1, metavar="N",
+                    help="每 N 个 tick 给每个映射段算一次内容 sha256（默认 1 = 每个 tick 都算；"
+                         "跳过的 tick 快照里 regions=null）")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
+    if args.region_hash_every < 1:
+        raise SystemExit(f"--region-hash-every 要 >= 1（给了 {args.region_hash_every}）："
+                         "0 等于把段哈希判据关掉，判据只能加强不能放宽")
 
     spec = simspec.SimSpec.parse(args.src)
     blob = read_bytes(args.bin)
     entry = int(args.entry, 0) if args.entry else entry_from_manifest(args.bin)
 
     host = Host(spec, blob, entry, budget=args.budget, dump_dir=args.dump_pages,
-                verbose=not args.quiet, stub_path=sidecar_path_for(args.bin))
+                verbose=not args.quiet, stub_path=sidecar_path_for(args.bin),
+                region_hash_every=args.region_hash_every)
     install_veh(lambda: host.code_alloc, lambda: host.dll_base)   # 必须早于起线程
     host.setup()
     reason = "ok"

@@ -283,6 +283,19 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
 验证：`python simplexc/lower/ir_build.py --src simplexc/corpus/rv32im/rv32im.si --list-unsupported`
 最后验证：2026-10-17
 
+### M3 达成（宿主面）：rv32im 的 ours vs 参考产物 10 tick 逐 tick 全等
+`python simplexc/lower/ir_build.py --src simplexc/corpus/rv32im/rv32im.si --out <bin>` →
+**58612 B / entry `0xE1F0`**（参考 219088 B / `0x215B`，**我们 1/3.7**）；宿主 10 tick 差异 **0 条**
+（页哈希 + `sim_cycle` + extern 序列）。`--list-unsupported` 从 250 降到 **0**：补了
+三目 `cond ? a : b`（`condbr` + 两臂各自求值 + `phi`，保证只求值一支）与空 struct（`packed { i8 }` 占位）。
+006 基线**逐字节不变**（3508 B / entry `0xA90` / md5 `9d888a41…`）。
+⚠️ **成立边界**（别读成「完全等价」）：① 判据只比「相对 pre-run 基线**变过的页**」，rv32im 每 tick 只变 3 页
+（协议 2 + `#SIMULATION_STATE` 第 1 页），`#DATA_*` 的 128 MB RAM 镜像**没进比对**；
+② 游戏内真环境（真 Sleep/时钟、游戏设的 target_cycle）未验。
+验证：`python simplexc/lower/ir_build.py --src simplexc/corpus/rv32im/rv32im.si --out <bin>`，再 `host.py`
+      两边各跑 `--ticks 10`（ref entry `0x215B` / ours 看自己的 `.entry`）比 pages/sim_cycle/extern
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

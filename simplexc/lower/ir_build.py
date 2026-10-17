@@ -964,6 +964,52 @@ class Lower:
             return self.compare(node.op, a, b, node.src_line)
         return self.binop(node.op, a, b, node.src_line)
 
+    def e_CondExpr(self, node):
+        """`cond ? a : b`。
+
+        形状是 **condbr + phi**，不是 `select`：两臂里都可能有 `load(…)`（rv32im 的
+        `com_mux` 就是两支 load），`select` 会两支都求值 —— 与短路语义不一致。
+
+        每个臂的 `convert` 必须在**它自己那个块**里做完：`convert` 会把掩码 / `inttoptr`
+        发进当前块，跑到别的块里就是错的。所以先各自求值拿到类型，`unify` 之后再回到各
+        臂的块尾部补转换，然后两支一起 `br` 到 `t_end`，在那里用 phi 取一支。
+        类型统一与掩码全走 `unify`/`convert`，与 if 语句的写法一致。
+        """
+        L = self.L
+        cond = self.as_cond(self.e(node.cond))
+        then_bb = L.AppendBlock(self.ctx, self.fnref, b"t_then")
+        else_bb = L.AppendBlock(self.ctx, self.fnref, b"t_else")
+        end_bb = L.AppendBlock(self.ctx, self.fnref, b"t_end")
+        L.BuildCondBr(self.bd, cond, then_bb, else_bb)
+
+        L.PositionAtEnd(self.bd, then_bb)
+        self.cur_block = then_bb
+        tv = self.e(node.then)
+        t_bb = self.cur_block
+        L.PositionAtEnd(self.bd, else_bb)
+        self.cur_block = else_bb
+        ev = self.e(node.else_)
+        e_bb = self.cur_block
+
+        if tv.ty.kind == 'void' or ev.ty.kind == 'void':
+            raise Unsupported("三目的一支没有值", node.src_line)
+        ty = self.unify(tv.ty, ev.ty, node.src_line)
+        L.PositionAtEnd(self.bd, t_bb)
+        tv = self.convert(tv, ty, node.src_line)
+        L.BuildBr(self.bd, end_bb)
+        L.PositionAtEnd(self.bd, e_bb)
+        ev = self.convert(ev, ty, node.src_line)
+        L.BuildBr(self.bd, end_bb)
+
+        L.PositionAtEnd(self.bd, end_bb)
+        self.cur_block = end_bb
+        # phi 的结果类型是**值的类型**（SSA 里窄整数一律 i64 位模式，见文件头「值表示」），
+        # 不是 `ll_type` 那个内存宽度；只有 struct / ptr 两类值不是 i64。
+        vty = self.ll_type(ty) if ty.kind in ('struct', 'str', 'array') else self.i64
+        phi = L.BuildPhi(self.bd, vty, "cnd")
+        L.AddIncoming(phi, carr([self.llv(tv), self.llv(ev)]), carr([t_bb, e_bb]), 2)
+        return V(phi, ty, None)
+
     def e_CallExpr(self, node):
         callee = node.callee
         if type(callee).__name__ == 'IdentExpr':
@@ -1690,7 +1736,11 @@ class Program(Lower):
                 if fm:
                     fields.append((fm.group(1), self.ty_of_name(fm.group(2), d.lo)))
             if not fields:
-                raise Unsupported(f"空 struct {d.name}", d.lo)
+                # 空 struct（`type X Struct { }`，rv32im 的 `Input`/`Output`）：U-L4 布局未定，
+                # 取 **1 字节占位**而不是零宽度聚合 —— 零宽度的 alloca / 全局大小是 0，
+                # 那条路没验证过；1 字节同时也保住「对象有地址」。
+                self.structs[d.name] = Ty('struct', 8, False, d.name, ())
+                return
             self.structs[d.name] = Ty('struct', sum(storage_bytes(t) for _, t in fields) * 8,
                                       False, d.name, tuple(fields))
         else:
@@ -1773,6 +1823,8 @@ class Program(Lower):
     def _make_types(self):
         for name, ty in self.structs.items():
             elems = [self.storage_ll(t) for _, t in ty.fields]
+            if not elems:                       # 空 struct：取 `Ty.bits` 那个占位宽度
+                elems = [self.storage_ll(sized(ty.bits, False))]
             self._struct_ll[name] = self.L.StructType(self.ctx, carr(elems), len(elems), 1)
         for name, ty in self.structs.items():
             offs, off = {}, 0

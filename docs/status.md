@@ -16,48 +16,45 @@
 提升游戏内电路仿真主频。正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 
 **设计与接口**：
-- 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 T1–T5 闭合）。
-- **接口冻结版 1**：`docs/specs/2026-10-15-simplexc-interfaces.md`（主设计 §8 的 7 项 + §9 未定项 U-L1…U-L14）。
-  已批准取舍：runtime 目标码随 blob 装配／blob 内部禁止绝对重定位／corpus 的 `.bin` 不进 git。
+- 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 T1–T5 闭合；§8 已指向接口冻结版）。
+- **接口冻结版 1**：`docs/specs/2026-10-15-simplexc-interfaces.md`（§8 的 7 项 + §9 未定项 U-L1…U-L14）。
+  2026-10-17 就地更正 4 处与代码/实测不符处：装配器签名 `ExternResolver&`、`AsmStatus` 补 `BadObject`+`TooLarge`、
+  桩长 12 字节、`impl` 词表 = `reference | ours | fallback | ours_failed`（hook.log `impl` 行含 reference）。
 - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（5 项决策已确认；实现未开始）。
 - 代码落库 `reversing/simplexc/`；LLVM 固定 **23.1.3（官方 win64 包）**，链接方式见 `facts.md` §构建与 LLVM。
 
-**M0 观测设施：已完成**（2026-10-16）
-- 语料 `corpus/src/` 98 份 + `corpus/ref/` 产物 + `manifest.tsv`（13 列，含 `entry`）+ `stdlib_prefix.si` + `campaign/` 92 份；
-  判据 `recompile_corpus.py --check` rc=0；归一化 DLL 基址后逐字节相同 98/98。
-- 覆盖率矩阵 `corpus/coverage.tsv`（54 构造 × 98 文件）；**98/98 的构造 37 个**；
-  `type alias`/`@Any`/`$ 参数`/`asm`/`extern`/`big_int_*` 在语料 0 次但全在 stdlib 前缀里。
+**M0 观测设施：已完成**（2026-10-16）——98 份语料 + 含 `entry` 的 manifest + 54×98 覆盖率矩阵；
+判据 `python simplexc/tools/recompile_corpus.py --check` rc=0（98/98 归一化后逐字节相同）。
 
-**M1 spike：已完成**（2026-10-17）
-- 装配链跑通（进程内 + **游戏内**）：LLVM 模块或 g++ 目标文件 → 装配器（+ runtime + shim）→ blob → 游戏 JIT 执行。
-- 进游戏实测：`manifest.tsv` seq 006 = 我们的产物、`impl=ours`、`work/tmp/blob_ran.log` 出现 blob 自己写的标记
-  → 我们的代码真在游戏进程里跑到了；游戏没崩。详情 `docs/notes/2026-10-17-m1-spike-游戏内.md`。
-- ⚠️ 空程序只能证链路：占着真实电路会让游戏在下一次编译请求时 abort（见 `facts.md`）。
-- 仍未做：LLVM 模块接进壳（壳现在读预装配 blob）、VEH 熔断。
+**M1 spike：已完成**（2026-10-17）——装配链跑通、游戏内 JIT 执行过（`impl=ours`、seq 006、游戏没崩）。
+⚠️ 游戏里那个 blob 来自 **g++ 目标文件**；LLVM 来源的 blob 从没在游戏里执行过（M1.5 顺手闭合）。
 
-**M2 差分宿主：已完成**（2026-10-17）—— 参考产物自比对通过，宿主可靠性得证。
-- 代码 `simplexc/tools/host/{simspec.py,host.py,selftest.py}`；设计取证 `docs/notes/2026-10-17-m2-host-design.md`。
-- 做法：加载真 `compile_real.dll`（产物会直接调它的运行时函数、读写它的 `.bss`）→ 把产物里 baked 基址
-  重定位到实际加载基址 → 按源码地址表 `VirtualAlloc` 假游戏内存 → detour 危险导入 → `jmp` 语义的
-  trampoline 起线程 → 递增 `sim_target_cycle`/命令号驱动，逐 tick 出快照（页 sha256 + extern 序列）。
-- 判据与结果（`selftest.py`，两个独立宿主进程）：**005/006/120 通过**（逐 tick 全等 + 仿真真在工作）；
-  020/026 逐 tick 全等但电路太小（无工作页，不算过）；001（地图电路）崩在「写地址 0」= 假状态保真度不够。
-- 未解决：假游戏状态只做到「零填 + 数组头」——凡是要解引用游戏给的指针/结构的电路（001 那类）跑不了。
+**M2 差分宿主：已完成**（2026-10-17）——参考产物自比对通过（005/006/120；判据 `host/selftest.py`）。
+未解决：假状态保真度只到「零填 + 数组头」，解引用游戏指针的电路（001 那类）跑不了。
+
+### 当前批次（2026-10-17 接手，按此顺序）
+
+1. **接口对齐（文档已改，代码待跟）**：`assemble()` 的 `max_blob` 超限要返回 `TooLarge`（现在错用 `BadObject`）；
+   宿主对「地址表外 + `VirtualQuery` 已映射」的 movabs 要硬错误（现在只统计）；
+   `compile_hook.c` 的 `impl` 行改成 per-call（含 reference）+ 词表统一。
+2. **构建可复现（当前最大工程债）**：`simplexc/tools/build.py` 不存在 → 换机器无法重建 `tcblob` / `llvm_prog` /
+   `compile_hook.dll`；接口冻结时承诺的 `simplexc/README.md` 与各子目录 README 一个都没写。
+3. **M1.5 收益探针**：从已下载的 `clang+llvm-23.1.3…tar.zst` 多解出 `bin/clang.exe`（**别再重下**）→
+   006 的 C 等价物 → `clang -O2` → `tcblob` 装配 → **先用 M2 宿主验逐 tick 等价**、再比吞吐（同时报静态指令数）
+   → 顺带让 **LLVM 来源的 blob 在游戏里真正执行一次**。
+4. **壳的失败路径与熔断**（做 A/B 之前必须补）：`ours` 失败现在在 `compile_hook.c` 早返回 → 漏记 manifest 与
+   `error` 事件；壳没有 VEH、没有 ours 超时；接口 §8 的错误分类没落地。与 1 里的 `impl` 行同文件 → 串行。
 
 ### 下一步（已决定）
 
-1. **M1.5 收益探针（负责人指定为下一阶段）**：靶子 = 006（2 输入 NAND，周期体 45 行）；
-   「我们的产物」必须 **clang(-O2)** 生成（不能拿 GCC 顶替）→ 需从已下载的 LLVM 包多解 `bin/clang.exe`；
-   先用 M2 宿主离线量 cycles/s（**先验逐 tick 等价**，再比吞吐），游戏内 A/B 放后面。
-2. **假状态保真度**：让 001 那类电路也能在宿主里跑（现在写地址 0）——这是 M3 全语料差分的前置。
-3. **M3 语义档案**：接口文档 §9 的 U-L1…U-L14 **必须实验后才写死**（`load`/`store` 的地址单位是地基）；
-   每条 = 最小 `.si` + 驱动方式 + 参考产物下的可观测量，机器可执行、由脚本采集（主设计 §7.4）。
-4. **定 MVP 必须支持的构造集合**：以 `coverage.tsv` 的 98/98 构造为下界，加上 stdlib 前缀里那 6 个，交负责人确认。
-5. **前端 + Lowering**（M3 主体）：按接口冻结版 1 实现，产物先接离线 CLI，再接壳。
-6. **判据入口**（§7.5）：全语料编译 → 逐 tick 差分 → 覆盖率矩阵 + 回退率；游戏内部分标 slow/manual。
-7. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行。与 spike 抢同一份
-   `tools/compile_hook.c` → **串行（spike 先、freq 后）**，锁文件 `work/tmp/locks/compile-hook.lock`。
-8. **Steam 更新后的重验脚本**（§10 的 5 条断言，按符号名定位、不硬编码地址）。
+1. **假状态保真度**：让 001 那类电路也能在宿主里跑（现在写地址 0）——M3 全语料差分的前置。
+2. **M3 语义档案**：接口文档 §9 的 U-L1…U-L14 **必须实验后才写死**（`load`/`store` 的地址单位是地基）。
+3. **定 MVP 必须支持的构造集合**：以 `coverage.tsv` 的 98/98 构造为下界，加上 stdlib 前缀里那 6 个，交负责人确认。
+4. **前端 + Lowering**（M3 主体）：按接口冻结版 1 实现，产物先接离线 CLI，再接壳。
+5. **判据入口**（§7.5）：全语料编译 → 逐 tick 差分 → 覆盖率矩阵 + 回退率；游戏内部分标 slow/manual。
+6. **主频/bench 层重写**：`tools/freq/` 包 + `hook.log` 迁移 + per-call `impl` 行。与壳抢同一份
+   `tools/compile_hook.c` → **串行**，锁文件 `work/tmp/locks/compile-hook.lock`。
+7. **Steam 更新后的重验脚本**（§10 的 5 条断言，按符号名定位、不硬编码地址）。
 
 ### 待定 / 未解
 

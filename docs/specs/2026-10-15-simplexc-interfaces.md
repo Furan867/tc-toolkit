@@ -150,19 +150,24 @@ len   = u64(p-8) >> 16
 
 ```cpp
 struct ObjectFile  { std::string name; std::vector<uint8_t> bytes; };   // COFF
-struct ExternSym   { std::string symbol; std::string dll, proc; };       // 由壳在编译期解析成绝对地址
+class ExternResolver {                 // 外部符号 → 绝对地址；由壳实现（GetProcAddress 之类）
+  virtual bool resolve(std::string_view symbol, uint64_t& addr) = 0;
+};
 struct Blob {
   std::vector<uint8_t> bytes;   // bytes[0:8] = out_len | (1<<62)；机器码从 +8 起
   uint64_t entry_off;           // 相对机器码起点（= 相对 blob+8）
 };
-enum class AsmStatus { Ok, UndefinedSymbol, UnsupportedReloc, InternalRelocToExtern, TooLarge };
+enum class AsmStatus { Ok, BadObject, UndefinedSymbol, UnsupportedReloc, TooLarge };
 struct AsmResult  { AsmStatus status; Blob blob; std::string detail; };
 
 AsmResult assemble(const std::vector<ObjectFile>& objs,
                    std::string_view entry_symbol,       // = 我们的 shim 符号 __tc_entry
-                   const std::vector<ExternSym>& externs,
-                   const AsmOptions& opt);
+                   ExternResolver& resolver,
+                   const AsmOptions& opt = {});
 ```
+
+（与 `simplexc/assemble/assemble.hh` 一致。`InternalRelocToExtern` 已并入 `UnsupportedReloc` —— 内部符号的绝对重定位
+就是被拒的那一类；`BadObject` = COFF 解析不了；`TooLarge` = `out_len > AsmOptions::max_blob`。）
 
 **冻结的装配规则**
 1. 输入是 COFF 目标文件（`LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)` 的字节）；
@@ -171,7 +176,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
    **任何指向内部符号的绝对重定位（`ADDR64`=0x01 / `ADDR32`=0x02 / `ADDR32NB`）一律 `UnsupportedReloc` 硬错误**
    （已批准项 b：blob 会被拷到任意地址执行，内部绝对地址必然失效）。
 3. 未定义符号：按「stub pool + 编译期解析」处理 —— 每个未定义符号在 `.text` 尾部分配一个
-   `movabs rax, imm64 ; jmp rax`（16 字节）桩；call/jmp 用 `REL32` 指向该桩（同一 blob 内，必在 ±2GB）。
+   `movabs rax, imm64 ; jmp rax`（10 + 2 = **12 字节**）桩；call/jmp 用 `REL32` 指向该桩（同一 blob 内，必在 ±2GB）。
    `GetProcAddress` 失败的符号 → `UndefinedSymbol`（不是崩溃）。
 4. 整节丢弃 `.pdata` / `.xdata` / `.debug*`；IR 层禁 `uwtable`、禁异常。
 5. `__chkstk` / `___chkstk_ms` 由 `runtime/` 提供（我们自己的页探测实现），不依赖 CRT。
@@ -210,8 +215,11 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
   （记 `error stage=ours_fault`）。耗时超预算（默认 5 s，调试期 60 s）→ 记 `error stage=ours_timeout` → 按模式回退。
   失败一律**不崩游戏**：任何异常路径都返回一个形状合法的 Result。
 - 记录（冻结）：
-  - `manifest.tsv` **末尾追加 `impl` 列**（既有列序号不变）：`ours | ours_with_fallback→reference | reference`；
-  - `hook.log` 新增 per-call `impl` 行（键：`impl` / `reason`），与主频层设计 §4 的契约一致；
+  - `impl` 词表（**唯一一处定义**，manifest 列与 hook.log 行共用）：`reference`（配置为参考）/ `ours`（用了我们的产物）/
+    `fallback`（`ours_with_fallback` 且 ours 失败 → 参考产物）/ `ours_failed`（`ours` 模式失败，未转交）；
+  - `manifest.tsv` **末尾追加 `impl` 列**（既有列序号不变），**每次调用都写**；
+  - `hook.log` 新增 per-call `impl` 行（键：`impl` / `mode` / `result`）—— **含 reference 模式**：
+    回退率需要分母，只在「非 reference」时记会把「绝大多数调用都是 reference」这个事实藏起来；
   - 归属只认 `hook.log` 的 `opt` / `impl` 行（主设计 §7.3）。
 - 三模式与 `rewrite` 正交（`rewrite` 仍只由改写器定义合法值集合）。
 
@@ -224,9 +232,14 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 - **假游戏内存**：生成源码把所有游戏地址写成字面量（`Ptr <digits>`、`raw_cast(<T>, <digits>)`、`#DATA_*`），
   产物里对应 `movabs imm64` → 宿主按 64 KB 页 `VirtualAlloc` 预留这些地址区间。
-  **产物里出现地址表外的 movabs 立即数 = 宿主报错退出**（宁可吵，也别静默错）。
-- **extern 中和**：把产物里指向 kernel32 的 movabs 立即数改写成宿主桩地址（复用
-  `tools/optimize_image.py` 的 movabs 改写能力）；桩记录 `{name, args, ret}` 进快照。
+  **产物里出现「地址表外 + 本进程 `VirtualQuery` 显示已映射」的 movabs 立即数 = 宿主报错退出**
+  （宁可吵，也别静默错）。判据为什么不是「一切表外 movabs」：实测每份参考产物都有 4 处大整数常量
+  （`0x2540be400`、`0x19db1ded53e8000` 之类）；真正会静默错的是**能解引用**的那些，纯常量只统计。
+- **extern 中和**（⚠️ 2026-10-17 按实测更正；原文「把指向 kernel32 的 movabs 改写成宿主桩」是地址区间的误读）：
+  参考产物的 movabs 全部落在 **`compile_real.dll` 自己的镜像**里 —— 导入 thunk / DLL 内部代码 / DLL 的 `.bss` 全局，
+  **不是 kernel32 自身的地址**。所以宿主必须 **`LoadLibrary` 真 `compile_real.dll`** → 把产物里 baked 基址
+  重定位到实际加载基址（加 delta）→ 把 DLL 的 **IAT 槽**换成宿主桩；桩记录 `{name, args, ret}` 进快照。
+  取证见 `docs/facts.md` §「参考产物会直接调用 compile_real.dll 里的运行时函数」+ `docs/notes/2026-10-17-m2-host-design.md`。
 - **命令驱动**（依据主设计 §7.1）：命令块在游戏内存里（`commands[...]`/`settings[...]`），
   驱动方把 `sim_target_cycle` 依次设为 `1,2,3,…` 并递增 `ctl_command_id` 发 `SimCommand.run`
   → 每次 `run` 返回即一个 tick 边界。

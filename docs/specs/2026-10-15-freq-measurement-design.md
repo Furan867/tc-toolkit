@@ -84,7 +84,8 @@ tools/freq/                 # 包（位置与命名已确认）
 - **归属只认 `hook.log`，且要分清三行**：`cfg` = **配置了什么**（原样搬运）、`opt` = **改写器实际做了什么**、
   新增的 per-call `impl` 行 = **实际走了哪个实现**。不能用“我们写了什么配置”当归属
   （`facts.md` §「产物 rewrite 模式的权威来源」已记该坑）；加 compiler 轴后，只记 `cfg` 会把回退误当我们的实现。
-- **必须新增 per-call「实际用了哪个实现」行**（已确认）：回退是 per-call 的，只记 `cfg` 会重演
+- **必须新增 per-call「实际用了哪个实现」行**（已确认；`impl` 词表与 manifest 列的定义在
+  `2026-10-15-simplexc-interfaces.md` §5，那边是唯一一处）：回退是 per-call 的，只记 `cfg` 会重演
   "标注 vs 实际"错位（`compile_hook.c:337` 记的 `short_cse` 被静默改写成 `on` 那次就是同类问题）。
 - **`hook.log` 移到 `work/hook/`**（已确认，名字更符合直觉）：
   - C 侧 `compile_hook.c:299`（`sprintf(path, "%s%chook.log", OPT_DIR, SEP)`）与 `:297` 的 `CreateDirectoryA`；

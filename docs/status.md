@@ -36,19 +36,18 @@
 - **判据补强**：每 tick 对每个映射段算 sha256（`regions` 字段）+ `selftest.compare` 纳入比较；
   `--seed-reset-data seq|xorshift` 给 `#RESET_DATA_*` 灌图案 —— 272 MB RAM 镜像才真的被读写。
   **强判据下 rv32im 仍逐 tick 全等**，且因此抓出并修掉一个 `memory_copy` 方向反的 bug。
+- **freq 层重构完成**（M4 前置）：`tools/freq/` 11 个模块（`probe`/`variants`/`products`/`sampler`/
+  `report`/`driver`/三个 CLI），`watch_freq.py` 566→25 行、`bench_rewrite.py`→27 行薄壳；聚合统一 median、
+  `hook.log` 迁到 `work/hook/`（`resolve()` 写跟随读，窗口期不分裂 `cfg`/`opt`）；39 单测。
+  ⚠️ 游戏相连路径全部**未验**（真按键/真内存读/preflight 真分支），留给 M4。
+- **pi-lens 清零**：`ir_build.py` 17 条 → 0（`lens_diagnostics` 权威入口确认），产物 md5 逐字节不变。
 - **M3 达成（宿主面）**：`lower/ir_build.py`（AST → LLVM-C → 目标码 → `tcblob`）。
   **006 与 rv32im 都与参考产物 10 tick 逐 tick 全等（差异 0 条）**；rv32im 产物 **58612 B vs 参考 219088 B**。
   全程没有手写 C 参与。接口级更正：`RelocMode` `Static` → **PIC**。
 
 ### 下一步（已决定，按顺序）
 
-1. **freq 重构（M4 前置，在跑）**：按 `docs/specs/2026-10-15-freq-measurement-design.md` §3/§8 建
-   `tools/freq/` 包。批 1 = 数据层（`probe` / `variants` / `products` + `read_freq` 降级薄 CLI）；
-   批 2 = `sampler`/`report`/`driver` + CLI，以及 `hook.log` 从 `work/opt/` 挪到 `work/hook/`
-   （后者涉及 C 侧 + 壳重编部署，主程另做）。
-2. **清 pi-lens 债（在跑）**：`simplexc/lower/ir_build.py` 17 条（`no-init-return`×3、`is True`×2、
-   未保护调用×11、裸 `int()`×1）。硬约束是**产物 md5 不变**（006 `9d888a41…`、rv32im `c043fd1b…`）。
-3. **M4 游戏内主频对照**（依赖 1）：把 rv32im 产物部署进游戏、切 `ours`，多轮取中位数、同会话交替
+1. **M4 游戏内主频对照**（前置已全部就绪）：把 rv32im 产物部署进游戏、切 `ours`，多轮取中位数、同会话交替
    `reference`/`ours`。⚠️ **游戏内必须重新捕获 rv32im 源码**（产物里的地址只对捕获它的进程有效）；
    需要负责人配合起游戏、让 RV32IM 持续跑。
 4. **M4.5 前端换 C++17**（M5 前置，见主设计 §9）：把 `frontend/` + `lower/` 从 Python 原型搬成 C++17。

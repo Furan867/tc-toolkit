@@ -201,6 +201,21 @@
 验证：`sha256sum simplexc/corpus/rv32im/rv32im.{si,bin}`；`grep -c '' simplexc/corpus/rv32im/rv32im.si`
 最后验证：2026-10-17
 
+### RV32IM 的 reset_sim 每 tick 整块拷贝 128 MB 内存镜像
+参考产物 `+0x2391` 是 `rep movs`：`rsi = #RESET_DATA_7069020504170261741 - 0x800`、
+`rdi = #DATA_7069020504170261741 - 0x800`、`ecx = 0x8001000`（= 134221824 = 128 MB + 4096）。
+块尺寸写在生成源码的行尾注释里：`// """ & $(c_alloc(134217728) + 2048) & "\n" & """`（SETTINGS 是 `c_alloc(4096)`）。
+→ 宿主必须按这个尺寸映射（4 组 × 约 256 MB ≈ 1 GB 虚拟内存），只按「地址」映射一小块会越界 AV。
+验证：`objdump -D -b binary -m i386:x86-64 -M intel --start-address=0x2360 simplexc/corpus/rv32im/rv32im.bin`
+最后验证：2026-10-17
+
+### 生成器给块地址的行尾都带注释，`Ptr` 解析必须容忍
+`const #DATA_* / #RESET_DATA_* / #SETTINGS_*` 行尾是 `// """ & $(c_alloc(…) + 2048) & … """`。
+`simspec.py` 的 `PTR_RE` 原来以 `\s*$` 收尾 → 这 12 个地址整批漏掉（地址表只有 9 个标量），
+`reset_sim` 一跑就 AV。修成 `\s*(?://.*)?$` 后标量地址 9 → 21 个。
+验证：`python -c "import sys;sys.path.insert(0,'simplexc/tools/host');import simspec;print(len(simspec.SimSpec.parse('simplexc/corpus/rv32im/rv32im.si').scalars))"` → 21
+最后验证：2026-10-17
+
 ### simplexc/corpus：98 份唯一源码 + 含 entry 的 manifest
 `work/hook/all/` 的 180 份捕获按源码字节去重 → 98 份（重复分布 1×91、2×3、3×2、4×1、73×1，
 最多的是 004 出现 73 次）；离线重编译后 `entry` 全部非 0（53 个不同值，`0x212f` 出现 15 次）

@@ -85,3 +85,8 @@
   「逐 tick 全等」是**平凡成立**的。实测因此藏住一个 `memory_copy` 方向反的 bug：
   灌确定性图案后第一 tick 就暴露（我们的产物把源当目的，图案被反向拷贝销毁）。
   判据的输入必须非平凡，否则绿灯没有意义。
+- 别假设「每次编译都会起改写子进程」—— `compiler=ours` 分支**只写一行 `impl`**，没有
+  `cfg`/`opt`/`writeback`。任何拿 `opt`/`writeback` 当「编译完成」信号的判据（历史归属编号、
+  bench 的等产物逻辑）在 ours 轮都会误判：实测 bench 重试 3 次、每轮都编译成功
+  （`manifest` seq 006/007/008 + `hook_out_*.bin` 都在），却报「等 60s 没等到产物」。
+  「编译完成」= 该 seq 的**任一终态行**（`impl … result=ok` 或 `writeback`/`opt`）。

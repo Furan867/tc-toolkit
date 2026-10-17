@@ -323,18 +323,16 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
       + 我复跑的 `work/tmp/fixmc/{seq,xorshift}_{ref,ours}.jsonl`
 最后验证：2026-10-17
 
-### M4 结果：游戏内 RV32IM 主频 —— ours **24.83 MHz** vs reference **5.19 MHz**（**4.78×**）
-同一游戏会话（PID 21816）、同一电路运行、交替 2 轮各 41 样本（`tools/watch_freq.py --seconds 40`）：
-
-| 变体 | 轮 1 | 轮 2 | 中位数 | 产物 |
-|---|---|---|---|---|
-| **ours**（我们的 lowering） | 24.843 | 24.818 | **24.83 MHz** | 58612 B / entry `0xE1F0` |
-| **reference**（游戏自带编译器） | 5.204 | 5.169 | **5.19 MHz** | 219088 B / entry `0x215B` |
-
-采样波动 2.1–3.0%。每轮都是 `simctl recompile` 触发编译、`simctl run` 恢复运行后再采
-（工具语义与操作约定见 `TOOLS.md` 的 simctl 一节）。
-reference 的 5.19 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合，说明靶子与量法都没跑偏。
-验证：`work/tmp/m4/{summary_ours_2.txt,summary_ref_2.txt,freq_log.tsv}`；`work/hook/hook.log` 的 seq 007/009/010
+### M4 结果：游戏内 RV32IM 主频 —— ours **25.8 MHz** vs reference **5.37 MHz**（约 **4.8×**）
+**判据入口一条命令可复现**：
+`python tools/bench_rewrite.py --variant reference:off --variant ours:off --seconds 40 --json <out>.json`
+→ `reference #009 5.369 MHz`、`ours #010 25.835 MHz`、**+381.2%**（各 39 样本；`opt.ini` 自动恢复、游戏不崩）。
+手动的两轮（`simctl recompile` → `run` → `watch_freq --seconds 40`）给出同样的比值：
+24.843/24.818 vs 5.204/5.169（4.78×）。产物：ours 58612 B / entry `0xE1F0`；reference 219088 B / entry `0x215B`。
+reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 → 靶子与量法没跑偏。
+**中位数对切换过渡点不敏感**（drop 0/1/3/5：reference 5.369/5.372/5.369/5.368；ours 25.835/25.856/25.888/25.900），
+而 mean 被第一个过渡点（3.30 MHz）拉低（5.309 vs 5.361）—— 这就是设计 §7 决策 3 选 median 的实测理由。
+验证：`work/tmp/m4/ab3.json`（`schema=1`，含 raw samples）；`work/freq/bench_*.tsv`
 最后验证：2026-10-18
 
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）

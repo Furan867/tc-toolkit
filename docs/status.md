@@ -40,8 +40,9 @@
   `report`/`driver`/三个 CLI），`watch_freq.py` 566→25 行、`bench_rewrite.py`→27 行薄壳；聚合统一 median、
   `hook.log` 迁到 `work/hook/`（`resolve()` 写跟随读，窗口期不分裂 `cfg`/`opt`）；39 单测。
   ⚠️ 游戏相连路径全部**未验**（真按键/真内存读/preflight 真分支），留给 M4。
-- **M4 达成（游戏内主频）**：RV32IM 同一会话交替两轮、各 41 样本 —— **ours 24.83 MHz vs
-  reference 5.19 MHz（4.78×）**；我们的 lowering 产物在游戏内执行成功（`impl=ours result=ok`，游戏不崩）。
+- **M4 达成（游戏内主频，判据入口可复现）**：RV32IM —— **ours 25.835 MHz vs reference 5.369 MHz
+  （+381.2%，4.8×）**，一条命令 `bench_rewrite --variant reference:off --variant ours:off --json …` 可复现；
+  手动两轮交叉验证 4.78×；我们的 lowering 产物在游戏内执行成功（`impl=ours result=ok`，游戏不崩）。
 - **pi-lens 清零**：`ir_build.py` 17 条 → 0（`lens_diagnostics` 权威入口确认），产物 md5 逐字节不变。
 - **M3 达成（宿主面）**：`lower/ir_build.py`（AST → LLVM-C → 目标码 → `tcblob`）。
   **006 与 rv32im 都与参考产物 10 tick 逐 tick 全等（差异 0 条）**；rv32im 产物 **58612 B vs 参考 219088 B**。
@@ -52,8 +53,6 @@
 1. **M4.5 前端换 C++17**（M5 前置，见主设计 §9）：把 `frontend/` + `lower/` 从 Python 原型搬成 C++17。
    判据：①与参考产物逐 tick 等价（复用 M3 的做法）②§7.5 的延迟门与依赖门 ③判据入口的生产者切到 C++ 后全绿。
    M4 已部署的预编译 blob 不算「Python 进产线」的先例，例外只在 M4 期间有效。
-2. **修 `watch_freq` 的归属显示**：`ours` 段的样本被标成 `#008`（实际是 seq 009）—— 归属没跟上 `impl` 行，
-   频率读数本身正确。`products.py` 的 `mode_from_hook_log` / 编号解析要认 `impl` 行。
 3. **M5 全量语料**：98 份逐份跑「能否装配 + 逐 tick 是否全等」，出一张覆盖表。
 4. **优化（M3 §11 U1–U4/U7）**：现在全 i64 + `alloca` + `align 1`，我们 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。
 

@@ -24,6 +24,12 @@
 - 脚本首行写 `#!/usr/bin/env python3` 会让 PyLauncher 去 **PATH** 里找 `python3.exe`
   （本机命中 MSYS2 那个），同一个 DLL 编译慢 **16 倍**且**毫无报错**。工具脚本一律写
   `#!python3`；`build_component_map` 会打印每次编译耗时，十几秒就是选错解释器了。
+- 别拿空程序/桩程序去替代真实电路的产物 —— 游戏下一次编译请求会 **abort 整个进程**（先
+  `send_command(3)+joinThreads` 再 `compile()`，半途的仿真协议会让游戏自己 fatal），而且**不留 WER、不留
+  dump**，查不到现场；连 `work/hook/hook_src_NNN.si` 都不会新增（死在 `compile()` 之前）。
+  进游戏验证自研产物必须拿「真能跑完仿真协议」的程序，见 `docs/facts.md` 同名条目。
+- 别带着 `compiler = ours` 启动游戏 —— 启动会编译地图电路，拿到什么都不同的程序后地图构建不出来，
+  表现为「游戏起不来」（不是崩，是卡）。要验证就先用 `reference` 起来再热切。
 - 别用 `objdump -g`（不加 `--dwarf=`）判断 DWARF 里有没有 Nim 符号 —— 它打印的
   `…@spasses@sfront_end@stokenizer.nim.c:` 来自 **COFF `.file` 记录**，不是 `.debug_info` 的内容。
 - 别把 pi-lens 的 C/C++ 诊断当编译错误 —— 报「找不到系统头」的是它的 **lsp runner（自带 clangd 22.1.0，
@@ -31,8 +37,9 @@
   机器级 `%LOCALAPPDATA%\clangd\config.yaml` + 源文件旁 `compile_flags.txt`（`--target` + `--gcc-toolchain` + `-I`，
   见 `simplexc/compile_flags.txt`）。**别用逐行 `-isystem` 拼 mingw 头目录** —— libstdc++ 用 `#include_next`
   取 `stdlib.h`，重复且顺序不对的 `-isystem` 会让它找不到（要用 `-idirafter`）。
-- `.h` 会被 pi-lens 按 **C** 检查，`compile_flags.txt` 里的 `-std=c++17` 于是非法 —— C++ 头一律用 `.hpp`。
-  另一个陷阱：同一文件重复 write 时 harness 不重复报 —— 「第二次写没报错」不能当修好的证据。
+- `.h` 会被 pi-lens 按 **C** 检查，`compile_flags.txt` 里的 `-std=c++17` 于是非法 —— 按项目约定，
+  C++ 头一律 `.hh`（C 才用 `.h`，见 `AGENTS.md`）。另一个陷阱：同一文件重复 write 时 harness 不重复报
+  —— 「第二次写没报错」不能当修好的证据。
 - 别让 git 的行尾归一化碰语料 —— `core.autocrlf=true` 会把 CRLF 折成 LF 存（`src/001.si` 少 74 字节）、
   检出时再折回来；只要语料路径在 `.gitattributes` 里标了 `-text` 才安全。
   自检：`git show :<file> | wc -c` 必须等于工作区字节数。

@@ -210,6 +210,15 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
       `build/objs/rt_min.o` 的 `.text+0x27`（字段 `FF FF FF FF`，对 `.rdata`）与 w64devkit `ld` 链接后的位移一致
 最后验证：2026-10-17
 
+### 产物必须是能驱动仿真的程序：空/桩程序会让游戏在**下一次**编译请求时 abort
+游戏每条编译请求都是先 `send_command(3)` + `joinThreads()` 再 `compile()`；而一个什么都不做就
+`ExitThread` 的产物会让仿真协议处于半途，下一次编译请求就在游戏自己的状态机里 fatal 退出。
+特征（用于与真崩溃区分）：**不产生 WER 报告、不产生 CrashDump**，且因死在 `compile()` 之前，
+`work/hook/` 里连 `hook_src_NNN.si` 都不会新增。
+验证：2026-10-17 游戏内实测（`compiler = ours` 返回 728 字节空程序 → 下一次手动编辑触发编译时 abort；
+      `%LOCALAPPDATA%\CrashDumps` 与 WER ReportArchive 无新记录，`manifest.tsv` 停在 seq 006）
+最后验证：2026-10-17
+
 ## 组件映射
 
 ### 映射原理

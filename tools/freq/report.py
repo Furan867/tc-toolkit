@@ -80,6 +80,23 @@ def hz_style(hz: float) -> tuple[str, ...]:
 
 # ---------------------------------------------------------------- 区间表（watch 总结）
 
+def _rewrite_cell(own: products.Ownership) -> str:
+    """改写列：改写器实际做的（`opt` 行）→ 转发层配的（`cfg` 行）→ 这一趟压根没起改写器。
+
+    第三档的必要性：`impl=ours` 的产物不过改写器（`hook.log` 里它的终态就是 `impl` 行，
+    见 `products.done_rounds`），既没有 `opt` 也没有 `cfg` 行；只写 `?` 会让人以为
+    「改写器失败了」，而事实是这一趟本就不该有改写 —— 归因取自 `impl` 行，仍然是
+    `hook.log` 说的。
+    """
+    if own.opt_mode != products.UNKNOWN:
+        return own.opt_mode
+    if own.cfg_rewrite != products.UNKNOWN:
+        return own.cfg_rewrite
+    if own.impl != products.UNKNOWN:
+        return f"—（impl={own.impl}）"
+    return products.UNKNOWN
+
+
 def summarize(regions: list[Region], verbose: bool = False) -> tuple[str, list[str], str]:
     """按「一次编译 → 一次运行」的区间归并，**一个电路一行**。
 
@@ -101,12 +118,12 @@ def summarize(regions: list[Region], verbose: bool = False) -> tuple[str, list[s
             seg = max(runs, key=lambda s: s.median)
             med, vals = seg.median, seg.values
             # 区间只记编号，摘要时重查 —— 读数只依赖产物与日志，跟当时终端打印了什么无关。
+            own = products.ownership(region.num)
             fp = products.product_fp(region.num)
-            fp_log, n_rw, mode = (products.opt_info(region.num)
-                                  if region.num else ("-", "", "?"))
-            if fp == "-" and fp_log != "-":
-                fp = fp_log      # 产物已被清（游戏重启过）：退回日志里记的 sha
-            rewrite = mode if mode != "?" else products.mode_from_hook_log(region.num)
+            n_rw = own.rewritten
+            if fp == "-" and own.sha_log != "-":
+                fp = own.sha_log      # 产物已被清（游戏重启过）：退回日志里记的 sha
+            rewrite = _rewrite_cell(own)
             row = (f"{nth:>2d}) {region.label:<5s}{med / 1e6:6.3f}"
                    f" {len(vals):>3d}  {(max(vals) - min(vals)) / med * 100:5.2f}"
                    f" {fp:<8s} {n_rw or '-':>5s}  {rewrite}")

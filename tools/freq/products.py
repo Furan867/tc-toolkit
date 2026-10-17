@@ -18,6 +18,11 @@
 
     work/hook/  转发层捕获：hook_src_NNN.si / hook_out_NNN.bin / manifest.tsv（每次加载清空）
     work/opt/   转发层工作区：NNN.raw.bin / NNN.opt.bin（**改写后**、真正写回游戏的那份）
+
+产物落在哪一边取决于这一趟走没走改写器：走了 → `work/opt/NNN.opt.bin`；没走
+（`impl=ours`，我们自己的产物不过改写器）→ `work/hook/hook_out_NNN.bin`。所以
+「编号 → 产物」必须两条腿都看，只认 `opt.bin` 会让那几趟从编号序列里消失，监听程序
+于是把这一趟标成上一轮的编号（M4 实测：#009 的 ours 轮被标成 #008）。
 """
 from __future__ import annotations
 
@@ -43,7 +48,7 @@ UNKNOWN = "?"
 
 @dataclass(frozen=True)
 class Product:
-    """一个改写后产物：编号、文件、mtime。"""
+    """一个编译点的产物：编号、文件（写回游戏的那份）、mtime。"""
 
     num: str
     path: Path
@@ -70,38 +75,83 @@ def fingerprint(path: Path) -> str:
     return h.hexdigest()[:8]
 
 
+def _name3(num: str | None) -> str | None:
+    """`9` / `009` → `009`（文件名与 `hook.log` 的编号都是三位零填充）；非数字返回 None。"""
+    try:
+        return f"{int(num or ''):03d}"
+    except (TypeError, ValueError):
+        return None
+
+
+def product_path(num: str | None) -> Path | None:
+    """这一趟**真正写回游戏**的那份机器码的路径；没有产物返回 None。
+
+    改写过的产物优先（`work/opt/NNN.opt.bin` —— 改写器最后才落盘的那份）；没有它时
+    退回转发层捕获 `work/hook/hook_out_NNN.bin`：那正是「没过改写器」的产物的落点
+    （`done_rounds` 里终态是 `impl` 的那趟，或改写器中途放弃），游戏跑的都是这一份。
+    """
+    name = _name3(num)
+    if name is None:
+        return None
+    for cand in (OPT_DIR / f"{name}.opt.bin", HOOK_DIR / f"hook_out_{name}.bin"):
+        if cand.is_file():
+            return cand
+    return None
+
+
 def product_fp(num: str | None) -> str:
-    """编号对应的改写后产物的指纹（`-` = 没有编号 / 产物读不到）。"""
-    if not num:
-        return "-"
-    return fingerprint(OPT_DIR / f"{num}.opt.bin")
+    """编号对应的**写回产物**的指纹（`-` = 没有编号 / 产物读不到）。"""
+    path = product_path(num)
+    return "-" if path is None else fingerprint(path)
+
+
+def impl_rounds(path: Path | None = None) -> dict[str, str]:
+    """编号 → **实际走了哪个实现**（`hook.log` 的 `impl` 行；同号取最后一条）。
+
+    `impl` 行每次 `compile()` 都写（含 reference —— 回退率要分母），所以它是日志里
+    「编译发生过」的完整清单；`cfg`/`opt` 只有起过改写器的那趟才有。
+    """
+    where = None if path is None else str(path)
+    out: dict[str, str] = {}
+    for rec in hook_log.find("impl", None, where):
+        if rec.kv.get("impl"):
+            out[rec.seq] = rec.kv["impl"]
+    return out
+
+
+def done_rounds(path: Path | None = None) -> dict[str, str]:
+    """编号 → 这一趟的**终态行**（`impl` 且 `result=ok` / `writeback` / `opt`）。
+
+    不是每趟编译都写 `writeback`：`compiler=ours` 那趟**根本不起改写子进程**
+    （`compile_hook.c`：`if (!ours_ok) optimize_inplace(...)`），日志里只有一行
+    `impl=ours result=ok`。所以「写完」的判据只能是「终态行落了」，不能是
+    「有 writeback/opt 行」—— 后者会让 ours 轮永远等不到（bench 实测：重试 3 次后
+    误报「等了 60s 没等到本次编译的产物」）。
+
+    终态即上表三档中先到的那一行：`impl` 行带 `result=ok`（我们的实现成功）、
+    `writeback`（参考产物已写回）、`opt`（改写器已收工）。改写的成败仍是 `opt` 行的事，
+    这里只回答「这一趟写完了没有」。
+    """
+    where = None if path is None else str(path)
+    out: dict[str, str] = {}
+    for rec in hook_log.read(where):
+        done = ((rec.event == "impl" and rec.kv.get("result") == "ok")
+                or rec.event in ("writeback", "opt"))
+        if done:
+            out[rec.seq] = rec.event
+    return out
 
 
 def latest_product() -> Product | None:
-    """工作区里**编号最大**的改写后产物（启动时补报「现在跑的是哪个」）。
+    """编号最大的**编译点**（启动时补报「现在跑的是哪个」）。
 
-    合并前的两份实现判名字形状的方式不一致：一份取文件名前 3 字符的字典序最大
-    （编号 ≥1000、或名字不补零时会错），一份用 `^(\\d+)\\.opt\\.bin$` 按整数取最大
-    并带上 mtime。编号必须按**整数**比，`wait_new_product` 还要用 mtime 判「这是不是
-    本次编译产生的」。
+    编号必须按**整数**比（编号 ≥1000、或名字不补零时字典序会错），`wait_new_product`
+    还要用 mtime 判「这是不是本次编译产生的」。编译点由 `compile_points()` 给 ——
+    只认 `NNN.opt.bin` 会把没过改写器的 `impl=ours` 漏掉，于是监听程序把这一趟标成
+    上一轮的编号（M4 实测：#009 的 ours 轮被标成 #008）。
     """
-    best: Product | None = None
-    try:
-        entries = list(OPT_DIR.iterdir())
-    except OSError:
-        return None
-    for p in entries:
-        m = PRODUCT_RE.match(p.name)
-        if not m or not p.is_file():
-            continue
-        if best is not None and int(m.group(1)) <= int(best.num):
-            continue
-        try:
-            mtime = p.stat().st_mtime
-        except OSError:
-            continue
-        best = Product(m.group(1), p, mtime)
-    return best
+    points = compile_points()
+    return points[-1] if points else None
 
 
 def _scan(directory: Path, pattern: re.Pattern[str], seen: set[str]) -> list[str]:
@@ -128,12 +178,42 @@ def _scan(directory: Path, pattern: re.Pattern[str], seen: set[str]) -> list[str
 
 
 def scan_products(seen: set[str]) -> list[str]:
-    """新出现的**改写后产物**编号（`NNN.opt.bin`）；首次调用的返回值要丢弃。
+    """新出现的**编译点**编号；首次调用的返回值要丢弃（`_scan` 的同一套契约）。
 
-    编译点以它为准：改写器是「先写产物 → 自校验 → 写 entry → **最后**写日志」，
-    所以产物一出现就代表这一趟改写走完了 —— 此时算指纹、读 `hook.log` 都有值。
+    编译点 = 产物已写回（`compile_points()`）：改写器是「先写产物 → 自校验 →
+    写 entry → **最后**写日志」，所以 `opt.bin` 一出现这一趟就定稿了；`impl=ours`
+    那趟没有 `opt.bin`，以 `hook_out_NNN.bin` 落盘为准。
     """
-    return _scan(OPT_DIR, PRODUCT_RE, seen)
+    nums = [p.num for p in compile_points()]
+    new = [num for num in nums if num not in seen]
+    seen.clear()
+    seen.update(nums)
+    return new
+
+
+def compile_points() -> list[Product]:
+    """产物已写回的编译点，按编号的**整数**序；`Product.path` 是写回的那份机器码。
+
+    两条腿：
+      · `NNN.opt.bin` —— 走了改写器的那趟；
+      · 终态行是 `impl`（`done_rounds`）的 `hook_out_NNN.bin` —— 我们的实现不过
+        改写器，永远不会有 `opt.bin`。
+    编号与「这一趟走了哪个实现」只从 `hook.log` 与产物文件读，不看 `opt.ini`。
+    """
+    nums = set(_scan(OPT_DIR, PRODUCT_RE, set()))
+    for num, event in done_rounds().items():
+        if event == "impl":        # 只有我们的实现会把「写完」记在 impl 行上
+            nums.add(num)
+    points: list[Product] = []
+    for num in sorted(nums, key=int):
+        path = product_path(num)
+        if path is None:        # 日志有记录但产物没写回（崩在写回之前）→ 不算编译点
+            continue
+        try:
+            points.append(Product(num, path, path.stat().st_mtime))
+        except OSError:
+            continue
+    return points
 
 
 def scan_captures(seen: set[str]) -> list[str]:
@@ -235,6 +315,10 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
     产物，其实那轮根本没编译，游戏没重新加载电路，采样全 0）。
     另外一路盯 hook.log：发键后 dead_after 秒内一条新编译行都没有，就断定按键没
     生效（焦点不在电路编辑区 / 抢前台后第一次发键丢掉），立刻失败，不必等满超时。
+
+    ⚠ 「编译完成」不等于「有 `writeback` 行」：`compiler=ours` 那趟不起改写子进程，
+    日志里只有 `impl=ours result=ok`（见 `done_rounds`）—— 拿 writeback 当判据会让
+    `--variant ours:off` 必然超时（实测：重试 3 次后误报「等了 60s 没等到本次编译的产物」）。
     """
     t0 = time.time()
     warned = False
@@ -253,7 +337,14 @@ def wait_new_product(prev: str | None, timeout: float, hook_before: int,
                           "（自动重试 3 次）")
         if waited >= 5.0 and not warned:        # 只提醒一次，别刷屏
             warned = True
-            what = (f"编译已触发（hook.log +{new_lines} 行），等改写子进程"
-                    if new_lines > 0 else "还没看到编译行")
+            finished = [num for num in done_rounds()
+                        if prev is None or int(num) > int(prev)]
+            if finished:
+                # 终态行已落、产物还没被看见：就差最后一次 dump 落盘
+                what = f"编译已完成（#{finished[0]} 的终态行已落），等产物文件就位"
+            elif new_lines > 0:
+                what = f"编译已触发（hook.log +{new_lines} 行），等这一趟写完"
+            else:
+                what = "还没看到编译行"
             say(f"  [{tag}] 等编译产物 {waited:.0f}s …（{what}）")
         time.sleep(0.3)

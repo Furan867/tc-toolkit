@@ -5,9 +5,10 @@
     python -m pytest tools/freq/test_freq.py -q
 
 覆盖：probe 的偏移常量自洽（含「读哪个地址、读几字节」）、variants 的 opt.ini 往返
-与缺失键兜底、products 的归属解析与 `scan_*` 的「首次只登记现状」契约、
-sampler 的采样口径（相位对齐 / 丢首个 / 停机与低压判据 / 分段）、report 的两张表与
-JSON（schema=1）、driver 的前置断言（游戏没跑时返回结构化结果）。
+与缺失键兜底、products 的归属解析与 `scan_*` 的「首次只登记现状」契约、**编译点的两条腿**
+（改写过的 `opt.bin` 与没过改写器的 `hook_out.bin`）、sampler 的采样口径（相位对齐 /
+丢首个 / 停机与低压判据 / 分段）、report 的两张表与 JSON（schema=1）、driver 的前置断言
+（游戏没跑时返回结构化结果）。
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]        # reversing/
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools import hook_log  # noqa: E402
 from tools.freq import driver, probe, products, report, sampler, variants  # noqa: E402
 
 BASE = probe.BASE_VA
@@ -234,6 +236,173 @@ class ScanTest(unittest.TestCase):
         self.assertEqual(products._scan(self.path, products.CAPTURE_RE, set()), ["007"])
 
 
+class HookFixture(unittest.TestCase):
+    """把 `products` / `hook_log` 指到临时目录 —— 归属用例不许读仓里那份活日志。"""
+
+    def setUp(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.root = Path(holder.name)
+        self.hook = self.root / "hook"
+        self.opt = self.root / "opt"
+        self.hook.mkdir()
+        self.opt.mkdir()
+        self.log = self.hook / "hook.log"
+        self.log.write_text("", encoding="utf-8")
+        for module, attr, value in ((products, "HOOK_DIR", self.hook),
+                                   (products, "OPT_DIR", self.opt),
+                                   (hook_log, "NEW_PATH", str(self.log)),
+                                   (hook_log, "LEGACY_PATH", str(self.log))):
+            self.addCleanup(setattr, module, attr, getattr(module, attr))
+            setattr(module, attr, value)
+
+    def add_round(self, num: str, impl: str, *, rewritten: bool, captured: bool) -> None:
+        """按 `compile_hook.c` 的行契约写一趟编译：改写过的才有 cfg/opt/writeback。
+
+        `impl` 行的 `result`：ours → `ok`（只有它会如此），失败 → `fail`，其余 `reference`。
+        """
+        result = {"ours": "ok", "ours_failed": "fail"}.get(impl, "reference")
+        if captured:
+            (self.hook / f"hook_out_{num}.bin").write_bytes(f"out-{num}".encode())
+        if rewritten:
+            (self.opt / f"{num}.opt.bin").write_bytes(f"opt-{num}".encode())
+        lines = [f"2026-10-18 00:00:00\t{num}\timpl\timpl={impl}\tmode={impl}\t"
+                 f"result={result}\n"]
+        if rewritten:
+            lines += [f"2026-10-18 00:00:01\t{num}\tcfg\trewrite=off\n",
+                      f"2026-10-18 00:00:02\t{num}\topt\tmode=off\trewritten=0\n",
+                      f"2026-10-18 00:00:03\t{num}\twriteback\tlen=8\n"]
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.writelines(lines)
+
+
+class CompilePointTest(HookFixture):
+    """「编号 → 这一趟的产物」两条腿：改写过的 `opt.bin`，与没过改写器的 `hook_out.bin`。
+
+    M4 现场：`impl=ours` 那趟没有 `opt.bin`，旧实现于是把它从编号序列里漏掉，监听程序
+    把这一趟标成上一轮的编号（#009 → #008）。
+    """
+
+    def test_ours_round_counts_even_though_it_has_no_opt_bin(self):
+        self.add_round("006", "reference", rewritten=True, captured=True)
+        self.add_round("007", "ours", rewritten=False, captured=True)
+        self.assertEqual([p.num for p in products.compile_points()], ["006", "007"])
+        latest = products.latest_product()
+        assert latest is not None
+        self.assertEqual(latest.num, "007")                 # 修复前这里是 006
+        self.assertEqual(latest.path.name, "hook_out_007.bin")
+        self.assertEqual(products.product_fp("007"),
+                         products.fingerprint(self.hook / "hook_out_007.bin"))
+
+    def test_rewritten_product_wins_when_both_exist(self):
+        self.add_round("008", "reference", rewritten=True, captured=True)
+        path = products.product_path("008")
+        assert path is not None
+        self.assertEqual(path.name, "008.opt.bin")          # 游戏跑的是改写后那份
+        self.assertEqual(products.product_fp("008"),
+                         products.fingerprint(self.opt / "008.opt.bin"))
+
+    def test_failed_rewriter_keeps_a_fingerprint_but_is_no_compile_point(self):
+        """改写器放弃那趟：产物是 hook_out，但编译点仍以 opt.bin 落地为准（别提前报）。"""
+        self.add_round("005", "reference", rewritten=False, captured=True)
+        self.assertEqual(products.compile_points(), [])
+        self.assertNotEqual(products.product_fp("005"), "-")
+
+    def test_round_without_any_product_is_skipped(self):
+        self.add_round("009", "ours", rewritten=False, captured=False)
+        self.assertEqual(products.compile_points(), [])
+        self.assertIsNone(products.latest_product())
+
+    def test_scan_products_reports_the_ours_round(self):
+        self.add_round("008", "reference", rewritten=True, captured=True)
+        seen: set[str] = set()
+        self.assertEqual(products.scan_products(seen), ["008"])   # 首次：只登记现状
+        self.add_round("009", "ours", rewritten=False, captured=True)
+        self.assertEqual(products.scan_products(seen), ["009"])
+        self.assertEqual(products.scan_products(seen), [])
+
+    def test_integer_order(self):
+        for num in ("009", "010", "1000"):
+            self.add_round(num, "reference", rewritten=True, captured=True)
+        self.assertEqual([p.num for p in products.compile_points()],
+                         ["009", "010", "1000"])
+        latest = products.latest_product()
+        assert latest is not None
+        self.assertEqual(latest.num, "1000")
+
+    def test_impl_rounds_come_from_hook_log_and_take_the_last(self):
+        self.add_round("011", "ours_with_fallback", rewritten=True, captured=True)
+        self.add_round("011", "fallback", rewritten=True, captured=True)
+        self.assertEqual(products.impl_rounds()["011"], "fallback")
+        self.assertEqual(products.impl_rounds(self.log)["011"], "fallback")
+
+    def test_unknown_number_is_dash_not_crash(self):
+        self.assertEqual(products.product_fp(None), "-")
+        self.assertEqual(products.product_fp("?"), "-")
+        self.assertIsNone(products.product_path("999"))
+
+
+class DoneRoundTest(HookFixture):
+    """「一趟编译写完了」的权威信号 —— 终态行，而不是某一条特定的行。"""
+
+    def test_ours_round_is_done_by_its_own_impl_row(self):
+        self.add_round("006", "ours", rewritten=False, captured=True)
+        self.assertEqual(products.done_rounds(), {"006": "impl"})
+        self.assertEqual(products.impl_rounds(), {"006": "ours"})
+
+    def test_reference_round_is_done_by_writeback(self):
+        self.add_round("005", "reference", rewritten=True, captured=True)
+        self.assertEqual(products.done_rounds(), {"005": "writeback"})
+
+    def test_reference_impl_row_alone_is_not_done(self):
+        """参考实现那趟的 `impl` 行写在**起参考实现之前**（`result=reference`）—— 不算写完。"""
+        self.add_round("005", "reference", rewritten=False, captured=True)
+        self.assertEqual(products.done_rounds(), {})
+        self.assertEqual(products.impl_rounds(), {"005": "reference"})
+
+
+class _FakeTime:
+    """`wait_new_product` 用的假时钟（每次 sleep 前进 0.4s）—— 别在测试里真睡 5 秒。"""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def time(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.t += seconds
+
+
+class WaitNewProductTest(HookFixture):
+    """等产物：`ours` 趟只有一行 `impl`，不得因此被判成「编译没完成」（bench 实测超时）。"""
+
+    def test_ours_round_is_returned_when_its_product_lands(self):
+        self.add_round("005", "reference", rewritten=True, captured=True)
+        self.add_round("006", "ours", rewritten=False, captured=True)
+        num, why = products.wait_new_product("005", 0.0, 4, "ours:off", since=0.0)
+        self.assertEqual((num, why), ("006", ""))
+
+    def test_reference_round_is_still_returned(self):
+        self.add_round("005", "reference", rewritten=True, captured=True)
+        num, why = products.wait_new_product("004", 0.0, 0, "reference:off", since=0.0)
+        self.assertEqual((num, why), ("005", ""))
+
+    def test_progress_line_blames_the_product_not_the_rewriter(self):
+        """终态行落了、产物没露面：只报事实，不说「等改写子进程」（ours 那趟没这东西）。"""
+        self.add_round("006", "ours", rewritten=False, captured=False)
+        fake, said = _FakeTime(), []
+        self.addCleanup(setattr, products, "time", products.time)
+        products.time = fake
+        num, why = products.wait_new_product("005", 6.0, 0, "ours:off", since=0.0,
+                                             say=said.append)
+        self.assertIsNone(num)
+        self.assertEqual(len(said), 1)                        # 只提醒一次
+        self.assertIn("#006 的终态行已落", said[0])
+        self.assertNotIn("改写子进程", said[0])
+        self.assertIn("没等到本次编译的产物", why)
+
+
 class _FakeClock:
     def __init__(self, t: float = 0.0):
         self.t = t
@@ -348,23 +517,28 @@ class SegmenterTest(unittest.TestCase):
         self.assertEqual(s.spread, 0.0)
 
 
+def _ownership(num: str = "004", *, cfg_rewrite: str = "off", opt_mode: str = "off",
+               rewritten: str = "0", sha_log: str = "ae1e2f3a",
+               impl: str = "reference") -> products.Ownership:
+    """一份构造的归属（`opt` 与 `cfg` 都给同一值时的常规形态）。"""
+    return products.Ownership(num=num, cfg_rewrite=cfg_rewrite, opt_mode=opt_mode,
+                              rewritten=rewritten, sha_log=sha_log, impl=impl,
+                              compiler_cfg=impl,
+                              impl_result="ok" if impl == "ours" else "reference")
+
+
 class ReportTableTest(unittest.TestCase):
     """两张表 + TSV 列契约 + JSON schema（决策 3 / 决策 5）。"""
 
-    def _patch(self, fp=None, opt_info=None, mode=None):
+    def _patch(self, fp=None, own=None, opt_info=None, mode=None):
         """临时替掉 report 里对 products 的查询 —— 离线喂构造数据（用完恢复）。"""
-        if fp is not None:
-            self.addCleanup(setattr, report.products, "product_fp",
-                            report.products.product_fp)
-            report.products.product_fp = fp
-        if opt_info is not None:
-            self.addCleanup(setattr, report.products, "opt_info",
-                            report.products.opt_info)
-            report.products.opt_info = opt_info
-        if mode is not None:
-            self.addCleanup(setattr, report.products, "mode_from_hook_log",
-                            report.products.mode_from_hook_log)
-            report.products.mode_from_hook_log = mode
+        for name, stub in (("product_fp", fp), ("ownership", own),
+                           ("opt_info", opt_info), ("mode_from_hook_log", mode)):
+            if stub is None:
+                continue
+            self.addCleanup(setattr, report.products, name,
+                            getattr(report.products, name))
+            setattr(report.products, name, stub)
 
     def _rows(self):
         return [
@@ -421,8 +595,7 @@ class ReportTableTest(unittest.TestCase):
                          {"fallback": 1})
 
     def test_summarize_row_matches_history_shape(self):
-        self._patch(fp=lambda _n: "ae1e2f3a", opt_info=lambda _n: ("ae1e2f3a", "0", "off"),
-                    mode=lambda _n: "off")
+        self._patch(fp=lambda _n: "ae1e2f3a", own=lambda _n: _ownership("004"))
         region = sampler.Region("#004", "004")
         region.add(sampler.Segment([sampler.Sample(float(i), v) for i, v in enumerate(
             [5297874.0, 5302115.0, 5306357.0])]))
@@ -430,6 +603,24 @@ class ReportTableTest(unittest.TestCase):
         title, lines, digest = report.summarize([region])
         self.assertEqual(lines[1], " 1) #004  5.302   3   0.16 ae1e2f3a     0  off")
         self.assertTrue(title.startswith("1 个编译区间 · 共 4 个样本"))
+
+    def test_summarize_names_the_impl_when_the_round_skipped_the_rewriter(self):
+        """`impl=ours` 那轮既没有 `opt` 也没有 `cfg` 行 —— 改写列归因给 `impl` 行。"""
+        own = _ownership("009", cfg_rewrite=products.UNKNOWN, opt_mode=products.UNKNOWN,
+                         rewritten="", sha_log="-", impl="ours")
+        self._patch(fp=lambda _n: "aebf07e4", own=lambda _n: own)
+        region = sampler.Region("#009", "009")
+        region.add(sampler.Segment([sampler.Sample(float(i), 24817676.0)
+                                    for i in range(3)]))
+        _title, lines, _digest = report.summarize([region])
+        self.assertEqual(lines[1], " 1) #009 24.818   3   0.00 aebf07e4     -  —（impl=ours）")
+
+    def test_summarize_falls_back_to_the_log_sha_when_the_product_is_gone(self):
+        self._patch(fp=lambda _n: "-", own=lambda _n: _ownership("009"))
+        region = sampler.Region("#009", "009")
+        region.add(sampler.Segment([sampler.Sample(float(i), 5.2e6) for i in range(3)]))
+        _title, lines, _digest = report.summarize([region])
+        self.assertIn("ae1e2f3a", lines[1])
 
     def test_summary_text_ends_with_newline_per_line(self):
         from datetime import datetime

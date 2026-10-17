@@ -253,6 +253,16 @@
 验证：`simplexc/dossier/div_sign.md`（8 片段 × 2 遍，`check_claims.py` 断言报告里 100 个数字、0 失败）
 最后验证：2026-10-17
 
+### LLVM 目标码必须用 `RelocMode=PIC`（`Static` 与「拒绝内部绝对重定位」互斥）
+产物要被整体 `memcpy` 到编译期未知的 JIT 基址执行 → 位置无关。实测 `RelocMode=Static` 下 LLVM 对
+「往内部全局写常量」生成 `movq $imm32,[disp32]` 绝对寻址，产物里出现 6 处 `IMAGE_REL_AMD64_ADDR32`
+（指向内部全局 `cycle`/`last_command_id`）→ 被装配器按契约 §4-2 拒（`status=3`）；
+改 PIC 后 `.text` 只剩 `REL32`（+ `.pdata` 的 `ADDR32NB`，整节丢弃）→ 装配通过。
+旁证：clang 对该三元组默认 `-mrelocation-model pic`（所以手写 C 链路从没踩到）。
+验证：`docs/specs/2026-10-15-simplexc-interfaces.md` §7 附注；`simplexc/lower/ir_build.py` 的 RelocPIC
+      + `docs/notes/2026-10-18-lowering-v0.md`
+最后验证：2026-10-17
+
 ### M3 的靶子：RV32IM 电路的捕获已固定为仓内资产
 `simplexc/corpus/rv32im/`：`rv32im.si`（10369 行 / 360772 B，sha256 `dba14f86…8d220e`）+
 `rv32im.bin`（参考产物 219088 B，sha256 `baffee9f…60ca01`，`entry=0x215B`）+ 捕获时整份 manifest。

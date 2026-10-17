@@ -192,7 +192,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
    因为游戏是 `jmp` 进来的、不保证 ABI 对齐（主设计 §5 第 8 条）。
 
 **输入形状已实测（2026-10-16，`simplexc/shell/llvm_link_probe.cc`）**：
-`x86_64-pc-windows-gnu` + RelocMode=Static + CodeModel=Small + `default<O2>` 下，
+`x86_64-pc-windows-gnu` + **RelocMode=PIC** + CodeModel=Small + `default<O2>` 下，
 - 节：`.text`/`.data`/`.bss`（空的也在），有栈帧的函数额外带 `.pdata`/`.xdata`；
 - `.text` 重定位**只有** `IMAGE_REL_AMD64_REL32`，出现三种目标：内部函数、未定义 extern、**`___chkstk_ms`**
   （>4 KiB 栈帧才出现）；
@@ -266,7 +266,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 - C/C++：`D:\bin\w64devkit\bin\g++.exe`（GCC 14.2），`-std=c++17 -O2`，**直调 gcc，不引入 CMake**
   （照抄 `tools/deploy_compile_hook.py` 的构建风格）；构建脚本 `simplexc/tools/build.py`。
-- LLVM：**`LLVM-C.dll` + C API**，版本锁定；三元组 `x86_64-pc-windows-gnu`，`RelocMode=Static`，`CodeModel=Small`，
+- LLVM：**`LLVM-C.dll` + C API**，版本锁定；三元组 `x86_64-pc-windows-gnu`，**`RelocMode=PIC`**，`CodeModel=Small`，
   禁 `uwtable`/异常。管线：`LLVMRunPasses`（`-O2`）+ `LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)`。
 - 取导入库的两条路（M1 spike 先试 ①）：
   1. MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，无 MSVC 运行时依赖，与目标三元组同源）；
@@ -275,6 +275,16 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 - 构建产物：`reversing/build/simplexc.dll`（壳）、`reversing/build/simplexc-cli.exe`（离线 CLI）。
 
 ---
+
+### §7 附注：为什么是 PIC 而不是 Static（2026-10-17 更正）
+
+产物会被游戏整体 `memcpy` 到**编译期未知**的 JIT 内存再执行（`MapViewOfFileEx` 基址每次不同），
+所以位置无关是唯一正确的模型。实测：`RelocMode=Static` 下 LLVM 对「往内部全局写常量」这类访问会生成
+`movq $imm32,[disp32]` 绝对寻址，产物里出现 6 处 `IMAGE_REL_AMD64_ADDR32`（指向我方内部全局
+`cycle`/`last_command_id`），与 §4 第 2 条「内部符号的绝对重定位一律 `UnsupportedReloc`」直接冲突；
+改 PIC 后 `.text` 只剩 23 处 `REL32`（+ `.pdata` 的 `ADDR32NB`，按 §4 第 4 条整节丢弃），装配通过。
+旁证：clang 对该三元组本来就默认 `-mrelocation-model pic` —— `probe/006_equiv.c` 那条已验过的链路走的正是 PIC。
+**§4 第 2 条保留不变**：PIC 让它自然成立。
 
 ## 8. 错误模型与回退契约（横切）
 

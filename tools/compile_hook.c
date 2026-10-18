@@ -57,7 +57,12 @@
  *
  * 编译
  * ----
- *   D:\bin\w64devkit\bin\gcc.exe -shared -O2 -static -o compile.dll compile_hook.c
+ *   不再是「一个 gcc 单文件命令」：本文件仍是 **C**（不要改成 C++），但它链接我们的
+ *   C++ 编译器核心（`simplexc/shell/simplexc_core.h` 是两者之间唯一的 C 边界）。
+ *   构建入口：`python simplexc/tools/build.py simplexc_dll`（或部署入口
+ *   `python tools/deploy_compile_hook.py build-deploy`，它转调同一个 target）。
+ *   链接必须用 g++（要 C++ 运行库），且要带上 `-L build/llvm/lib -lLLVM-C` ——
+ *   部署时**必须**把 `build/llvm/bin/LLVM-C.dll` 一起拷进游戏目录（接口 §7）。
  *
  *   无第三方链接依赖：manifest.tsv 的 sha256 走系统 bcrypt.dll 的按需绑定
  *   （见 cng_bind / sha256_hex），所以不用 -lbcrypt、也不 include <bcrypt.h>。
@@ -106,12 +111,9 @@
 #define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
 #define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
 
-/* 自研实现的产物（spike 占位：真正的编译器还没有，先拿一个装配好的固定 blob 走通整条链）。
- * 由 `simplexc/cli/tcblob.cc` 生成 —— 里面是「空程序」：shim → tc_main（空）→ thread_exit。
- * 一旦前端接进来，这个读文件的函数就被真正的编译器核心取代。 */
-#ifndef OURS_BLOB
-#define OURS_BLOB   OPT_PROJ "\\build\\blob_empty.bin"
-#endif
+/* 同目录的 C 边界（纯 C 头，冻结版）：核心（C++17）实现它，本文件只调它。
+ * 用相对路径 include：转发层的编译命令就没有额外的 -I 要维护（它两个入口共用）。 */
+#include "../simplexc/shell/simplexc_core.h"
 
 typedef void* (*compile_fn)(void* out, void* src, int flags);
 typedef void  (*void_fn)(void);
@@ -135,14 +137,14 @@ static const char* resolve_compiler(void) {
 }
 
 /* ---- 失败分类（接口冻结版 1 §8）-----------------------------------------
- * 分类串就是 §8 的那七个名字，只在一处写。`UnsupportedConstruct` /
- * `RelocUnsupported` / `SymbolUndefined` 由编译器核心（前端 / 装配器）产生，
- * 还没接进来；壳这一侧目前只用得上下面四个。
+ * 这里的三个串是**壳自己**会产生的失败：内部错误（没有源码 / 核心给的形状不合法）、
+ * 超预算、熔断。源码侧的五个分类（`UnsupportedConstruct` / `BlobTooLarge` /
+ * `RelocUnsupported` / `SymbolUndefined` / `InternalError`）由核心返回，
+ * 它们的唯一一处定义在 `simplexc/shell/simplexc_core.h`（那边是 C++，与本文件无法共享宏）。
  */
 #define KIND_INTERNAL   "InternalError"
 #define KIND_TIMEOUT    "Timeout"
 #define KIND_FAULT      "OursFault"
-#define KIND_TOO_LARGE  "BlobTooLarge"
 
 /* ours 段的超时预算（毫秒）：`TC_OURS_TIMEOUT_MS` 环境变量 > `opt.ini` 的
  * `[opt] ours_timeout_ms` > 默认 5 秒；调试期调大到 60000。
@@ -176,57 +178,37 @@ static unsigned long long ours_budget_ms(void) {
     return v == (unsigned long long)-1 ? OURS_TIMEOUT_MS : v;
 }
 
-/* 自研路径的产物：现在只把预先装配好的 blob 读进来、交给游戏（spike 占位）。
+/* 自研路径的产物：**进程内**调我们的 C++ 编译器核心（`simplexc_compile`），拿回一块内存里的产物。
  *
  * 三条不变量（写错了会崩游戏，别动）：
- *   · 缓冲是 **malloc** 的，头 word 的 **bit62 置位** → 游戏不会拿 Nim 的分配器去 free 我们的指针；
+ *   · 缓冲是核心 **malloc** 的，头 word 的 **bit62 置位** → 游戏不拿 Nim 的分配器去 free 我们的指针；
  *   · `out[0]` = 缓冲总长（含 8 字节头），缓冲实际分配 **out[0] + 8** 字节（游戏会多读 8 字节）；
- *   · 上一次的缓冲在下一次编译开始时释放（产品生命周期由我们持有）。
+ *   · 上一次的缓冲在下一次编译开始时释放，而且必须用 `simplexc_free` 放（跨 C 边界的所有权）。
  *
- * 返回 NULL = 成功，否则是 §8 分类串 —— 失败点归到具体分类，「哪个环节失败」
- * 不再靠读日志猜。
+ * 返回 NULL = 成功，否则是 §8 分类串。分类串由核心给（UnsupportedConstruct / InternalError /
+ * BlobTooLarge / RelocUnsupported / SymbolUndefined），只有「没源码」与「形状不合法」是壳自己判的。
  */
-static const char* ours_compile_spike(void* out) {
-    if (g_ours_prev) { free(g_ours_prev); g_ours_prev = NULL; }
-    HANDLE h = CreateFileA(OURS_BLOB, GENERIC_READ, FILE_SHARE_READ, NULL,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return KIND_INTERNAL;        /* blob 缺失 */
-    LARGE_INTEGER sz;
-    if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return KIND_INTERNAL; }
-    if (sz.QuadPart < 16)       { CloseHandle(h); return KIND_INTERNAL; }
-    if (sz.QuadPart > (64LL << 20)) { CloseHandle(h); return KIND_TOO_LARGE; }
-    long long n = sz.QuadPart;
-    void* buf = malloc((size_t)n + 8);          /* 多 8 字节：游戏 memcpy 会读到末尾之外 */
-    if (!buf) { CloseHandle(h); return KIND_INTERNAL; }
-    memset(buf, 0, (size_t)n + 8);
-    DWORD got = 0;
-    BOOL ok = ReadFile(h, buf, (DWORD)n, &got, NULL);
-    CloseHandle(h);
-    if (!ok || got != (DWORD)n) { free(buf); return KIND_INTERNAL; }
-    unsigned long long header = *(unsigned long long*)buf;
-    if (!(header & (1ULL << 62))) {             /* 产物头必须带 bit62，否则游戏会 free 它 */
-        free(buf);
+static const char* ours_compile_ours(void* out, const char* src, long long slen) {
+    if (g_ours_prev) { simplexc_free(g_ours_prev); g_ours_prev = NULL; }
+    if (!src || slen <= 0) return KIND_INTERNAL;     /* 没有源码可编（src 缺失或空）*/
+
+    void* blob = NULL;
+    long long len = 0, entry = 0;
+    const char* kind = simplexc_compile(src, slen, &blob, &len, &entry);
+    if (kind) return kind;                          /* 失败：三个出参一个都没动 */
+
+    /* 核心的返回值已经过自己的校验，这里再守一道：形状不合法就不能交给游戏。
+       长度必须装得下 8 字节头、且不超转发层自己的上限（dump() 也是 64 MB）。 */
+    /* `entry > len - 8` 而不是 `entry + 8 > len`：后者的加法在 entry 接近 LLONG_MAX 时是有符号溢出（UB），
+       而这条判断的整个意义就是「不信核心给的数」——判据本身不能先 UB。len >= 16 已在前面卡住。 */
+    if (!blob || len < 16 || len > (64LL << 20) || entry < 0 || entry > len - 8) {
+        simplexc_free(blob);
         return KIND_INTERNAL;
     }
-    /* entry 偏移不在产物里（它是 Result 的字段）—— tcblob 把它写成 `<blob>.entry`（十六进制）。 */
-    long long entry = 0;
-    char epath[MAX_PATH];
-    sprintf(epath, "%s.entry", OURS_BLOB);
-    HANDLE he = CreateFileA(epath, GENERIC_READ, FILE_SHARE_READ, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (he == INVALID_HANDLE_VALUE) { free(buf); return KIND_INTERNAL; }
-    char ebuf[32];
-    DWORD egot = 0;
-    BOOL eok = ReadFile(he, ebuf, sizeof(ebuf) - 1, &egot, NULL);
-    CloseHandle(he);
-    if (!eok || egot == 0) { free(buf); return KIND_INTERNAL; }
-    ebuf[egot] = 0;
-    if (sscanf(ebuf, "%llx", (unsigned long long*)&entry) != 1) { free(buf); return KIND_INTERNAL; }
-    if (entry < 0 || entry >= n) { free(buf); return KIND_INTERNAL; }
 
-    g_ours_prev = buf;
-    *(long long*)((char*)out + 0) = n;
-    *(void**)((char*)out + 8) = buf;
+    g_ours_prev = blob;
+    *(long long*)((char*)out + 0) = len;
+    *(void**)((char*)out + 8) = blob;
     *(long long*)((char*)out + 16) = entry;     /* 8 字节写全（游戏按 32 位读、按 64 位用） */
     *(long long*)((char*)out + 24) = 0;         /* err_len = 0 */
     *(long long*)((char*)out + 32) = 0;         /* err_ptr = 0 */
@@ -290,11 +272,13 @@ static int ours_guard_install(void) {
     return 0;
 }
 
-/* ours 段（VEH 包住的整段，含读产物）。返回 NULL = 成功，否则是 §8 分类串。
+/* ours 段（VEH 包住的整段，含编译）。返回 NULL = 成功，否则是 §8 分类串。
  *
  * 计时用 GetTickCount64（毫秒粒度，别拿它量微秒级的差异 —— 这里要判的是"秒级预算"）。
+ * `src`/`slen` 是游戏给的那份源码（壳已经从 NimStr 里取出来，与写 `hook_src_NNN.si` 的是同一块）。
  */
-static const char* ours_segment(void* out, int* installed, unsigned long long* budget_ms) {
+static const char* ours_segment(void* out, const char* src, long long slen, int* installed,
+                                unsigned long long* budget_ms) {
     *installed = ours_guard_install();
     *budget_ms = ours_budget_ms();
     g_ours_fault = 0;
@@ -308,7 +292,7 @@ static const char* ours_segment(void* out, int* installed, unsigned long long* b
     g_have_resume = 1;
     g_in_ours = 1;
     ULONGLONG t0 = GetTickCount64();
-    const char* err = ours_compile_spike(out);
+    const char* err = ours_compile_ours(out, src, slen);
     ULONGLONG elapsed = GetTickCount64() - t0;
     g_in_ours = 0;
     g_have_resume = 0;
@@ -316,7 +300,7 @@ static const char* ours_segment(void* out, int* installed, unsigned long long* b
     if (elapsed > *budget_ms) {
         /* 超预算：产物作废。缓冲区由我们持有，直接放掉，并把 out 里指向它的字段
            清干净 —— 后面任何路径都不该读到一个悬垂指针。 */
-        if (g_ours_prev) { free(g_ours_prev); g_ours_prev = NULL; }
+        if (g_ours_prev) { simplexc_free(g_ours_prev); g_ours_prev = NULL; }
         *(long long*)((char*)out + 0) = 0;
         *(void**)((char*)out + 8) = NULL;
         *(long long*)((char*)out + 16) = 0;
@@ -811,7 +795,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     } else {
         if (out && !g_breaker) {
             ours_attempted = 1;
-            kind = ours_segment(out, &guard_installed, &budget_ms);
+            kind = ours_segment(out, (const char*)sp, slen, &guard_installed, &budget_ms);
             ours_ok = kind == NULL;
         } else {
             /* 没有 out 缓冲（无处写产物）/ 已熔断：不试 ours */

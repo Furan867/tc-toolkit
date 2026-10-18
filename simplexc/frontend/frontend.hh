@@ -31,6 +31,12 @@ struct ReadError {
   std::string msg;
 };
 
+/* 内存里的源码。为什么包一层而不是重载 `Frontend(const std::string& text)`：
+   源码路径与源码正文都是 `std::string`，`Frontend(s)` 会在两个重载之间歧义。 */
+struct SrcText {
+  std::string text;
+};
+
 /* 读源文件 + 词法掩码 + 切行 + 声明扫描（**不分词**）。
    为什么单独拆一步：`decls.py` 那一路从不分词 —— 语料里的 `stdlib_prefix.si` 第 172 行有个
    `$`，分词会报错（`expr.py` 就是整个文件失败），但没有词法错误的文件仍应出声明表。 */
@@ -80,10 +86,17 @@ struct Stats {
   std::vector<std::string> warnings;
 };
 
+/* `Frontend(SrcText)` 填进 `src_path` 的占位名（内存源码没有文件名）。 */
+inline constexpr const char* kMemorySrcPath = "<memory>";
+
 class Frontend {
  public:
   /* 读文件 + 掩码 + 扫描 + 整文件分词。ReadError / LexError 从构造期抛。 */
   explicit Frontend(const std::string& src_path);
+
+  /* 同一套处理，只是源码来自内存（壳在游戏进程里编译，没有临时文件可写）。
+     `src_path` 填 kMemorySrcPath —— 它只进报错与 ast_dump 文本，没有别的用途。 */
+  explicit Frontend(SrcText src);
 
   std::vector<int> candidates(const std::string& name) const;
   ParsedDef parse_def(int decl_idx) const;

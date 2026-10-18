@@ -1,9 +1,9 @@
 /* simplexc_core.h —— 壳与 C++ 编译器核心之间**唯一**的 C 边界。
  *
- * 这是一个**纯 C 头**（没有 `#ifdef __cplusplus` 守卫，故意的）：
- * 唯一的读者是 C 侧的 `tools/compile_hook.c`；C++ 侧（`simplexc_core.cc`）用
- * `extern "C" { #include "simplexc_core.h" }` 包住它来拿 C 链接，实现也用 `extern "C"` 定义。
- * 这样不必用 `__cplusplus`（pi-lens 的 reserved-namespace 规则会把它当自定义标识符误报）。
+ * C 与 C++ 双用头：标准的 `#ifdef __cplusplus` 守卫 + `extern "C"`。
+ * （pi-lens 的 `reserved-namespace` 规则会把 `__cplusplus` 报成「保留标识符」—— 那是误报：
+ *  它是编译器预定义宏，名字由标准固定、无法改名也没有替代写法。代码仍按标准写，
+ *  误报已向负责人汇报，不在代码里绕。）
  *
  * 为什么边界是 C：壳是 C 且继续演进、不做第二份壳；C++ 名字改编会让链接找不到符号。
  * 异常也不许穿过这条边界 —— 穿过 Nim 帧的展开没有保证（接口冻结版 §5），
@@ -14,6 +14,10 @@
  */
 #ifndef SIMPLEXC_CORE_H
 #define SIMPLEXC_CORE_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* 编译一段 Simplex 源码（**内存里的**源码，不落盘 —— 游戏进程里没有临时文件可言）。
  *
@@ -36,5 +40,9 @@ const char* simplexc_compile(const char* src, long long src_len, void** out_blob
 
 /* 释放 simplexc_compile 给出的缓冲；传 NULL 安全。 */
 void simplexc_free(void* blob);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SIMPLEXC_CORE_H */

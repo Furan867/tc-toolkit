@@ -15,5 +15,9 @@ __pycache__/
 # 构建产物（由 tools/compile_hook.c 编译而来）
 build/
 
+# 构建期生成：装配用的 entry_shim.o / rt_min.o 嵌成的 C++ 源（gen_embedded_objs.py → 见 build.py 的
+# simplexc_dll 目标）。它是派生物，入库就要跟 build/objs/*.o 的每次重编同步。
+simplexc/shell/embedded_objs.cc
+
 # 运行时开关：每次「开 / 关」对照实验都要改，不进 git（模板见 opt.ini.example）
 opt.ini

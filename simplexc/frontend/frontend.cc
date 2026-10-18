@@ -268,13 +268,10 @@ std::set<int> covered_lines(const FunctionDef& fd) {
   return out;
 }
 
-ScannedSource load_and_scan(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) throw ReadError{"读不了 " + path + "：No such file or directory"};
-  std::ostringstream buf;
-  buf << in.rdbuf();
-  const std::string text = buf.str();
+namespace {
 
+/* 掩码 + 切行 + 声明扫描（**不分词**）—— 读文件与读内存源码共用的那一段。 */
+ScannedSource scan_source_text(const std::string& text) {
   const Masked masked = mask_source(text);
   ScannedSource out;
   out.code_lines = split_lines(masked.code);
@@ -284,20 +281,41 @@ ScannedSource load_and_scan(const std::string& path) {
   return out;
 }
 
+/* 拿到 ScannedSource 之后的共同收尾（分词、名字表、可达闭包）。
+   写成自由函数而不是私有成员：`Frontend` 的字段本来就都是公开的，而类声明里只该多出
+   第二种构造 —— 公开接口（接口冻结版 §1）越窄越好。 */
+void fill_frontend(Frontend& fe, ScannedSource scanned) {
+  fe.code_lines = std::move(scanned.code_lines);
+  fe.raw_lines = std::move(scanned.raw_lines);
+  fe.decls = std::move(scanned.scan.decls);
+  fe.decl_errors = std::move(scanned.scan.errors);
+  fe.top_unsupported = std::move(scanned.scan.unsupported);
+
+  fe.toks = tokenize(scanned.masked_raw);
+  fe.type_names = declared_type_names(fe.decls);
+
+  const Closure cl =
+      closure(fe.decls, fe.code_lines, strict_root_lines(fe.decls, LineSet()), false);
+  fe.by_name = cl.by_name;
+  fe.live = cl.live;
+}
+
+}  // namespace
+
+ScannedSource load_and_scan(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw ReadError{"读不了 " + path + "：No such file or directory"};
+  std::ostringstream buf;
+  buf << in.rdbuf();
+  return scan_source_text(buf.str());
+}
+
 Frontend::Frontend(const std::string& path) : src_path(path) {
-  ScannedSource scanned = load_and_scan(path);
-  code_lines = std::move(scanned.code_lines);
-  raw_lines = std::move(scanned.raw_lines);
-  decls = std::move(scanned.scan.decls);
-  decl_errors = std::move(scanned.scan.errors);
-  top_unsupported = std::move(scanned.scan.unsupported);
+  fill_frontend(*this, load_and_scan(path));
+}
 
-  toks = tokenize(scanned.masked_raw);
-  type_names = declared_type_names(decls);
-
-  const Closure cl = closure(decls, code_lines, strict_root_lines(decls, LineSet()), false);
-  by_name = cl.by_name;
-  live = cl.live;
+Frontend::Frontend(SrcText src) : src_path(kMemorySrcPath) {
+  fill_frontend(*this, scan_source_text(src.text));
 }
 
 std::vector<int> Frontend::candidates(const std::string& name) const {

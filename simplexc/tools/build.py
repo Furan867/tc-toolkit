@@ -17,10 +17,14 @@
     objs       build/objs/{assemble,entry_shim,rt_min,prog_empty}.o
     tcblob     build/tcblob.exe        装配器 CLI（--run 可不进游戏自测一次产物）
     llvm_prog  build/llvm_prog.exe     LLVM-C 生成程序根（M1 那条链的样本）
-    hook       build/compile_hook.dll  转发层（tools/compile_hook.c）
+    hook       build/compile_hook.dll  转发层（C 壳 + C++ 核心；= simplexc_dll）
+    simplexc_dll  同上（与其它 simplexc 目标对齐的名字；部署入口转调它）
+    core_selftest build/core_selftest.exe  判据入口：源码字节 → `simplexc_compile` → 产物 +
+               `.entry` / `.stubs`（不进 DLL）
     ast_dump   build/ast_dump.exe     前端的判据入口（frontend/ 的 C++17 实现，不进产品 DLL）
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
+               现在**没有判据**读它：新版壳在进程内编源码，基线壳只在 reference 模式下被驱动。
 
 环境变量
 --------
@@ -63,6 +67,22 @@ OBJDIR = os.path.join(BUILD, "objs")
 LLVM_INC = os.path.join(BUILD, "llvm", "include")
 LLVM_LIB = os.path.join(BUILD, "llvm", "lib")
 LLVM_BIN = os.path.join(BUILD, "llvm", "bin")
+
+# 产品核心的源文件表：DLL（`simplexc_dll`）与判据入口（`core_selftest`）**共用这一处**。
+# 两者用同一份清单不是风格问题：判据要判的就是交付物 —— 表不一样时判出来的可能是别的东西。
+# （`assemble/assemble.cc` 走 `objs` 目标出的 build/objs/assemble.o，不在这里重复编。）
+CORE_SOURCES = [
+    "simplexc/frontend/decls.cc",
+    "simplexc/frontend/lexer.cc",
+    "simplexc/frontend/parser.cc",
+    "simplexc/frontend/frontend.cc",
+    "simplexc/frontend/ast_dump.cc",
+    "simplexc/frontend/json.cc",
+    "simplexc/lower/module_build.cc",
+    "simplexc/lower/lower.cc",
+    "simplexc/lower/llvm_ffi.cc",
+    "build/objs/assemble.o",
+]
 
 def REL(p: str) -> str:
     """仓库内的路径 → 命令行里的相对写法（正斜杠）。见模块 docstring 的「两条写法」。"""
@@ -155,12 +175,49 @@ def step_llvm_prog() -> None:
 
 
 def step_hook() -> None:
-    print("== hook ==")
+    print("== hook / simplexc_dll ==")
+    # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/lower/assemble/shell）。
+    # 壳仍是单文件 C，但它现在链接核心，所以构建从「一条 gcc 命令」变成三步，
+    # 而且链接要用 g++（要 C++ 运行库）。两个名字是同一个目标：
+    #   `hook` 是既有名字（`all` 里有它）；`simplexc_dll` 是与其它 simplexc 目标对齐的名字。
+    # 部署入口 tools/deploy_compile_hook.py 转调本 target（只留一份构建命令）。
     out = os.path.join(BUILD, "compile_hook.dll")            # 绝对路径，见 docstring 第 2 条
-    # 与 tools/deploy_compile_hook.py 的 build 走的同一条 gcc 命令（那份是部署用的入口，
-    # 这里只是让 build.py 也能单独重建 DLL；部署仍然只走 deploy_compile_hook.py）。
-    run([CC, "-shared", "-O2", "-static", "-o", out, "tools/compile_hook.c"], out=out,
-        hint="编译转发层失败 → 它是纯 C（不用 g++）；路径与 deploy_compile_hook.py 保持一致。")
+
+    # 1) 构建期把两个装配用的目标文件嵌进 DLL（游戏进程里没有 build/objs/）
+    gen = os.path.join(SIMPLEXC, "tools", "gen_embedded_objs.py")
+    run([sys.executable, gen], hint="生成 embedded_objs.cc 失败 —— 先看 build/objs 里有没有"
+        " entry_shim.o / rt_min.o（本目标的依赖里已经带了 objs）。")
+
+    # 2) C 壳：**用 gcc**（不能交给 g++：g++ 会把 .c 当 C++ 编）
+    shell_obj = os.path.join(OBJDIR, "compile_hook_shell.o")
+    run([CC, "-c", "-O2", "tools/compile_hook.c", "-o", REL(shell_obj)], out=shell_obj,
+        hint="编译 C 壳失败 → 它的 include 只需要 ../simplexc/shell/simplexc_core.h。")
+
+    # 3) 链接：g++（C++ 运行库）+ LLVM-C 导入库；-static 把 libstdc++/libgcc/libwinpthread
+    #    一起包进来，否则游戏目录还要多拷三个 DLL。
+    run([CXX, "-shared", "-O2", "-static", "-o", out, REL(shell_obj),
+         "simplexc/shell/simplexc_core.cc",
+         "simplexc/shell/embedded_objs.cc",
+         *CORE_SOURCES,
+         "-I", "simplexc", "-I", REL(LLVM_INC),
+         "-L", REL(LLVM_LIB), "-lLLVM-C"], out=out,
+        hint="链接失败 → 确认 build/llvm/lib/libLLVM-C.a 与 build/objs/assemble.o 都在"
+             "（后者由 objs 目标生成）。-static 与 -lLLVM-C 可以共存；真冲突就只剩去掉 -static。")
+
+
+def step_core_selftest() -> None:
+    print("== core_selftest ==")
+    out = os.path.join(BUILD, "core_selftest.exe")
+    # 判据入口（不进 DLL）：直接把源码字节喂给 `simplexc_compile` 并落盘，供宿主跑。
+    # 与 DLL 同一套核心、同一套源文件表 —— 否则判据判的不是交付物。
+    run([CXX, "-std=c++17", "-O2", "simplexc/shell/core_selftest.cc",
+         "simplexc/shell/simplexc_core.cc",
+         "simplexc/shell/embedded_objs.cc",
+         *CORE_SOURCES,
+         "-I", "simplexc", "-I", REL(LLVM_INC),
+         "-L", REL(LLVM_LIB), "-lLLVM-C",
+         "-o", REL(out)], out=out,
+        hint="链接失败 → 先跑 `build.py objs`（embedded_objs.cc 要它）与取 LLVM（build/llvm）。")
 
 
 def step_ast_dump() -> None:
@@ -184,19 +241,11 @@ def step_simplexc_cli() -> None:
     print("== simplexc_cli ==")
     out = os.path.join(BUILD, "simplexc_cli.exe")
     # M4.5 的产品路径入口：frontend + lower + assemble，`.si` -> blob。
-    # 只有这一条命令会把三段串起来（判据入口与将来的壳都复用它）。
+    # 源文件表与 DLL 共用 CORE_SOURCES（壳要的是同一套核心）。
     run([CXX, "-std=c++17", "-O2",
          "-I", "simplexc", "-I", LLVM_INC,
          "simplexc/cli/simplexc_cli.cc",
-         "simplexc/frontend/decls.cc",
-         "simplexc/frontend/lexer.cc",
-         "simplexc/frontend/parser.cc",
-         "simplexc/frontend/frontend.cc",
-         "simplexc/frontend/ast_dump.cc",
-         "simplexc/frontend/json.cc",
-         "simplexc/lower/lower.cc",
-         "simplexc/lower/llvm_ffi.cc",
-         "simplexc/assemble/assemble.cc",
+         *CORE_SOURCES,
          "-L", LLVM_LIB, "-lLLVM-C",
          "-o", REL(out)], out=out,
         hint="编译 CLI 失败 → 需要 build/llvm/{include,lib}（头 + 导入库）；静态库顺序要压在源文件之后。")
@@ -207,7 +256,7 @@ def step_simplexc_cli() -> None:
     if os.path.exists(dll):
         shutil.copy2(dll, os.path.join(BUILD, "LLVM-C.dll"))
     else:
-        print("  警告：找不到 %s，CLI 跑起来会缺依赖" % dll)
+        print(f"  警告：找不到 {dll}，CLI 跑起来会缺依赖")
 
 
 def step_spike() -> None:
@@ -232,11 +281,14 @@ STEPS = {
     "tcblob": step_tcblob,
     "llvm_prog": step_llvm_prog,
     "hook": step_hook,
+    "simplexc_dll": step_hook,        # 同一个目标的两个名字（见 step_hook 的注释）
+    "core_selftest": step_core_selftest,
     "ast_dump": step_ast_dump,
     "spike": step_spike,
 }
 ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump"]
-DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"]}      # spike 单独跑时自动补做
+DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"],
+           "hook": ["objs"], "simplexc_dll": ["objs"], "core_selftest": ["objs"]}
 
 
 def main(argv: list[str]) -> int:

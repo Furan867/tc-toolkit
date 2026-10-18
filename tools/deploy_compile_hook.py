@@ -19,8 +19,12 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
 
 编译做的事（build）
 ------------------
-    调 w64devkit 的 gcc 把 tools/compile_hook.c 编译成 build/compile_hook.dll
-    （gcc 路径可用环境变量 W64DEVKIT_GCC 覆盖）—— 免去手敲那条长命令。
+    转调 `python simplexc/tools/build.py simplexc_dll` —— 转发层现在是「C 壳 + C++ 编译器核心」，
+    构建命令不再是单文件 gcc（要 g++ 链 `-lLLVM-C`）。构建命令只留在 build.py 一处，
+    这里只负责「部署前先把 DLL 重编一份」。
+
+    ⚠️ 因为链了 `LLVM-C.dll`，**部署必须把它（build/LLVM-C.dll）一起拷进游戏目录**
+    （否则游戏加载时解析依赖失败，接口 §7）。本脚本不替你做这一步。
 
 命令
 ----
@@ -89,26 +93,27 @@ def guard():
 
 
 def build():
-    """编译转发层到 build/compile_hook.dll。"""
-    src = os.path.join(ROOT, "tools", "compile_hook.c")
-    dst = os.path.join(ROOT, "build", "compile_hook.dll")
-    gcc = os.environ.get("W64DEVKIT_GCC", r"D:\bin\w64devkit\bin\gcc.exe")
-    if not os.path.exists(gcc):
-        print(f"❌ 找不到 gcc：{gcc}\n   （可用环境变量 W64DEVKIT_GCC 指定）",
-              file=sys.stderr)
+    """编译转发层到 build/compile_hook.dll —— 转调 build.py 的 `simplexc_dll` 目标。
+
+    为什么不再自己拼 gcc 命令：转发层已经变成「C 壳 + C++ 核心 + LLVM-C」，
+    三条命令（生成嵌入目标文件 / 编 C 壳 / g++ 链接）在任何两个地方写都会漂。
+    build.py 才是构建入口（接口 §7）；本脚本只保留部署相关的动作。
+    """
+    script = os.path.join(ROOT, "simplexc", "tools", "build.py")
+    if not os.path.exists(script):
+        print(f"❌ 找不到构建脚本：{script}", file=sys.stderr)
         return 1
-    try:
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-    except OSError as exc:
-        print(f"❌ 建不出 build 目录：{exc}", file=sys.stderr)
-        return 1
-    cmd = [gcc, "-shared", "-O2", "-static", "-o", dst, src]
+    cmd = [sys.executable, script, "simplexc_dll"]
     print("$ " + " ".join(cmd))
-    r = subprocess.run(cmd)
+    r = subprocess.run(cmd, cwd=ROOT)
     if r.returncode != 0:
         print(f"❌ 编译失败（返回 {r.returncode}）", file=sys.stderr)
         return r.returncode
-    print(f"✅ 已编译 {dst}（{os.path.getsize(dst)} B）")
+    if not os.path.exists(HOOK):
+        print(f"❌ 构建脚本报成功，但 {HOOK} 不存在", file=sys.stderr)
+        return 1
+    print(f"✅ 已编译 {HOOK}（{os.path.getsize(HOOK)} B）")
+    print("⚠️ 部署时必须把 build/LLVM-C.dll 一起拷进游戏目录（否则游戏解析依赖失败）")
     return 0
 
 

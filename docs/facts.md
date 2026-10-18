@@ -397,6 +397,16 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-18-closure-var.md`；片段与命令 `work/tmp/in_scope/rootvar_{E_def_then_var,K_guard_before}.si` + `work/tmp/ul14/refcc.py`
 最后验证：2026-10-18
 
+### `random` 的语义（实测；它定义在前缀里，但 98 份里 **32 份**在用）
+- 递推：`state ← ((x ^ (x<<12) ^ (x>>25) ^ (x>>27)) * 0x02545F4914F6CDD1) mod 2^64`
+  （**前缀写的是 15 位常数**，不是教科书那个 `…CDD1D`），初值 `state = 1`；
+- `random()` 返回**新 state 的全 64 位**；`random(n) = (U64)state % (U64)n` → `[0, n)`；`n==1` → 0；
+  **`n==0` 返回被除数、不 trap**；`n<0` 按 U64 重解释；
+- 种子是**程序自有全局，跳 tick 延续不重播种**（tick1/2/3 的读出 = state_1…state_4）；种子绝对地址未验（宿主搜不到）。
+- **可以单点实现**（不需要 arena / `array` / `size` / `@Type`）：一个 8 字节全局 + 4 行算术。
+验证：`docs/notes/2026-10-18-stdlib-semantics.md`（器材 `work/tmp/stdlib/**`）
+最后验证：2026-10-18
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

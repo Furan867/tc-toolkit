@@ -358,6 +358,16 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-18-campaign-survey.md`；`python simplexc/tools/m5/coverage.py --dir simplexc/corpus/campaign --no-diff`
 最后验证：2026-10-18
 
+### stdlib 前缀单独编不了：它没有程序根
+`simplexc/corpus/stdlib_prefix.si` 里**没有顶层语句块**（没有 label），所以单独喂 CLI 必然报「没有顶层语句块（程序根）」——
+它的正确输入形态是「**前缀 + 用户源码**整体」（参考实现每次 `compile()` 就是这么拼的）。
+它是前端的**两大块**（按单元算 121 个顶层单元：82 def + 39 个算子单元），其中：`$` 可变参数 23 处 / 13 单元 ·
+`asm` 块 5 单元 · `kernel32.'Name'(…)` 外部调用 8 处 · `[T] expr` 方括号转换 5 单元 ·
+7 个内建/宏缺失（`array` 38 处，其余六个同样零命中）· 16 个单元签名带 `@Type`/`@Any`/`@Size`。
+验证：`docs/notes/2026-10-18-stdlib-prefix-survey.md`；`./build/simplexc_cli.exe --src simplexc/corpus/stdlib_prefix.si --out <blob>`
+→ 先死在更早的一层（词法 `$`，第 172 行）
+最后验证：2026-10-18
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

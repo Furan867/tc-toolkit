@@ -50,7 +50,12 @@
 2. ~~campaign 的 92 份~~ —— **出列：不是 M5 的工作**。它们不是编译单元（游戏在关卡测试时会把 `test.si` 拼进完整程序
    再交给 `compile.dll`），而 `work/hook/all/`（98 份语料的来源）本来就是**一关一关切出来的** → 那些完整程序已经覆盖了大部分关卡。
    留作参考的只有 `docs/notes/2026-10-18-campaign-survey.md`（它上面的 92/92 回退率是**输入口径错误**造成的，不是缺口）。
-3. **stdlib 前缀（路线 A）** —— 把 27711 B 前缀也交给我们的前端；这是终态，决定能不能关掉回退。
+3. **stdlib 前缀（路线 A）**：摸底完成（`docs/notes/2026-10-18-stdlib-prefix-survey.md`）—— **不是「再修几个语法」的量级**：
+   前端/声明层已有六类缺口（`$` 可变参数 · `asm` 块 · `kernel32.'Name'(…)` extern 调用 · `[T] expr` · 类型别名 · 多行 `Enum[`）；
+   **最大的在 lowering** —— 39 个顶层算子单元（`binary +`/`dot push`/`index_read`，声明层里完全不可见）需要**重载 + 泛型分派**，
+   `asm` 需要 IR inline asm，另有 7 个内建缺失（`array`/`grow`/`shrink`/`join`/`empty_array_address`/`type_of_element`/`size`）。
+   它的输入必须是「前缀 + 用户源码整体」（前缀没有程序根 label）。
+   **待定：现在的取舍** —— 那 7 个内建在 98 份那条路上也要用（双赢，建议先做）；重载/泛型/inline asm 是另一档工程。
 
 > 范围注释（2026-10-18 负责人指出）：**M5 = 98 份语料 + stdlib 前缀（路线 A）**。`campaign/` 的 92 份 test.si 不是编译单元，
 > 而 `all/` 是逐关切的、已覆盖大部分关卡，所以它们不构成第三块工作。

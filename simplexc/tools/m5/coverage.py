@@ -29,7 +29,6 @@ checkpoint：每 `--batch` 份就重写一次上面三个文件（不是跑完�
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import importlib.util
 import json
@@ -38,6 +37,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import NoReturn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)                                 # simplexc/tools/
@@ -79,6 +79,16 @@ STATUS_HOST_TIMEOUT = "host_timeout"
 
 FAIL_STATUSES = [STATUS_CLI_FAIL, STATUS_CLI_TIMEOUT, STATUS_REF_MISSING,
                  STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT, STATUS_DIFF]
+
+
+def fail(msg, rc) -> NoReturn:
+    """失败出口。本脚本原本一个都没有（错误只能靠调用方看 rc）。
+
+    消息照 `hook_offline.BuildError` 的风格写：「做什么 + 路径 + 原因」。
+    rc 口径同 `lower/ir_build.py`：环境/路径失败 2，编译/比对失败 1。
+    """
+    print(msg, file=sys.stderr)
+    raise SystemExit(rc)
 
 
 def load_selftest():
@@ -156,8 +166,11 @@ def classify_cli_error(rc, first_line):
 
 def load_manifest_targets():
     """`corpus/manifest.tsv` → 目标列表（98 份唯一语料，顺序照表）。"""
-    with open(MANIFEST, encoding="utf-8") as f:
-        rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+    try:
+        with open(MANIFEST, encoding="utf-8") as f:
+            rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+    except OSError as e:
+        fail(f"读不了语料清单 {rel(MANIFEST)}：{e}", 2)
     head = rows[0]
     ci = {name: head.index(name) for name in ("id", "file", "entry")}
     targets = []
@@ -174,8 +187,11 @@ def rv32im_ref_entry():
     """rv32im 的参考入口**不硬编码**：从捕获 manifest 里找 `out_sha256` 等于 rv32im.bin 的那一行，
     取它的 `r2`（捕获时记下的入口寄存器）。找不到就报错 —— 不静默用一个可能是旧的常量。"""
     bin_sha = hashlib.sha256(read_bytes(os.path.join(ROOT, RV32IM_BIN))).hexdigest()
-    with open(RV32IM_CAPTURE, encoding="utf-8") as f:
-        rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+    try:
+        with open(RV32IM_CAPTURE, encoding="utf-8") as f:
+            rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+    except OSError as e:
+        fail(f"读不了 rv32im 的捕获 manifest {rel(RV32IM_CAPTURE)}：{e}", 2)
     ci = {name: rows[0].index(name) for name in ("out_sha256", "r2")}
     for row in rows[1:]:
         if row[ci["out_sha256"]] == bin_sha:
@@ -184,8 +200,11 @@ def rv32im_ref_entry():
 
 
 def read_bytes(path):
-    with open(path, "rb") as f:
-        return f.read()
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError as e:
+        fail(f"读不了 {rel(path)}：{e}", 2)
 
 
 def rv32im_target():
@@ -196,8 +215,12 @@ def rv32im_target():
 def run_cli(src, blob, timeout):
     """跑一次产品路径 CLI。返回 (rc, seconds, stdout, stderr, timed_out)。"""
     for suffix in ("", ".entry", ".stubs"):                   # 先删干净：别让上一次的 sidecar 冒充这一次的
-        with contextlib.suppress(OSError):
+        try:
             os.remove(blob + suffix)
+        except FileNotFoundError:
+            pass                                       # 第一轮跑本来就没它，不是失败
+        except OSError as e:
+            fail(f"删不了上一轮留下的产物 {rel(blob + suffix)}：{e}", 2)
     cmd = [CLI, "--src", src, "--out", blob]
     t0 = time.perf_counter()
     try:
@@ -210,8 +233,12 @@ def run_cli(src, blob, timeout):
 
 def read_entry(blob):
     """`.entry` 的内容是十六进制（无 `0x` 前缀，见 `cli/simplexc_cli.cc`）。"""
-    with open(blob + ".entry", encoding="ascii") as f:
-        return "0x" + f.read().strip().upper()
+    try:
+        with open(blob + ".entry", encoding="ascii") as f:
+            return "0x" + f.read().strip().upper()
+    except OSError as e:
+        # 不在这里退出：这份语料的失败要记成它自己的 EntryMissing 行（run_target 的 except OSError）
+        raise OSError(f"读不了装配器写出的 {rel(blob)}.entry：{e}") from e
 
 
 def host_once(selftest, src, binpath, entry, ticks, seed, out, budget, timeout):
@@ -234,7 +261,11 @@ def diff_ticks_of(diff_lines):
     for line in diff_lines:
         m = re.match(r"tick (\d+):", line)
         if m:
-            ticks.add(int(m.group(1)))
+            try:
+                ticks.add(int(m.group(1)))
+            except ValueError:
+                # `\d+` 保证是数字 —— 不可达；留着是为了形状变了别抛裸 ValueError
+                fail(f"tick 号不是十进制整数：{m.group(0)!r}", 2)
     return len(ticks)
 
 
@@ -268,14 +299,21 @@ def run_target(target, selftest, args):
     row["id"] = target["id"]
     src = os.path.join(ROOT, target["src"])
     blob = os.path.join(args.out_dir, "out", target["id"] + ".bin")
-    os.makedirs(os.path.dirname(blob), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(blob), exist_ok=True)
+    except OSError as e:
+        fail(f"建不了产物目录 {rel(os.path.dirname(blob))}：{e}", 2)
     ref = os.path.join(ROOT, target["ref"]) if target["ref"] else None
     row["ref_bytes"] = os.path.getsize(ref) if ref and os.path.exists(ref) else 0
 
     t0 = time.perf_counter()
     rc, cli_s, out_s, err_s, timed_out = run_cli(src, blob, args.cli_timeout)
     row["cli_rc"] = "" if rc is None else rc
-    row["cli_ms"] = int(cli_s * 1000)
+    try:
+        row["cli_ms"] = int(cli_s * 1000)
+    except (ValueError, OverflowError) as e:
+        # 正常不可达（cli_s 来自 perf_counter）；留着是为了它变形时别抛裸异常
+        fail(f"cli_ms 字段算不出来：cli_s={cli_s!r}（{e}）", 2)
     blob_ok = os.path.exists(blob)
     row["blob_bytes"] = os.path.getsize(blob) if blob_ok else 0
     err_line = first_error_line(out_s, err_s)
@@ -310,13 +348,20 @@ def run_target(target, selftest, args):
         return row
 
     logs = os.path.join(args.out_dir, "logs")
-    os.makedirs(logs, exist_ok=True)
+    try:
+        os.makedirs(logs, exist_ok=True)
+    except OSError as e:
+        fail(f"建不了宿主日志目录 {rel(logs)}：{e}", 2)
     snaps = {}
     for tag, binpath, entry in (("ref", ref, hex(target["ref_entry"])),
                                ("ours", blob, row["entry"])):
         out = os.path.join(logs, f"{target['id']}.{tag}.jsonl")
-        with contextlib.suppress(OSError):
+        try:
             os.remove(out)
+        except FileNotFoundError:
+            pass                                       # 第一轮跑本来就没它，不是失败
+        except OSError as e:
+            fail(f"删不了上一轮留下的宿主日志 {rel(out)}：{e}", 2)
         timeout = max(150.0, args.ticks * (args.budget + 5))
         # 宿主的瞬时失败多数是**固定地址撞车**：它要把游戏的段映射到捕获时的绝对地址
         # （014/012 实测 `VirtualAlloc(0x232a9f50000, …) 失败 err=487`），换一个进程地址空间就好了 ——
@@ -416,10 +461,13 @@ def summary_line(summary):
 
 
 def write_tsv(rows, path):
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\t".join(TSV_COLUMNS) + "\n")
-        for row in rows:
-            f.write("\t".join(str(row.get(col, "")) for col in TSV_COLUMNS) + "\n")
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(TSV_COLUMNS) + "\n")
+            for row in rows:
+                f.write("\t".join(str(row.get(col, "")) for col in TSV_COLUMNS) + "\n")
+    except OSError as e:
+        fail(f"写不了覆盖表 {rel(path)}：{e}", 2)
 
 
 def read_tsv(path):
@@ -438,9 +486,17 @@ def read_tsv(path):
         cells = line.split("\t")
         row = {col: (cells[i] if i < len(cells) else "") for i, col in enumerate(head)}
         for col in INT_COLUMNS:                              # TSV 里全是字符串 → 数值列还原
-            row[col] = int(row[col]) if str(row[col]).strip() else ""
+            cell = str(row[col]).strip()
+            try:
+                row[col] = int(cell) if cell else ""
+            except ValueError:
+                fail(f"{rel(path)} 的 {col} 列不是整数：{cell!r}", 2)
         for col in FLOAT_COLUMNS:
-            row[col] = float(row[col]) if str(row[col]).strip() else 0.0
+            cell = str(row[col]).strip()
+            try:
+                row[col] = float(cell) if cell else 0.0
+            except ValueError:
+                fail(f"{rel(path)} 的 {col} 列不是浮点数：{cell!r}", 2)
         rows.append({col: row.get(col, "") for col in TSV_COLUMNS})
     return rows
 
@@ -569,8 +625,11 @@ def write_report(rows, summary, path, args, targets):
         w(f"| {r['id']} | {asm} | {r['blob_bytes'] or '—'} | {r['entry'] or '—'} | {diff} | "
           f"{r['status']} | {md_cell(r['err_kind'] or '—', 40)} | {md_cell(note)} |")
     w("")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(out))
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(out))
+    except OSError as e:
+        fail(f"写不了报告 {rel(path)}：{e}", 2)
     return path
 
 
@@ -599,7 +658,10 @@ def main(argv=None):
     if not os.path.exists(CLI):
         raise SystemExit(f"缺 {rel(CLI)}：先跑 python simplexc/tools/build.py simplexc_cli")
     for d in (args.out_dir, dirname_of(args.tsv), dirname_of(args.summary_json), dirname_of(args.report)):
-        os.makedirs(d, exist_ok=True)
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError as e:
+            fail(f"建不了输出目录 {d}：{e}", 2)
     selftest = load_selftest()
 
     targets = load_manifest_targets()
@@ -631,17 +693,23 @@ def main(argv=None):
         if i % args.batch == 0 or i == len(todo):
             summary = aggregate(rows)
             write_tsv(rows, args.tsv)
-            with open(args.summary_json, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(summary, f, ensure_ascii=False, indent=2)
-                f.write("\n")
+            try:
+                with open(args.summary_json, "w", encoding="utf-8", newline="\n") as f:
+                    json.dump(summary, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+            except OSError as e:
+                fail(f"写不了汇总 JSON {rel(args.summary_json)}：{e}", 2)
             write_report(rows, summary, args.report, args, targets)
             print(f"  ── checkpoint：{summary_line(summary)}", flush=True)
 
     summary = aggregate(rows)
     write_tsv(rows, args.tsv)
-    with open(args.summary_json, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    try:
+        with open(args.summary_json, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        fail(f"写不了汇总 JSON {rel(args.summary_json)}：{e}", 2)
     write_report(rows, summary, args.report, args, targets)
     print("汇总：" + summary_line(summary))
     for c in summary["fail_classes"]:

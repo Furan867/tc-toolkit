@@ -44,10 +44,13 @@
 
 两份壳怎么编
 ------------
-- `base`（改动前）：`git show HEAD:tools/compile_hook.c` + 只把 5 个路径宏包一层 `#ifndef`
-  （值逐字符不变）编成第二份 dll。测试构建要换路径，而 HEAD 版把路径写死；只包一层
+- `base`（改动前）：`git show <BASELINE_REF>:tools/compile_hook.c` + 只把 5 个路径宏包一层
+  `#ifndef`（值逐字符不变）编成第二份 dll。测试构建要换路径，而基线壳把路径写死；只包一层
   `#ifndef` 不可能改变任何运行期行为，所以它仍是「改动前」的语义。
-  **gcc 单文件编**：HEAD 版不引用 `simplexc_compile`，不需要 C++ 运行库。
+  **只用于 reference 模式的 `refcmp`**（`case_refcmp` 里 `set_mode("base", "reference")`）：
+  那版壳的 ours 段读预编译 blob，`build/blob_empty.bin` 与 `OURS_BLOB` 路径都已退役 ——
+  拿它跑 ours case 无从判起。
+  **gcc 单文件编**：基线壳不引用 `simplexc_compile`，不需要 C++ 运行库。
 - `new`（当前壳）：**与 `python simplexc/tools/build.py simplexc_dll` 同一条命令** ——
   `gcc -c -O2 <壳> -o <shell.o>`，再 `g++ -shared -O2 -static -o <dll> <shell.o> \
   <核心源文件…> -I simplexc -I build/llvm/include -L build/llvm/lib -lLLVM-C`。
@@ -60,13 +63,13 @@
   **被加载 dll 自己的目录**开始找 —— `compile_real.dll` 的 libgcc / libwinpthread 现在就
   靠这个机制从 `bin/` 里被找到，新壳的 LLVM 依赖同理。
 
-⚠ 工作区干净时 HEAD 与工作区同源，`refcmp` 退化成「自己比自己」。结果里的
-`baseline_differs` 会如实报 False —— 别把它当成「参考不回归」的证据。
+⚠ `baseline_differs` 比的是「工作区壳 vs `BASELINE_REF` 的壳」（不是 HEAD）：工作区那版接了
+真编译器，两份源码必然不同 → True 是常态；工作区自己退回基线源时才报 False，那时 `refcmp`
+退化成「自己比自己」—— 别把 False 当成「参考不回归」的证据。
 
-⚠ `baseline_differs` 现在**不是**通过条件（一个 case 都不读它，只记进 facts 与 check.py 的
-摘要）：新版壳接了真编译器，两份 dll 本来就用**不同形状**的命令编（单文件 gcc vs gcc+g++
-链核心），源文本必然不同 —— True 是预期的，`refcmp` 判的是两者在 reference 模式下转发给
-`compile_real.dll` 的产物，与这个标志无关。
+⚠ `baseline_differs` **不是**通过条件（一个 case 都不读它，只记进 facts 与 check.py 的
+摘要）：两份 dll 用**不同形状**的命令编（单文件 gcc vs gcc+g++ 链核心），`refcmp` 判的是
+两者在 reference 模式下转发给 `compile_real.dll` 的产物，与这个标志无关。
 
 ⚠ 不碰 `work/hook/` 与 `work/opt/`：路径宏全部 `-D` 到 `work/tmp/hook_offline/` 下。
 `HOOK_LOG_DIR`（hook.log 所在的目录，工作区壳的默认值是 OUT_DIR = `work/hook/`）也 `-D`
@@ -107,6 +110,12 @@ RESULT_DIR = os.path.join(WORK, "results")
 STUB = os.path.join(WORK, "tools", "rewrite_stub.py")
 BASE_SRC = os.path.join(WORK, "compile_hook_base.c")
 HOOK_SRC = os.path.join(ROOT, "tools", "compile_hook.c")
+# 基线壳钉在「壳接上 C++ 核心」那一笔（451e1e2）的父：只有那版才是 `refcmp` 原文里的
+# 「改动前」—— 它单文件 gcc 编得动。取不到就报错、**不退回 HEAD**：HEAD 已是新壳，退回等于
+# 偷偷把 base 换成「链核心的壳」，「编不动」会被误读成「壳坏了」。
+BASELINE_COMMIT = "451e1e2"              # 把 ours 段改成进程内调编译核心的那一笔
+BASELINE_REF = f"{BASELINE_COMMIT}^"     # 它的父 = 单文件 gcc 编得动的「改动前」壳
+BASELINE_SRC = f"{BASELINE_REF}:tools/compile_hook.c"
 # 新壳的 C 壳目标文件：**不能**写成 build/objs/compile_hook_shell.o —— 那边的 -D 是产线的值，
 # 覆盖掉它等于把交付物的中间物换成测试构建的。
 SHELL_OBJ = os.path.join(WORK, "compile_hook_shell.o")
@@ -205,24 +214,30 @@ def defs(v):
         f'-DOUT_DIR="{d["out"].replace(chr(92), "/")}"',
         f'-DOPT_DIR="{d["opt"].replace(chr(92), "/")}"',
         # 工作区壳默认把 hook.log 写进 OUT_DIR；pin 到 opt/ 才与 snapshot() 读的位置一致
-        # （HEAD 基线壳本来就写 OPT_DIR = opt/，多一个 -D 对它无害）。
+        # （基线壳本来就写 OPT_DIR = opt/，多一个 -D 对它无害）。
         f'-DHOOK_LOG_DIR="{d["opt"].replace(chr(92), "/")}"',
         f'-DOPT_INI="{d["ini"].replace(chr(92), "/")}"',
         f'-DOPT_SCRIPT="{STUB.replace(chr(92), "/")}"',
     ]
 
 
-def head_source_bytes():
-    """HEAD 的 `tools/compile_hook.c` 原字节。"""
+def baseline_source_bytes():
+    """基线壳（`BASELINE_SRC`）的原字节。"""
     try:
-        return subprocess.check_output(["git", "-C", ROOT, "show", "HEAD:tools/compile_hook.c"])
+        return subprocess.check_output(["git", "-C", ROOT, "show", BASELINE_SRC])
     except (OSError, subprocess.CalledProcessError) as e:
-        raise BuildError(f"取不到 HEAD:tools/compile_hook.c（{e}）—— 基线 dll 编不出来") from e
+        raise BuildError(
+            f"取不到 {BASELINE_SRC}（{e}）—— 基线 dll 编不出来。这个 ref 要求本仓本地历史里有"
+            f" {BASELINE_COMMIT}（壳接上 C++ 核心那一笔）的父提交；深克隆 / 改写过历史就自己取回那笔"
+        ) from e
 
 
 def baseline_source_text():
-    """HEAD 的 compile_hook.c + **纯机械**的路径宏 #ifndef 化（默认值逐字符不变）。"""
-    text = head_source_bytes().decode("utf-8")
+    """基线壳 + **纯机械**的路径宏 #ifndef 化（默认值逐字符不变）。"""
+    text = baseline_source_bytes().decode("utf-8")
+    # 为什么是这 5 个：defs() 的 -D 里只要挡 OUT_DIR / OPT_DIR / OPT_INI / OPT_SCRIPT（HOOK_LOG_DIR
+    # 在基线源里本来就带 #ifndef），第 5 个 OURS_BLOB 是基线壳自己的路径宏（没有 -D）。挡不住的
+    # 后果：那份 dll 按写死的默认值往 work/hook/ 的活数据里写（加载时还会清空它）。
     names = {"OUT_DIR", "OPT_DIR", "OPT_SCRIPT", "OPT_INI", "OURS_BLOB"}
     out, wrapped = [], 0
     for ln in text.split("\n"):
@@ -235,22 +250,23 @@ def baseline_source_text():
         else:
             out.append(ln)
     if wrapped != 5:
-        raise BuildError(f"机械补丁只该命中 5 个路径宏，实得 {wrapped} 个 —— HEAD 版壳的结构变了")
+        raise BuildError(f"机械补丁只该命中 5 个路径宏，实得 {wrapped} 个 —— "
+                         f"{BASELINE_SRC} 的结构变了")
     return "\n".join(out)
 
 
 def baseline_info():
-    """HEAD 版壳与工作区是不是同一份（工作区干净时 `refcmp` 会退化成自比）。
+    """基线壳（`BASELINE_REF`）与工作区是不是同一份（同一份时 `refcmp` 会退化成自比）。
 
     比较前把 CRLF 归一化：`core.autocrlf=true` 让 blob 存 LF、工作区是 CRLF，
     逐字节比会把「内容相同」误报成「改过」。
     """
-    head = head_source_bytes().replace(b"\r\n", b"\n")
+    base = baseline_source_bytes().replace(b"\r\n", b"\n")
     with open(HOOK_SRC, "rb") as f:
         worktree = f.read().replace(b"\r\n", b"\n")
-    return {"head_sha256": hashlib.sha256(head).hexdigest()[:16],
+    return {"baseline_sha256": hashlib.sha256(base).hexdigest()[:16],
             "worktree_sha256": hashlib.sha256(worktree).hexdigest()[:16],
-            "baseline_differs": head != worktree}
+            "baseline_differs": base != worktree}
 
 
 def build(verbose=True):
@@ -309,7 +325,7 @@ def build(verbose=True):
          "-I", "simplexc", "-I", bm.REL(bm.LLVM_INC),
          "-L", bm.REL(bm.LLVM_LIB), "-lLLVM-C"],
     ]
-    # base（HEAD 版壳）不引用核心：仍是 gcc 单文件编，不需要 C++ 运行库。
+    # base（`BASELINE_REF` 的壳）不引用核心：仍是 gcc 单文件编，不需要 C++ 运行库。
     base_cmds = [[cc, "-shared", "-O2", "-static", "-o", VARIANTS["base"]["dll"]]
                  + defs("base") + [BASE_SRC]]
 
@@ -520,7 +536,7 @@ def note_baseline(c):
     info = baseline_info()
     c.fact("baseline_differs", info["baseline_differs"])
     if not info["baseline_differs"]:
-        c.say("  ⚠ 工作区与 HEAD 同源：这一条退化成自己比自己（只有工作区改了壳才有判别力）")
+        c.say(f"  ⚠ 工作区壳与 {BASELINE_REF} 的壳同源：这一条退化成自己比自己")
     return info
 
 
@@ -891,8 +907,7 @@ def main(argv=None):
     else:
         print(f"构建：rc={b.get('rc')}（{b.get('seconds')}s）")     # 每个 variant 一项，全 0 才算过
     if res["build"].get("baseline_differs") is False:
-        print("⚠ 工作区与 HEAD 的 compile_hook.c 同源 → refcmp 是自比"
-              "（判别力只对未提交的改动有效）")
+        print(f"⚠ 工作区壳与 {BASELINE_REF} 的 compile_hook.c 同源 → refcmp 是自比")
     if args.json:
         _write_json(args.json, res)
     return 0 if res["ok"] else 1

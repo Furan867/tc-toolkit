@@ -415,6 +415,7 @@ ScanResult scan(const std::vector<std::string>& code_lines,
                 const std::vector<std::string>& raw_lines) {
   ScanResult res;
   int depth = 0;
+  int bracket = 0;               /* 未闭合 '[' 的个数 */
   std::vector<int> open_braces;  /* 未闭合 '{' 所在行号 */
   std::vector<int> open_decls;   /* 已开体、还没收口的声明下标 */
 
@@ -427,7 +428,9 @@ ScanResult scan(const std::vector<std::string>& code_lines,
     Decl started;
     const bool hit = match_decl(code, raw, ln_no, d0, res.decls, open_decls, started);
 
-    /* 花括号配平（字面量与注释已被掩码，所以只剩结构性的 {}） */
+    /* 花括号配平（字面量与注释已被掩码，所以只剩结构性的 {}）；
+       '[' 一起算，因为 `type Char Enum[` 的成员表就跨好几行 —— 不算的话那段成员行
+       会被当成「未支持的顶层构造」，而声明本身的 hi 停在 '[' 那一行，lowering 拿不到右括号。 */
     for (char ch : code) {
       if (ch == '{') {
         open_braces.push_back(ln_no);
@@ -440,6 +443,10 @@ ScanResult scan(const std::vector<std::string>& code_lines,
           open_braces.pop_back();
           --depth;
         }
+      } else if (ch == '[') {
+        ++bracket;
+      } else if (ch == ']' && bracket > 0) {
+        --bracket;
       }
     }
 
@@ -455,15 +462,16 @@ ScanResult scan(const std::vector<std::string>& code_lines,
           }
         }
       }
-      if (depth > d0) {
+      if (depth > d0 || bracket > 0) {
         open_decls.push_back(idx);
       } else {
         res.decls[idx].hi = ln_no;
       }
     }
 
-    /* 收口：本行结束后回到（或越过）声明起始深度的，说明体已闭合 */
-    while (!open_decls.empty() && depth <= res.decls[open_decls.back()].depth) {
+    /* 收口：本行结束后回到（或越过）声明起始深度、且 '[' 也配平了的，说明体已闭合 */
+    while (!open_decls.empty() && bracket == 0 &&
+           depth <= res.decls[open_decls.back()].depth) {
       res.decls[open_decls.back()].hi = ln_no;
       open_decls.pop_back();
     }

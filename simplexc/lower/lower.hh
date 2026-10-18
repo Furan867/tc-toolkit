@@ -27,6 +27,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -342,6 +343,9 @@ protected:
     std::map<std::string, V> consts_;
     std::map<std::string, std::vector<const FunctionDef*>> defs_;
     std::vector<const VarDeclStmt*> top_vars_;
+    /* `in_scope("名字")` ① 档的名字表：整单元预扫的 `def` / `type` / `const #`，与引用点位置无关
+     * （U-L14 §0）。`var` 故意不在里面 —— 它的可见性跟声明顺序走，属于 ② 档。 */
+    std::set<std::string> in_scope_names_;
 
     struct FieldRef {
         int off = 0;
@@ -398,6 +402,8 @@ public:
 
 private:
     void scan_decls();
+    void scan_scope_names();
+    void collect_scope_names(const Block& block);
     void make_context();
     void make_types();
     void make_globals();

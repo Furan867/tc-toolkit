@@ -962,7 +962,9 @@ void Lower::lower_if_runtime(const std::vector<const IfCase*>& cases, const Bloc
 
 std::optional<bool> Lower::in_scope_const(const Expr& cond) {
     /* `in_scope("名字")` → true/false；不是这个形态 → nullopt（按运行期处理）。
-     * U-L14 未定，这里只实现参考实现需要的那一档：**名字是顶层 def ⇒ 真，否则假**。 */
+     * 判定 = ① 整单元预扫的名字表 ∪ ② 词法作用域（参数 / 局部 / 同体嵌套 def）∪ ③ 前缀（stdlib）名。
+     * 三档的边界由 U-L14 的片段矩阵定死（docs/notes/2026-10-18-ul14-in-scope.md §0）：内建不算、
+     * `var` 不算（它的可见性跟声明顺序走）、别的 def 体里的嵌套名字不算。 */
     const auto* call = as<CallExpr>(&cond);
     if (call == nullptr) return std::nullopt;
     const auto* id = as<IdentExpr>(call->callee.get());
@@ -971,7 +973,16 @@ std::optional<bool> Lower::in_scope_const(const Expr& cond) {
     if (arg == nullptr || (arg->lit_kind != "str" && arg->lit_kind != "template")) {
         throw Unsupported("in_scope() 的参数不是字符串字面量", cond.src_line);
     }
-    return defs_.count(arg->text) != 0;
+    const std::string& t = arg->text;
+    /* 编译期常量在源码里带 `#`，查询串带不带都要算（U-L14 V2/V2b）。 */
+    if (in_scope_names_.count(t) != 0) return true;
+    if (t.empty() || t[0] != '#') {
+        if (in_scope_names_.count('#' + t) != 0) return true;
+    } else if (in_scope_names_.count(t.substr(1)) != 0) {
+        return true;
+    }
+    if (lookup(t) != nullptr) return true;
+    return is_prefix_func(t) || prefix_globals().count(t) != 0;
 }
 
 bool Lower::ppif_true(const Expr& cond) {
@@ -2516,9 +2527,51 @@ V Lower::composite_literal(const CompositeLitExpr& node) {
 Program::Program(const ModuleAst& ast, bool collect) : ast_(ast) {
     collect_ = collect;
     scan_decls();
+    scan_scope_names();
     make_context();
     make_types();
     make_globals();
+}
+
+/* `in_scope` ① 档的整单元预扫。名字表取**未经 `in_scope` 裁剪的原 AST**（F1/F2：写在由自己
+ * 守卫的块里、或写在被丢掉的块里的 def 都算），所以它只需一遍、不必到不动点。 */
+void Program::scan_scope_names() {
+    for (const FunctionDef* d : ast_.defs) in_scope_names_.insert(d->name);
+    for (const EnumDecl& d : ast_.enums) {
+        in_scope_names_.insert(d.name);
+        for (const std::string& member : d.members) in_scope_names_.insert(member);
+    }
+    for (const StructDecl& d : ast_.structs) in_scope_names_.insert(d.name);
+    for (const VarDeclStmt* st : ast_.top_vars) {
+        if (st->kw == "const" && !st->name.empty() && st->name[0] == '#') {
+            in_scope_names_.insert(st->name);
+        }
+    }
+    if (ast_.label != nullptr) collect_scope_names(*ast_.label->body);
+}
+
+/* 程序根（`run_sim:` 体）的整棵语句树：块递归下去，但**不钻 `NK::Def` 的体** —— def 体里的名字
+ * 属于那个 def 自己的作用域（U-L14 T5/T5d：写在某个 def 体里的嵌套 def，别处查它是假）。 */
+void Program::collect_scope_names(const Block& block) {
+    for (const StmtPtr& st : block.stmts) {
+        if (const auto* d = as<DefStmt>(st.get())) {
+            in_scope_names_.insert(d->name);
+        } else if (const auto* v = as<VarDeclStmt>(st.get())) {
+            if (v->kw == "const" && !v->name.empty() && v->name[0] == '#') {
+                in_scope_names_.insert(v->name);
+            }
+        } else if (const auto* w = as<WhileStmt>(st.get())) {
+            collect_scope_names(*w->block);
+        } else if (const auto* i = as<IfStmt>(st.get())) {
+            for (const auto& case_ : i->cases) collect_scope_names(*case_->block);
+            if (i->else_block != nullptr) collect_scope_names(*i->else_block);
+        } else if (const auto* p = as<PpIfStmt>(st.get())) {
+            for (const auto& case_ : p->cases) collect_scope_names(*case_->block);
+            if (p->else_block != nullptr) collect_scope_names(*p->else_block);
+        } else if (const auto* s = as<SwitchStmt>(st.get())) {
+            for (const auto& case_ : s->cases) collect_scope_names(*case_->block);
+        }
+    }
 }
 
 void Program::scan_decls() {

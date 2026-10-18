@@ -760,3 +760,18 @@ frontend → `ModuleAst` → `lower::Program` → `assemble()` → blob，不经
 - **依赖门**：`objdump -p build/compile_hook.dll | grep -i python` 为空（导入表只有 KERNEL32/msvcrt）。
 验证：`docs/notes/2026-10-18-m45-cli.md` 的命令与输出；`python simplexc/tools/build.py simplexc_cli`
 最后验证：2026-10-18
+
+### U-L3：模板字面量插值 = 按序拼接各值的渲染，不调运行时、不需要 NUL 终止
+实测（参考编译器产物 + 宿主 `--dump-pages` 观测语料自带的 `set_text`→`ui_buffer` 写入）：
+`A{Int 1234}C` → 6 字节 `A1234C`；`{U64 max}` → 无符号十进制；`{Bool true}` → `true`；
+`{U1 1}` → `1`；`{Str "hi"}` → `hi`；多段插值按出现顺序拼接；`"ab"+"cd"` → len 4 的 `abcd`。
+**extern 序列为空**（不调运行时）、结果指针落在调用方线程栈上、长度显式 → **不需要 NUL 终止**。
+验证：`docs/notes/2026-10-18-m5-gap-diagnosis.md` 的命令与页快照读数
+最后验证：2026-10-18
+
+### 参考编译器容忍 `return <expr>)` 里多余的右括号（我们比它严）
+实测（2×2 单因子）：`store(...))` 多一个 `)` → 参考 `sysFatal front_end.nim(2688,28) Missing open paren`；
+`return …)` 多一个 → **编译成功**，且产物 sha256 与删掉它的同一份源码相同（`f41b2839b25cf6a9…`）。
+17 份语料全落在这个被容忍的形状（每份唯一不平衡行都含 `return`、每行净 −1）。
+验证：`docs/notes/2026-10-18-m5-gap-diagnosis.md`
+最后验证：2026-10-18

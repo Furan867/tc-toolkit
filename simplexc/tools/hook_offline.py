@@ -262,8 +262,11 @@ def baseline_info():
     逐字节比会把「内容相同」误报成「改过」。
     """
     base = baseline_source_bytes().replace(b"\r\n", b"\n")
-    with open(HOOK_SRC, "rb") as f:
-        worktree = f.read().replace(b"\r\n", b"\n")
+    try:
+        with open(HOOK_SRC, "rb") as f:
+            worktree = f.read().replace(b"\r\n", b"\n")
+    except OSError as e:
+        raise BuildError(f"读不了工作区壳的源码 {HOOK_SRC}：{e}") from e
     return {"baseline_sha256": hashlib.sha256(base).hexdigest()[:16],
             "worktree_sha256": hashlib.sha256(worktree).hexdigest()[:16],
             "baseline_differs": base != worktree}
@@ -296,11 +299,24 @@ def build(verbose=True):
     for v in VARIANTS:
         d = vdirs(v)
         for key in ("out", "opt"):
-            os.makedirs(d[key], exist_ok=True)
-    os.makedirs(os.path.dirname(STUB), exist_ok=True)
-    os.makedirs(BIN, exist_ok=True)
-    with open(STUB, "w", encoding="utf-8", newline="\n") as f:
-        f.write(STUB_SOURCE)
+            try:
+                os.makedirs(d[key], exist_ok=True)
+            except OSError as e:
+                raise BuildError(f"建不了 {v} 的 {key} 目录 {d[key]}：{e}") from e
+    stub_dir = os.path.dirname(STUB)
+    try:
+        os.makedirs(stub_dir, exist_ok=True)
+    except OSError as e:
+        raise BuildError(f"建不了替身改写器的目录 {stub_dir}：{e}") from e
+    try:
+        os.makedirs(BIN, exist_ok=True)
+    except OSError as e:
+        raise BuildError(f"建不了 {BIN}（两份壳要同居在这里）：{e}") from e
+    try:
+        with open(STUB, "w", encoding="utf-8", newline="\n") as f:
+            f.write(STUB_SOURCE)
+    except OSError as e:
+        raise BuildError(f"写不了替身改写器 {STUB}：{e}") from e
     for dep in ("compile_real.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"):
         src = os.path.join(GAME, dep)
         if not os.path.isfile(src):
@@ -309,8 +325,11 @@ def build(verbose=True):
     # LLVM-C.dll 与两份壳同居：加载 dll 时依赖从**被加载 dll 自己的目录**开始找
     # （compile_real.dll 的 libgcc/libwinpthread 就是靠这个机制从 bin/ 里找到的）。
     shutil.copyfile(llvm_dll, os.path.join(BIN, "LLVM-C.dll"))
-    with open(BASE_SRC, "w", encoding="utf-8", newline="") as f:
-        f.write(baseline_source_text())
+    try:
+        with open(BASE_SRC, "w", encoding="utf-8", newline="") as f:
+            f.write(baseline_source_text())
+    except OSError as e:
+        raise BuildError(f"写不了基线壳源码 {BASE_SRC}：{e}（基线 dll 编不出来，refcmp 判不了）") from e
 
     # new 的命令行与 build.py: step_simplexc_dll **同形**（源文件表取 bm.CORE_SOURCES，
     # 相对写法 + cwd=仓库根；`-o` 那个 dll 用绝对路径）；额外加测试用的路径宏。
@@ -448,13 +467,19 @@ def find_log(records, event, **want):
 
 def set_mode(v, mode, extra=""):
     d = vdirs(v)
-    with open(d["ini"], "w", encoding="ascii") as f:
-        f.write(f"[opt]\ncompiler = {mode}\n{extra}")
+    try:
+        with open(d["ini"], "w", encoding="ascii") as f:
+            f.write(f"[opt]\ncompiler = {mode}\n{extra}")
+    except OSError as e:
+        raise BuildError(f"写不了壳读的 opt.ini {d['ini']}：{e}") from e
 
 
 def source_bytes():
-    with open(SRC, "rb") as f:
-        return f.read()
+    try:
+        with open(SRC, "rb") as f:
+            return f.read()
+    except OSError as e:
+        raise BuildError(f"读不了判据用的语料 {SRC}：{e}") from e
 
 
 class Case:
@@ -801,11 +826,19 @@ def run_all(only=None, *, verbose=False, timeout=CASE_TIMEOUT):
         res["seconds"] = round(time.perf_counter() - t0, 3)
         return res
 
-    os.makedirs(RESULT_DIR, exist_ok=True)
+    try:
+        os.makedirs(RESULT_DIR, exist_ok=True)
+    except OSError as e:
+        raise BuildError(f"建不了 case 结果目录 {RESULT_DIR}：{e}") from e
     for name in names:
         path = os.path.join(RESULT_DIR, name + ".json")
-        if os.path.exists(path):
+        try:
             os.remove(path)
+        except FileNotFoundError:
+            pass                        # 第一轮跑本来就没有它 —— 这不是失败，别报
+        except OSError as e:
+            # 权限/占用这类删不掉的：不能默默往下跑（下一行读到的会是上一轮的旧结果）
+            raise BuildError(f"删不了上一轮的 case 结果 {path}：{e}") from e
         cmd = [sys.executable, os.path.abspath(__file__), "--child", name, "--result", path]
         t1 = time.perf_counter()
         rc, out = None, ""
@@ -845,9 +878,16 @@ def run_all(only=None, *, verbose=False, timeout=CASE_TIMEOUT):
 # ---- CLI ----------------------------------------------------------------
 def _dump(path, payload):
     """只落盘不打印 —— 子进程要静默（它的输出会被父进程当摘要收走）。"""
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    out_dir = os.path.dirname(os.path.abspath(path))
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        raise BuildError(f"建不了 {out_dir}：{e}") from e
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        raise BuildError(f"写不了 {path}：{e}") from e
 
 
 def _write_json(path, payload):

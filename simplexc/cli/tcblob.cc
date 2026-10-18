@@ -19,6 +19,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -116,11 +118,11 @@ int run_blob(const tc::Blob& blob) {
     GetExitCodeThread(th, &code);
     CloseHandle(th);
     VirtualFree(dest, 0, MEM_RELEASE);
-    std::printf("RUN ok：blob 在 %p 上跑完，线程退出码 %lu（0 = 正常 ExitThread）\n",
-                static_cast<void*>(dest), code);
+    std::cout << "RUN ok：blob 在 " << static_cast<const void*>(dest)
+              << " 上跑完，线程退出码 " << code << "（0 = 正常 ExitThread）\n";
     if (g_probe.calls)
-        std::printf("probe：tc_probe_ok 被调用 %llu 次，最后一次参数 = %llu\n",
-                    (unsigned long long)g_probe.calls, (unsigned long long)g_probe.last);
+        std::cout << "probe：tc_probe_ok 被调用 " << g_probe.calls
+                  << " 次，最后一次参数 = " << g_probe.last << "\n";
     return 0;
 }
 
@@ -172,12 +174,14 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "装配失败（status=%d）：%s\n", int(r.status), r.detail.c_str());
         return 1;
     }
-    std::printf("blob: out_len=%llu entry=0x%llX text=%llu rdata=%llu data=%llu bss=%llu "
-                "stubs=%u relocs=%u\n",
-                (unsigned long long)r.blob.out_len(), (unsigned long long)r.blob.entry_off,
-                (unsigned long long)r.text_size, (unsigned long long)r.rdata_size,
-                (unsigned long long)r.data_size, (unsigned long long)r.bss_size,
-                r.stub_count, r.reloc_count);
+    {
+        std::ostringstream line;
+        line << "blob: out_len=" << r.blob.out_len() << " entry=0x" << std::hex
+             << std::uppercase << r.blob.entry_off << std::dec << " text=" << r.text_size
+             << " rdata=" << r.rdata_size << " data=" << r.data_size << " bss=" << r.bss_size
+             << " stubs=" << r.stub_count << " relocs=" << r.reloc_count;
+        std::cout << line.str() << "\n";
+    }
     if (!out_path.empty()) {
         FILE* f = std::fopen(out_path.c_str(), "wb");
         if (!f) {
@@ -186,8 +190,7 @@ int main(int argc, char** argv) {
         }
         std::fwrite(r.blob.bytes.data(), 1, size_t(r.blob.out_len()), f);
         std::fclose(f);
-        std::printf("写出 %s（%llu 字节）\n", out_path.c_str(),
-                    (unsigned long long)r.blob.out_len());
+        std::cout << "写出 " << out_path << "（" << r.blob.out_len() << " 字节）\n";
         /* entry 偏移不在产物里（它是 Result 的字段）→ 写成 `<blob>.entry`（十六进制），
            `tools/compile_hook.c` 的自研路径靠它拿到入口。 */
         std::string epath = out_path + ".entry";
@@ -213,7 +216,7 @@ int main(int argc, char** argv) {
                              s.symbol.c_str());
             }
             std::fclose(fs);
-            std::printf("写出 %s（%zu 处 extern 跳板）\n", spath.c_str(), r.stubs.size());
+            std::cout << "写出 " << spath << "（" << r.stubs.size() << " 处 extern 跳板）\n";
         } else {
             std::fprintf(stderr, "写不出 %s（宿主会把 extern 桩当未知地址拒跑）\n", spath.c_str());
         }

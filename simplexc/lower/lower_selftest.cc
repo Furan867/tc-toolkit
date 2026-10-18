@@ -30,7 +30,10 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <iomanip>
+#include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -62,10 +65,10 @@ namespace {
 
 int g_failed = 0;
 
-void ok(const std::string& what) { std::printf("   ok   %s\n", what.c_str()); }
+void ok(const std::string& what) { std::cout << "   ok   " << what << "\n"; }
 
 void bad(const std::string& what) {
-    std::printf("   FAIL %s\n", what.c_str());
+    std::cout << "   FAIL " << what << "\n";
     g_failed++;
 }
 
@@ -648,15 +651,16 @@ public:
 std::vector<uint8_t> run_l2_coff(const std::string& objdir, bool with_stack_frame,
                                 const char* title) {
     (void)objdir;
-    std::printf("[L2] %s\n", title);
+    std::cout << "[L2] " << title << "\n";
     Case c = build_l2(with_stack_frame);
     sl::Program prog(c.ast);
     prog.build();
     for (const auto& d : prog.diagnostics()) {
-        std::printf("   diagnostic: 第 %d 行 %s\n", d.line, d.msg.c_str());
+        std::cout << "   diagnostic: 第 " << d.line << " 行 " << d.msg << "\n";
     }
     const std::vector<uint8_t> coff = prog.emit_object();
-    std::printf("[L2] COFF %zu 字节（函数 %d 个）\n", coff.size(), prog.function_count());
+    std::cout << "[L2] COFF " << coff.size() << " 字节（函数 " << prog.function_count()
+              << " 个）\n";
     if (coff.empty()) {
         bad("COFF 非空");
     } else {
@@ -669,14 +673,18 @@ std::vector<uint8_t> run_l2_coff(const std::string& objdir, bool with_stack_fram
         bad("COFF 能解析：" + err);
         return coff;
     }
-    std::printf("[L2] 节表：\n");
+    std::cout << "[L2] 节表：\n";
     bool only_allowed = true;
     uint32_t text_relocs = 0, text_non_rel32 = 0, dropped_relocs = 0, bad_abs = 0;
     for (const auto& s : info.sections) {
-        std::printf("   %-10s raw=%6u  reloc=%3u", s.name.c_str(), s.raw_size,
-                    static_cast<unsigned>(s.nreloc));
-        for (uint16_t t : s.reloc_types) std::printf(" %s", reloc_name(t));
-        std::printf("\n");
+        /* 局部流：`left`/`hex` 这类是持久状态，拼进 `cout` 就会污染后面所有输出。
+           `setw` 只作用于下一次输出，所以每次输出前都要重设。 */
+        std::ostringstream line;
+        line << "   " << std::left << std::setw(10) << s.name << " raw=" << std::right
+             << std::setw(6) << s.raw_size << "  reloc=" << std::setw(3)
+             << static_cast<unsigned>(s.nreloc);
+        for (uint16_t t : s.reloc_types) line << ' ' << reloc_name(t);
+        std::cout << line.str() << "\n";
         const bool allowed = s.name == ".text" || s.name == ".data" || s.name == ".bss" ||
                              (with_stack_frame && (s.name == ".pdata" || s.name == ".xdata"));
         if (!allowed) only_allowed = false;
@@ -709,8 +717,8 @@ std::vector<uint8_t> run_l2_coff(const std::string& objdir, bool with_stack_fram
     if (text_relocs > 0) ok(".text 里确实有重定位（内部调用 + extern 桩都是 PC 相对）");
     else bad(".text 里确实有重定位");
     if (with_stack_frame && dropped_relocs > 0) {
-        std::printf("[L2]   另有 %u 条 ADDR32NB 在 .pdata/.xdata（装配器按接口 §4-4 整节丢弃）\n",
-                    dropped_relocs);
+        std::cout << "[L2]   另有 " << dropped_relocs
+                  << " 条 ADDR32NB 在 .pdata/.xdata（装配器按接口 §4-4 整节丢弃）\n";
     }
     return coff;
 }
@@ -718,7 +726,7 @@ std::vector<uint8_t> run_l2_coff(const std::string& objdir, bool with_stack_fram
 /* ---------------------------------------------------------------- L3 */
 
 void run_l3_blob(const std::vector<uint8_t>& coff, const std::string& objdir, const char* title) {
-    std::printf("[L3] %s\n", title);
+    std::cout << "[L3] " << title << "\n";
     bool okf = false;
     const std::vector<uint8_t> shim = read_file(objdir + "/entry_shim.o", &okf);
     if (!okf) {
@@ -736,14 +744,15 @@ void run_l3_blob(const std::vector<uint8_t>& coff, const std::string& objdir, co
     objs.push_back({"rt_min.o", rt});
     DummyResolver resolver;
     const tc::AsmResult r = tc::assemble(objs, "__tc_entry", resolver);
-    std::printf("[L3] assemble: status=%d detail=`%s`\n", static_cast<int>(r.status),
-                r.detail.c_str());
-    std::printf("[L3] text=%llu rdata=%llu data=%llu bss=%llu stubs=%u relocs=%u\n",
-                (unsigned long long)r.text_size, (unsigned long long)r.rdata_size,
-                (unsigned long long)r.data_size, (unsigned long long)r.bss_size, r.stub_count,
-                r.reloc_count);
+    std::cout << "[L3] assemble: status=" << static_cast<int>(r.status) << " detail=`"
+              << r.detail << "`\n";
+    std::cout << "[L3] text=" << r.text_size << " rdata=" << r.rdata_size
+              << " data=" << r.data_size << " bss=" << r.bss_size << " stubs=" << r.stub_count
+              << " relocs=" << r.reloc_count << "\n";
     for (const auto& s : r.stubs) {
-        std::printf("[L3]   桩 +0x%llX %s\n", (unsigned long long)s.offset, s.symbol.c_str());
+        std::ostringstream line;
+        line << "[L3]   桩 +0x" << std::hex << std::uppercase << s.offset << " " << s.symbol;
+        std::cout << line.str() << "\n";
     }
     if (r.status != tc::AsmStatus::Ok) {
         bad("assemble status == Ok");
@@ -774,18 +783,22 @@ void run_l3_blob(const std::vector<uint8_t>& coff, const std::string& objdir, co
     } else {
         bad("entry_off 在码长内");
     }
-    std::printf("[L3] blob %zu 字节（机器码 %llu，entry=0x%llX）\n", b.size(),
-                (unsigned long long)r.blob.code_size(), (unsigned long long)r.blob.entry_off);
+    {
+        std::ostringstream line;
+        line << "[L3] blob " << b.size() << " 字节（机器码 " << r.blob.code_size()
+             << "，entry=0x" << std::hex << std::uppercase << r.blob.entry_off << "）";
+        std::cout << line.str() << "\n";
+    }
 }
 
 /* ---------------------------------------------------------------- L4 */
 
 void run_ir_case(const char* title, Case& c, const std::function<void(const std::string&)>& checks) {
-    std::printf("\n[L4] %s\n", title);
+    std::cout << "\n[L4] " << title << "\n";
     sl::Program prog(c.ast);
     prog.build();
     const std::string ir = prog.ir_text();
-    std::printf("----- IR\n%s----- 断言\n", ir.c_str());
+    std::cout << "----- IR\n" << ir << "----- 断言\n";
     checks(ir);
 }
 
@@ -852,32 +865,32 @@ int main(int argc, char** argv) {
     const std::string objdir = argc > 2 ? argv[2] : "build/objs";
     const bool sections = mode == "all" || mode == "coff" || mode == "blob";
     if (mode != "all" && mode != "coff" && mode != "blob" && mode != "ir" && mode != "probe") {
-        std::printf("用法：lower_selftest [all|coff|blob|ir|probe] [objdir=build/objs]\n");
+        std::cout << "用法：lower_selftest [all|coff|blob|ir|probe] [objdir=build/objs]\n";
         return 2;
     }
     if (sections) {
-        std::printf("\n== L2 手写 AST → COFF ==\n");
+        std::cout << "\n== L2 手写 AST → COFF ==\n";
         const std::vector<uint8_t> plain =
             run_l2_coff(objdir, false, "L2a 无栈帧（任务判据要的形态：只有 .text/.data/.bss）");
         if (plain.empty()) return 1;
         if (mode != "coff") {
-            std::printf("\n== L3a COFF → assemble::assemble() ==\n");
+            std::cout << "\n== L3a COFF → assemble::assemble() ==\n";
             run_l3_blob(plain, objdir, "L3a 无栈帧那个 COFF");
         }
-        std::printf("\n");
+        std::cout << "\n";
         const std::vector<uint8_t> framed = run_l2_coff(
             objdir, true,
             "L2b 带栈帧（get_time/memory_clear）—— 额外的 .pdata/.xdata 是接口 §4-4 要丢的那一类");
         if (framed.empty()) return 1;
         if (mode != "coff") {
-            std::printf("\n== L3b COFF → assemble::assemble() ==\n");
+            std::cout << "\n== L3b COFF → assemble::assemble() ==\n";
             run_l3_blob(framed, objdir, "L3b 带 .pdata/.xdata 的那个 COFF（验 §4-4 整节丢弃）");
         }
     } else if (mode == "ir") {
-        std::printf("[L3] 本次只请求 L4；L2/L3 用 `coff` / `blob` / `all` 跑\n");
+        std::cout << "[L3] 本次只请求 L4；L2/L3 用 `coff` / `blob` / `all` 跑\n";
     }
     if (mode == "all" || mode == "ir") {
-        std::printf("\n== L4 语义档案的 IR 证据 ==\n");
+        std::cout << "\n== L4 语义档案的 IR 证据 ==\n";
         run_l4();
     }
     if (mode == "probe") {
@@ -887,8 +900,9 @@ int main(int argc, char** argv) {
         for (const auto& d : prog.diagnostics()) {
             std::fprintf(stderr, "diagnostic: 第 %d 行 %s\n", d.line, d.msg.c_str());
         }
-        std::printf("%s", prog.ir_text().c_str());
+        std::cout << prog.ir_text();
     }
-    std::printf("\n%s（失败 %d 条）\n", g_failed == 0 ? "全部断言通过" : "有失败", g_failed);
+    std::cout << "\n" << (g_failed == 0 ? "全部断言通过" : "有失败") << "（失败 " << g_failed
+              << " 条）\n";
     return g_failed == 0 ? 0 : 1;
 }

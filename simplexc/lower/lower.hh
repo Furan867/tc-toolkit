@@ -346,6 +346,9 @@ protected:
     /* `in_scope("名字")` ① 档的名字表：整单元预扫的 `def` / `type` / `const #`，与引用点位置无关
      * （U-L14 §0）。`var` 故意不在里面 —— 它的可见性跟声明顺序走，属于 ② 档。 */
     std::set<std::string> in_scope_names_;
+    /* 程序根语句树里的嵌套 def：整单元可见（任何函数里都能按名调用），与顶层 `defs_` 同档 ——
+     * U-L14 §2 的 T8/U1：引用点在别的 `def` 体里、声明在 `run_sim` 体里的名字判真。 */
+    std::map<std::string, const DefStmt*> root_defs_;
 
     struct FieldRef {
         int off = 0;
@@ -403,7 +406,6 @@ public:
 private:
     void scan_decls();
     void scan_scope_names();
-    void collect_scope_names(const Block& block);
     void make_context();
     void make_types();
     void make_globals();

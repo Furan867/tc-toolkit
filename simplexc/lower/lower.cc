@@ -184,6 +184,36 @@ void for_each_child(const Node& n, F&& f) {
  * （Python 里是任意精度整数，不会溢出）。 */
 uint64_t neg64(uint64_t x) { return ~x + 1; }
 
+/* 程序根（`run_sim:` 体）语句树里属于**整单元**的声明：嵌套 def 与 `const #`。
+ * 两个消费者各取所需：`in_scope` ① 档的名字表（`Program::scan_scope_names`）、程序根函数里的
+ * **前向可见**（`Program::emit_main` 先全部登记 —— 006/058 的调用点排在声明之前）。 */
+struct RootDecls {
+    std::vector<const DefStmt*> defs;
+    std::vector<const VarDeclStmt*> consts;
+};
+
+/* 递归地把这些声明收进 `out`：块（While/If/#if/Switch）递归下去，但**不钻 `NK::Def` 的体** ——
+ * def 体里的名字属于那个 def 自己的作用域（U-L14 T5/T5d：写在某个 def 体里的嵌套 def，别处查它是假）。 */
+void collect_root_decls(const Block& block, RootDecls& out) {
+    for (const StmtPtr& st : block.stmts) {
+        if (const auto* d = as<DefStmt>(st.get())) {
+            out.defs.push_back(d);
+        } else if (const auto* v = as<VarDeclStmt>(st.get())) {
+            if (v->kw == "const" && !v->name.empty() && v->name[0] == '#') out.consts.push_back(v);
+        } else if (const auto* w = as<WhileStmt>(st.get())) {
+            collect_root_decls(*w->block, out);
+        } else if (const auto* i = as<IfStmt>(st.get())) {
+            for (const auto& case_ : i->cases) collect_root_decls(*case_->block, out);
+            if (i->else_block != nullptr) collect_root_decls(*i->else_block, out);
+        } else if (const auto* p = as<PpIfStmt>(st.get())) {
+            for (const auto& case_ : p->cases) collect_root_decls(*case_->block, out);
+            if (p->else_block != nullptr) collect_root_decls(*p->else_block, out);
+        } else if (const auto* s = as<SwitchStmt>(st.get())) {
+            for (const auto& case_ : s->cases) collect_root_decls(*case_->block, out);
+        }
+    }
+}
+
 }  // namespace
 
 /* ================================================================ 类型 */
@@ -1671,6 +1701,11 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
     if (const Binding* b = lookup(name)) {
         if (b->kind == Binding::Kind::Def) return call_nested(*b, node);
     }
+    /* 程序根语句树里的嵌套 def 与顶层 def 一样**整单元可见、且前向可见**：006/058 的
+     * `if in_scope("get_input") { … get_input(…) }` 的调用点在顶层 def `mode_run` 里，
+     * 而声明在程序根的 `run_sim` 体里（U-L14 §2 的 T8/U1：两种位置的引用点都判真）。 */
+    auto rd = root_defs_.find(name);
+    if (rd != root_defs_.end()) return call_nested(Binding::nested(rd->second), node);
     if (name == "load") return builtin_load(node);
     if (name == "store") return builtin_store(node);
     if (name == "raw_cast") return builtin_raw_cast(node);
@@ -2547,30 +2582,14 @@ void Program::scan_scope_names() {
             in_scope_names_.insert(st->name);
         }
     }
-    if (ast_.label != nullptr) collect_scope_names(*ast_.label->body);
-}
-
-/* 程序根（`run_sim:` 体）的整棵语句树：块递归下去，但**不钻 `NK::Def` 的体** —— def 体里的名字
- * 属于那个 def 自己的作用域（U-L14 T5/T5d：写在某个 def 体里的嵌套 def，别处查它是假）。 */
-void Program::collect_scope_names(const Block& block) {
-    for (const StmtPtr& st : block.stmts) {
-        if (const auto* d = as<DefStmt>(st.get())) {
+    if (ast_.label != nullptr) {
+        RootDecls root;
+        collect_root_decls(*ast_.label->body, root);
+        for (const DefStmt* d : root.defs) {
             in_scope_names_.insert(d->name);
-        } else if (const auto* v = as<VarDeclStmt>(st.get())) {
-            if (v->kw == "const" && !v->name.empty() && v->name[0] == '#') {
-                in_scope_names_.insert(v->name);
-            }
-        } else if (const auto* w = as<WhileStmt>(st.get())) {
-            collect_scope_names(*w->block);
-        } else if (const auto* i = as<IfStmt>(st.get())) {
-            for (const auto& case_ : i->cases) collect_scope_names(*case_->block);
-            if (i->else_block != nullptr) collect_scope_names(*i->else_block);
-        } else if (const auto* p = as<PpIfStmt>(st.get())) {
-            for (const auto& case_ : p->cases) collect_scope_names(*case_->block);
-            if (p->else_block != nullptr) collect_scope_names(*p->else_block);
-        } else if (const auto* s = as<SwitchStmt>(st.get())) {
-            for (const auto& case_ : s->cases) collect_scope_names(*case_->block);
+            root_defs_[d->name] = d;
         }
+        for (const VarDeclStmt* v : root.consts) in_scope_names_.insert(v->name);
     }
 }
 

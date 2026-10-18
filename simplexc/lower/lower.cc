@@ -112,6 +112,11 @@ void for_each_child(const Node& n, F&& f) {
         case NK::Block:
             for (const auto& s : static_cast<const Block&>(n).stmts) f(*s);
             break;
+        /* 裸块的体是 `BlockStmt` 自己那个字段，不走 `NK::Block` 那条 —— 漏掉它会让
+         * `captures_of` 看不见块内的自由变量（闭包捕获表少一项）。 */
+        case NK::BlockStmt:
+            f(*static_cast<const BlockStmt&>(n).block);
+            break;
         case NK::VarDecl:
             f(*static_cast<const VarDeclStmt&>(n).init);
             break;
@@ -434,6 +439,7 @@ const char* kind_name(NK k) {
         case NK::Template: return "TemplateExpr";
         case NK::FieldInit: return "FieldInit";
         case NK::Block: return "Block";
+        case NK::BlockStmt: return "BlockStmt";
         case NK::Param: return "Param";
         case NK::VarDecl: return "VarDeclStmt";
         case NK::Assign: return "AssignStmt";
@@ -888,6 +894,12 @@ void Lower::lower_stmt(const Stmt& st) {
             case NK::Return: s_ReturnStmt(static_cast<const ReturnStmt&>(st)); break;
             case NK::Switch: s_SwitchStmt(static_cast<const SwitchStmt&>(st)); break;
             case NK::Def: s_DefStmt(static_cast<const DefStmt&>(st)); break;
+            /* 裸块 = 一层作用域（实测 `work/tmp/bareblock/b01_scope.si`）：`lower_block`
+             * 自带 scope push/pop，正是要的语义；break/return 是语句位置的关键字，
+             * 块不构成边界，所以不需要额外处理。 */
+            case NK::BlockStmt:
+                lower_block(*static_cast<const BlockStmt&>(st).block);
+                break;
             default:
                 throw Unsupported("语句形态 " + std::string(kind_name(st.kind)), st.src_line);
         }
@@ -1641,6 +1653,10 @@ TyRef Lower::static_type(const Node& node) {
                 if ((name == "load" || name == "raw_cast") && !n.type_args.empty()) {
                     return ty_of_ref(*n.type_args[0], n.src_line);
                 }
+                /* `array(<T>, n)`：`var a = array(<U8>, 16)` 的静态类型决定 `a[i]` 的步长。 */
+                if (name == "array" && !n.type_args.empty()) {
+                    return make_array(ty_of_ref(*n.type_args[0], n.src_line));
+                }
                 if ((name == "min" || name == "max" || name == "asr" || name == "clz") &&
                     !n.args.empty()) {
                     return static_type(*n.args[0]);
@@ -1758,6 +1774,7 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
     if (name == "clz") return builtin_clz(node);
     if (name == "ror") return builtin_ror(node);
     if (name == "min" || name == "max") return builtin_minmax(name, node);
+    if (name == "array") return builtin_array(node);
     if (name == "in_scope" || name == "type_of" || name == "size") {
         throw Unsupported(name + "() 只支持编译期形态", node.src_line);
     }
@@ -1966,6 +1983,42 @@ V Lower::builtin_minmax(const std::string& name, const CallExpr& node) {
     LLVMValueRef cnd = LLVMBuildICmp(bd_, pred, x, y, "mm");
     LLVMValueRef ll = LLVMBuildSelect(bd_, cnd, llv(a), llv(b), "mmv");
     return V::instr(mask_ll(ll, ty->bits), ty);
+}
+
+V Lower::builtin_array(const CallExpr& node) {
+    /* `array(<T>, n)`：参考内建（前缀与 98 份语料里都没有 `def array`），返回定长数组。
+     * 语义实测（参考编译器 + 差分宿主，片段/原始输出见 `work/tmp/arraytask/` 与
+     * `docs/notes/2026-10-18-array.md`）：
+     *   · 值是**指向载荷的指针**，载荷前 8 字节是 Nim 头，`头 >> 16 == n`（与 `.len()`
+     *     的读法一致，`len_of` 已支持 Array）；
+     *   · 载荷**零初始化**，元素按 U-L1 的字节步长紧密排列（`<U8>` → 1、`<Int>` → 8）；
+     *   · 每个调用点得到**自己的**缓冲区（参考在堆上分配，首址固定）。
+     * 我们把它做成**每个调用点一枚私有全局**（头 + 零载荷）。语料里 `array()` 都在
+     * 「建表」函数里（每次运行只调一次），所以加载期的零初始化等价于参考的每次分配零初始化。 */
+    if (node.type_args.size() != 1 || node.args.size() != 1) {
+        throw Unsupported("array(<T>, n) 的形态", node.src_line);
+    }
+    TyRef elem = ty_of_ref(*node.type_args[0], node.src_line);
+    const uint64_t count = need_const(cv(*node.args[0]), node.src_line);
+    if (count > (uint64_t{1} << 32)) {
+        throw Unsupported("array 的长度 " + std::to_string(count) + " 太大", node.src_line);
+    }
+    const uint64_t payload = count * static_cast<uint64_t>(storage_bytes(*elem));
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    const uint64_t header = count << 16;
+    std::vector<LLVMValueRef> elems;
+    for (int i = 0; i < 8; ++i) {
+        elems.push_back(LLVMConstInt(i8, (header >> (8 * i)) & 0xFF, 0));
+    }
+    elems.resize(static_cast<size_t>(8 + payload), LLVMConstInt(i8, 0, 0));
+    LLVMTypeRef arrty = LLVMArrayType2(i8, elems.size());
+    const std::string gname =
+        ".array" + std::to_string(node.src_line) + "_" + std::to_string(array_serial_++);
+    LLVMValueRef g = LLVMAddGlobal(module(), arrty, gname.c_str());
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+    LLVMSetInitializer(g, LLVMConstArray2(i8, elems.data(), elems.size()));
+    std::vector<LLVMValueRef> gi{const_int(0), const_int(8)};
+    return V::instr(LLVMConstGEP2(arrty, g, gi.data(), 2), make_array(elem));
 }
 
 V Lower::call_method(const MemberExpr& callee, const CallExpr& node) {

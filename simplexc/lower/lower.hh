@@ -322,6 +322,7 @@ protected:
     V builtin_clz(const CallExpr& node);
     V builtin_ror(const CallExpr& node);
     V builtin_minmax(const std::string& name, const CallExpr& node);
+    V builtin_array(const CallExpr& node);
     V call_method(const MemberExpr& callee, const CallExpr& node);
     V call_prefix(const std::string& name, const CallExpr& node);
     LLVMValueRef get_extern(const std::string& name, const TyRef& ret_ty,
@@ -377,6 +378,8 @@ protected:
     std::map<std::string, std::map<std::string, FieldRef>> field_offsets_;
     std::map<std::string, LLVMTypeRef> struct_ll_;
     std::map<std::string, V> str_pool_;
+    /* `array(<T>, n)` 每个调用点一枚私有全局：同名不同点会撞车，序号保证唯一。 */
+    int array_serial_ = 0;
     std::map<std::string, LLVMValueRef> helpers_;   /* 模板插值用的内联辅助函数（按需生成） */
 
     struct Fn {

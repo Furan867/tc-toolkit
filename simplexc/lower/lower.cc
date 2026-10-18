@@ -1641,7 +1641,7 @@ TyRef Lower::static_type(const Node& node) {
                 if ((name == "load" || name == "raw_cast") && !n.type_args.empty()) {
                     return ty_of_ref(*n.type_args[0], n.src_line);
                 }
-                if ((name == "min" || name == "max" || name == "asr" || name == "ror") &&
+                if ((name == "min" || name == "max" || name == "asr" || name == "clz") &&
                     !n.args.empty()) {
                     return static_type(*n.args[0]);
                 }
@@ -1755,6 +1755,7 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
     if (name == "store") return builtin_store(node);
     if (name == "raw_cast") return builtin_raw_cast(node);
     if (name == "asr") return builtin_asr(node);
+    if (name == "clz") return builtin_clz(node);
     if (name == "ror") return builtin_ror(node);
     if (name == "min" || name == "max") return builtin_minmax(name, node);
     if (name == "in_scope" || name == "type_of" || name == "size") {
@@ -1865,6 +1866,35 @@ V Lower::builtin_asr(const CallExpr& node) {
     }
     LLVMValueRef ll = LLVMBuildAShr(bd_, sext64(llv(x), bits), amt, "asr");
     return V::instr(mask_ll(ll, bits), x.ty);
+}
+
+/* `llvm.ctlz.i64` 的声明。i1 那个参数是 `is_zero_undef`，传 false：clz(0) 给 64。 */
+LLVMValueRef Lower::ensure_clz_fn() {
+    auto hit = helpers_.find("ctlz");
+    if (hit != helpers_.end()) return hit->second;
+    LLVMTypeRef params[2] = {i64_, LLVMInt1TypeInContext(ctx())};
+    LLVMValueRef fn =
+        LLVMAddFunction(module(), "llvm.ctlz.i64", LLVMFunctionType(i64_, params, 2, 0));
+    helpers_["ctlz"] = fn;
+    return fn;
+}
+
+V Lower::builtin_clz(const CallExpr& node) {
+    /* 数前导零的范围是**操作数声明的位宽**，不是 64：137 的注释把 `Int` 操作数钉在 64
+     * （`clz(input.input)` 的 `input.input` 是 U8 → 数 8 位里的前导零）。所以用 i64 的 ctlz
+     * 再减去「64 - 位宽」——不必为每种位宽各声明一条 intrinsic。 */
+    if (node.args.size() != 1) throw Unsupported("clz(x) 的形态", node.src_line);
+    V x = e(*node.args[0]);
+    if (!is_int(*x.ty)) {
+        throw Unsupported(std::string("clz 用在 ") + ty_kind_name(x.ty->kind), node.src_line);
+    }
+    const int bits = x.ty->bits;
+    LLVMValueRef v = mask_ll(llv(x), bits);
+    /* 第二个参数是 i1（`const_int` 给的是 i64，直接传会撞「参数类型不匹配」）。 */
+    LLVMValueRef zero = LLVMConstInt(LLVMInt1TypeInContext(ctx()), 0, 0);
+    LLVMValueRef call = emit_call(ensure_clz_fn(), {v, zero});
+    if (bits == 64) return V::instr(call, x.ty);
+    return V::instr(LLVMBuildSub(bd_, call, const_int(uint64_t(64 - bits)), "clz"), x.ty);
 }
 
 V Lower::builtin_ror(const CallExpr& node) {

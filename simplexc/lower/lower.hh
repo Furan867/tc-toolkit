@@ -292,6 +292,8 @@ protected:
        `__simplexc_copy(ptr dst, ptr src, u64 n) -> dst + n`。 */
     LLVMValueRef ensure_dec_fn();
     LLVMValueRef ensure_copy_fn();
+    /* `llvm.ctlz.i64` 的声明（`clz` 用，见 `builtin_clz`）。 */
+    LLVMValueRef ensure_clz_fn();
 
     /* ---- 运算（类型统一 + 常量折叠 + 逐 op 的参考行为） */
     TyRef unify(const TyRef& a, const TyRef& b, int line);
@@ -317,6 +319,7 @@ protected:
     V builtin_store(const CallExpr& node);
     V builtin_raw_cast(const CallExpr& node);
     V builtin_asr(const CallExpr& node);
+    V builtin_clz(const CallExpr& node);
     V builtin_ror(const CallExpr& node);
     V builtin_minmax(const std::string& name, const CallExpr& node);
     V call_method(const MemberExpr& callee, const CallExpr& node);

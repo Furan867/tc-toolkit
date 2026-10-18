@@ -228,6 +228,15 @@ void collect_root_decls(const Block& block, RootDecls& out) {
     }
 }
 
+/* 模板里的一段是「按名字直接调用」时返回被调名，其它形态返回 nullptr。
+ * 用途见 `template_expr` 里对参考「每个 def 一份帧」的模拟。 */
+const std::string* callee_name_of(const Expr& e) {
+    const auto* call = as<CallExpr>(&e);
+    if (call == nullptr) return nullptr;
+    const auto* id = as<IdentExpr>(call->callee.get());
+    return id == nullptr ? nullptr : &id->name;
+}
+
 }  // namespace
 
 /* ================================================================ 类型 */
@@ -2841,6 +2850,23 @@ V Lower::template_expr(const TemplateExpr& node) {
     std::vector<V> vals;
     vals.reserve(node.parts.size());
     for (const ExprPtr& p : node.parts) vals.push_back(e(*p));
+
+    /* 参考的每个 def 只有**一份帧**（非重入），所以同一模板里对**同一个 def** 的多次调用共用同一块
+       结果缓冲：后一次调用连内容带头里的长度一起覆写前一次的，于是**每一段都渲染出最后一次调用的
+       结果**（实测 `work/tmp/uibuf/probe_ui.py`：A/S/W 例如此；T/U/V/Z 例说明两个不同 def 之间不串，
+       B/E/F/G/H 例说明字面量与变量不串）。我们这边每次调用各拿一块栈缓冲，不模拟这条就差字节
+       （语料 001/047/…/054 正是 `{get_binary_repr(x,1)}    {get_binary_repr(y,8)}` 这一形）。
+       调用**已经**求过值了，这里只把前一段的值改成后一段的（同一个 SSA 指针，不会重复调用）。 */
+    std::map<std::string, std::size_t> last_same_callee;
+    for (std::size_t i = 0; i < node.parts.size(); ++i) {
+        const std::string* name = callee_name_of(*node.parts[i]);
+        if (name != nullptr && vals[i].ty->kind == TyKind::Str) last_same_callee[*name] = i;
+    }
+    for (std::size_t i = 0; i < node.parts.size(); ++i) {
+        const std::string* name = callee_name_of(*node.parts[i]);
+        if (name == nullptr || vals[i].ty->kind != TyKind::Str) continue;
+        if (last_same_callee[*name] != i) vals[i] = vals[last_same_callee[*name]];
+    }
 
     /* 缓冲尺寸：文字段 + 每段的最坏字节数。**没有 Str 段时它是编译期常量** → 把 alloca 放进
        entry 块（静态 alloca：循环里不涨栈，也不会拉出 `___chkstk_ms`）；只有 Str 段的长度是

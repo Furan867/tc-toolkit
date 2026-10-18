@@ -468,6 +468,10 @@ std::unique_ptr<Stmt> Parser::parse_return(const Tok& t) {
   }
   auto r = std::make_unique<ReturnStmt>(t.line);
   r->value = parse_expr();
+  /* 参考编译器把 `return <expr>)` 里多出的那一个 `)` 静默吞掉（产物与删掉它逐字节相同），
+     但同一形状写在语句位置它是 fatal（front_end.nim(2688,28) Missing open paren）——
+     所以只在 `return` 这一处放宽，语句路径照旧由 parse_primary 报错。 */
+  if (at("op", ")")) next();
   return r;
 }
 

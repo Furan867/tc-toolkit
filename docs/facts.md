@@ -323,7 +323,9 @@ lowering 未做）+ **2 条空 struct**（`type Input Struct { }`，U-L4 布局�
       + 我复跑的 `work/tmp/fixmc/{seq,xorshift}_{ref,ours}.jsonl`
 最后验证：2026-10-17
 
-### M4 结果：游戏内 RV32IM 主频 —— ours **25.8 MHz** vs reference **5.37 MHz**（约 **4.8×**）
+### M4 结果（**Python 原型的 -O0 产物**）：游戏内 RV32IM 主频 —— ours **25.8 MHz** vs reference **5.37 MHz**（约 **4.8×**）
+⚠️ 这里的 ours 是 Python 原型的 **-O0 机器码**成绩（`ir_build.py` 把 `CodeGenOptLevel` 写成 0）。
+数字仍然真实，但**别拿它当产品基线** —— 产品实现的同题成绩见下一条（40.375 MHz）。
 **判据入口一条命令可复现**：
 `python tools/bench_rewrite.py --variant reference:off --variant ours:off --seconds 40 --json <out>.json`
 → `reference #009 5.369 MHz`、`ours #010 25.835 MHz`、**+381.2%**（各 39 样本；`opt.ini` 自动恢复、游戏不崩）。
@@ -333,6 +335,16 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 **中位数对切换过渡点不敏感**（drop 0/1/3/5：reference 5.369/5.372/5.369/5.368；ours 25.835/25.856/25.888/25.900），
 而 mean 被第一个过渡点（3.30 MHz）拉低（5.309 vs 5.361）—— 这就是设计 §7 决策 3 选 median 的实测理由。
 验证：`work/tmp/m4/ab3.json`（`schema=1`，含 raw samples）；`work/freq/bench_*.tsv`
+最后验证：2026-10-18
+
+### M4.5 游戏内验收：产品实现（C++ 前端 + 进程内编译）ours **40.375 MHz** vs reference **5.364 MHz**（**7.53×**）
+同一次游戏会话内一条命令复现：`python tools/bench_rewrite.py --variant reference:off --variant ours:off --json <out>.json`
+→ `reference #006 5.364 MHz`（7 样本）、`ours #007 40.375 MHz`（7 样本）。`hook.log` 原文：
+`007  impl=ours  mode=ours  result=ok  budget_ms=5000  guard=veh` —— 无 error 行、无 `ours_failed`/`fallback`，游戏同 PID 存活。
+同一份源码（sha `2461414c…`）两个实现的产物：ours **26404 B** / entry `0x63D0`；reference **219088 B** / entry `0x215B`。
+相对 M4 的 -O0 产物（58612 B / 25.835 MHz）：体积小 2.22 倍、主频 +56.3%（7.53× vs 4.81×）。
+**这条只证「快」，不证「对」** —— 正确性由宿主面的逐 tick 等价承担（`check.py` 的 lower_equiv 步）。
+验证：`work/freq/m45_shell.json`、`work/freq/bench_20261018_133133.tsv`、`docs/notes/2026-10-18-m45-game-bench.md`
 最后验证：2026-10-18
 
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）

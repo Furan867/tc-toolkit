@@ -368,6 +368,16 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 → 先死在更早的一层（词法 `$`，第 172 行）
 最后验证：2026-10-18
 
+### U-L14：`#if in_scope(name)` 的可见性规则（2026-10-18 定案）
+**真**：顶层 `def`（前/后）· **程序根语句树（`ast_.label` 体）里的嵌套 `def`**（前/后、引用点在别的 def 里也算）·
+顶层 `var` / `const #X` / `type` / enum 成员名 · 自己的参数与同体局部 · **stdlib 前缀里的名字**。`#if` 与裸 `if` 同规则。
+**假**：某个 `def` **体内**的嵌套 `def` · 别的函数的参数 · label 名 · 内建（`store`/`raw_cast`）·
+`var` 声明在引用点**之后**（`def`/`type`/`const #` 后置仍真）· 无 `#` 的顶层 `const` · 未定义名。
+名字表取自**未经 `in_scope` 裁剪的原 AST**（两遍，但不必不动点）。
+验证：`docs/notes/2026-10-18-ul14-in-scope.md`（45 条片段 × 参考产物字节 + `objdump` 复核；
+另用 `nest.py` 套回 98 份：95 份翻转 / 190 条 (文件,名字)，40 份 TickDiff 全在名单里）
+最后验证：2026-10-18
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

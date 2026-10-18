@@ -317,6 +317,7 @@ protected:
     V builtin_store(const CallExpr& node);
     V builtin_raw_cast(const CallExpr& node);
     V builtin_asr(const CallExpr& node);
+    V builtin_ror(const CallExpr& node);
     V builtin_minmax(const std::string& name, const CallExpr& node);
     V call_method(const MemberExpr& callee, const CallExpr& node);
     V call_prefix(const std::string& name, const CallExpr& node);

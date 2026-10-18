@@ -1641,7 +1641,8 @@ TyRef Lower::static_type(const Node& node) {
                 if ((name == "load" || name == "raw_cast") && !n.type_args.empty()) {
                     return ty_of_ref(*n.type_args[0], n.src_line);
                 }
-                if ((name == "min" || name == "max" || name == "asr") && !n.args.empty()) {
+                if ((name == "min" || name == "max" || name == "asr" || name == "ror") &&
+                    !n.args.empty()) {
                     return static_type(*n.args[0]);
                 }
                 if (name == "sleep" || name == "memory_clear" || name == "memory_copy" ||
@@ -1754,6 +1755,7 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
     if (name == "store") return builtin_store(node);
     if (name == "raw_cast") return builtin_raw_cast(node);
     if (name == "asr") return builtin_asr(node);
+    if (name == "ror") return builtin_ror(node);
     if (name == "min" || name == "max") return builtin_minmax(name, node);
     if (name == "in_scope" || name == "type_of" || name == "size") {
         throw Unsupported(name + "() 只支持编译期形态", node.src_line);
@@ -1863,6 +1865,48 @@ V Lower::builtin_asr(const CallExpr& node) {
     }
     LLVMValueRef ll = LLVMBuildAShr(bd_, sext64(llv(x), bits), amt, "asr");
     return V::instr(mask_ll(ll, bits), x.ty);
+}
+
+V Lower::builtin_ror(const CallExpr& node) {
+    /* `ror` 在参考里**两条路不一致**（实测：`work/tmp/fixsmall/ror_probe.py` 读 ui_buffer 里
+     * 参考渲染出的字符串，`ror_cmp.py` 再与我们的产物逐值对照）：
+     *
+     * · 两个操作数都是常量时参考在**编译期折叠**，折的是「按源类型符号性扩成 64 位的值与
+     *   旋转量按 64 取模」的 64 位旋转：`ror(U8 0x81, 1)` 给 64（按 W=8 旋转会给 192）、
+     *   `ror(U32 1, 32)` 给 0、`ror(S32 1, 1)` 给 0。
+     * · 有一个是运行期值时，参考按**操作数位宽**算：旋转量按 W 取模，再做
+     *   `(x >> n) | (x << (W - n))` 截回 W 位（W=32 时就是普通的 32 位循环右移，
+     *   `ror(U32 0x80000001, 1)` 给 0xC0000000，与折叠那条路的 0x40000000 不同）。
+     *
+     * 只写一条路就会与参考分叉，所以两条路各按实测来。旋转量只看低位，不必像 `asr` 那样
+     * 先转成操作数的类型。 */
+    if (node.args.size() != 2) throw Unsupported("ror(x, n) 的形态", node.src_line);
+    V x = e(*node.args[0]);
+    V n = e(*node.args[1]);
+    if (!is_int(*x.ty)) {
+        throw Unsupported(std::string("ror 用在 ") + ty_kind_name(x.ty->kind), node.src_line);
+    }
+    if (!is_int(*n.ty)) {
+        throw Unsupported(std::string("ror 的旋转量是 ") + ty_kind_name(n.ty->kind),
+                          node.src_line);
+    }
+    const int bits = x.ty->bits;
+    auto cx = pat_const(x);
+    auto cn = pat_const(n);
+    if (cx && cn) {
+        /* `pat_const` 给的就 是按源类型符号性扩展后的 64 位内容，正好是折叠那一路的操作数。 */
+        const uint64_t amt = *cn & 63;
+        const uint64_t r = (*cx >> amt) | (*cx << ((64 - amt) & 63));
+        return V::konst(x.ty, r & mask_of(bits));
+    }
+    const uint64_t sm = uint64_t(bits - 1);
+    LLVMValueRef v = mask_ll(llv(x), bits);
+    LLVMValueRef amt = LLVMBuildAnd(bd_, llv(n), const_int(sm), "amt");
+    LLVMValueRef inv = LLVMBuildAnd(
+        bd_, LLVMBuildSub(bd_, const_int(uint64_t(bits)), amt, "amtc"), const_int(sm), "amti");
+    LLVMValueRef lo = LLVMBuildLShr(bd_, v, amt, "rr");
+    LLVMValueRef hi = LLVMBuildShl(bd_, v, inv, "rl");
+    return V::instr(mask_ll(LLVMBuildOr(bd_, lo, hi, "ror"), bits), x.ty);
 }
 
 V Lower::builtin_minmax(const std::string& name, const CallExpr& node) {

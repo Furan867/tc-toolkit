@@ -322,6 +322,24 @@ uint64_t mask_of(int bits) {
     return bits >= 64 ? kMask64 : (uint64_t{1} << bits) - 1;
 }
 
+/* 捕获签名用的类型拼写：只要**同一个变量的不同宽度/种类能分开**就够（同名在不同调用点绑不同
+ * 类型时 IR 函数体里的读写宽度不同，不能复用同一个实例）。 */
+std::string ty_key(const Ty& ty) {
+    switch (ty.kind) {
+        case TyKind::Int:
+            if (ty.is_bool) return "bool";
+            return std::string(ty.is_signed ? "s" : "u") + std::to_string(ty.bits);
+        case TyKind::Ptr: return "ptr";
+        case TyKind::Str: return "str";
+        case TyKind::Enum: return "enum:" + ty.name;
+        case TyKind::Struct: return "struct:" + ty.name;
+        case TyKind::Array:
+            return "arr:" + (ty.elem != nullptr ? ty_key(*ty.elem) : std::string("?"));
+        case TyKind::Void: return "void";
+    }
+    return "?";
+}
+
 const char* ty_kind_name(TyKind k) {
     switch (k) {
         case TyKind::Void: return "void";
@@ -1171,11 +1189,29 @@ Closure Lower::captures_of(const DefStmt& st) {
     Closure out;
     std::set<const DefStmt*> visiting;
     visiting.insert(&st);   /* 兄弟 def 互调会绕回来，先把自己放进环里 */
-    collect_captures(st, out, visiting);
+    std::vector<std::string> params;
+    for (const auto& p : st.params) params.push_back(p->name);
+    collect_captures(*st.body, params, false, out, visiting);
     return out;
 }
 
-void Lower::collect_captures(const DefStmt& st, Closure& out,
+Closure Lower::def_captures(const FunctionDef& d) {
+    /* 顶层 def 是**真函数**、在调用点展开的效果只能靠捕获表还原：这里算的是「它（连同它体里
+     * 按名调用的嵌套 def）真正用到、而调用点绑在栈槽/捕获上的名字」。一个 def 的自由名全落在
+     * 模块级（全局 / const / 枚举 / 前缀 / 其它 def）时结果是空的 ⇒ 签名与应用面都不变。
+     * `into_own_defs`：顶层 def 体里**自己声明**的嵌套 def 也要往下摊平 —— 它的捕获在它被
+     * 调用时才懒生成，而那一刻看到的是顶层 def 的作用域，所以顶层 def 必须先把这个名字捕进来
+     * （110：root → `mode_run` → `handle_test_result` → `get_input_switched` 的 `seen`）。 */
+    Closure out;
+    std::set<const DefStmt*> visiting;
+    std::vector<std::string> params;
+    for (const auto& p : d.params) params.push_back(p->name);
+    collect_captures(*d.body, params, true, out, visiting);
+    return out;
+}
+
+void Lower::collect_captures(const Block& body, const std::vector<std::string>& params,
+                             bool into_own_defs, Closure& out,
                              std::set<const DefStmt*>& visiting) {
     /* 嵌套 def 体里引用了哪些**外层局部**（按引用捕获 → 传 alloca 指针）。自己的参数、`var`/
      * `let`/内层 `def` 都算「自己的」，同名遮蔽外层 —— 不往内层 `DefStmt` 的体里钻：内层 def 真被
@@ -1187,47 +1223,59 @@ void Lower::collect_captures(const DefStmt& st, Closure& out,
      * 只能由**调用它的那一层**带进来。006：`handle_test_result` 调 `halt`，`halt` 用
      * `run_sim` 体的 `burst_target_cycle` —— 后者得先被 `handle_test_result` 捕获、再原样传给
      * `halt`（110 的 `seen` / 075 的 `test` 同形）。 */
-    std::set<std::string> own;
-    for (const auto& p : st.params) own.insert(p->name);
+    std::set<std::string> own(params.begin(), params.end());
+    /* 本体内声明的嵌套 def：名字进 `own`（不当变量捕获），但在 `into_own_defs` 时要顺着它摊平。 */
+    std::map<std::string, const DefStmt*> own_defs;
 
     std::function<void(const Node&)> collect = [&](const Node& n) {
         if (n.kind == NK::VarDecl) own.insert(static_cast<const VarDeclStmt&>(n).name);
-        if (n.kind == NK::Def) own.insert(static_cast<const DefStmt&>(n).name);
+        if (n.kind == NK::Def) {
+            const auto& d = static_cast<const DefStmt&>(n);
+            own.insert(d.name);
+            if (into_own_defs) own_defs.emplace(d.name, &d);
+        }
         for_each_child(n, collect);
     };
-    collect(*st.body);
+    collect(body);
 
     std::function<void(const Node&)> rec = [&](const Node& n) {
         if (n.kind == NK::Def) return;   /* 内层 def 有自己的作用域 */
         if (n.kind == NK::Ident) {
             const auto& id = static_cast<const IdentExpr&>(n);
-            if (own.count(id.name) != 0) return;
             const DefStmt* target = nullptr;
-            const Binding* b = lookup(id.name);
-            if (b != nullptr) {
-                if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
-                    bool known = false;
-                    for (const auto& c : out.caps) known = known || c.name == id.name;
-                    if (!known) out.caps.push_back(Capture{id.name, b->ptr, b->ty});
-                    return;
+            if (own.count(id.name) == 0) {
+                const Binding* b = lookup(id.name);
+                if (b != nullptr) {
+                    if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
+                        bool known = false;
+                        for (const auto& c : out.caps) known = known || c.name == id.name;
+                        if (!known) out.caps.push_back(Capture{id.name, b->ptr, b->ty});
+                        return;
+                    }
+                    if (b->kind == Binding::Kind::Def) target = b->def;
+                } else {
+                    /* 程序根语句树里的嵌套 def 不在词法作用域里（`call_named` 走 root_defs_ 那条路），
+                     * 这里用同一张表认名字，否则它捕获的外层变量传不进去。 */
+                    auto rd = root_defs_.find(id.name);
+                    if (rd != root_defs_.end()) target = rd->second;
                 }
-                if (b->kind == Binding::Kind::Def) target = b->def;
-            } else {
-                /* 程序根语句树里的嵌套 def 不在词法作用域里（`call_named` 走 root_defs_ 那条路），
-                 * 这里用同一张表认名字，否则它捕获的外层变量传不进去。 */
-                auto rd = root_defs_.find(id.name);
-                if (rd != root_defs_.end()) target = rd->second;
+            }
+            if (target == nullptr && into_own_defs) {
+                auto od = own_defs.find(id.name);
+                if (od != own_defs.end()) target = od->second;
             }
             if (target != nullptr && visiting.insert(target).second) {
                 bool known = false;
                 for (const DefStmt* d : out.defs) known = known || d == target;
                 if (!known) out.defs.push_back(target);
-                collect_captures(*target, out, visiting);
+                std::vector<std::string> inner_params;
+                for (const auto& p : target->params) inner_params.push_back(p->name);
+                collect_captures(*target->body, inner_params, into_own_defs, out, visiting);
             }
         }
         for_each_child(n, rec);
     };
-    rec(*st.body);
+    rec(body);
 }
 
 /* ================================================================ Lower：表达式 */
@@ -1840,12 +1888,15 @@ V Lower::call_user(const FunctionDef& d, const CallExpr& node) {
     if (!param_tys || param_tys->size() != node.args.size()) {
         throw Unsupported(d.name + "() 的参数表对不上调用", node.src_line);
     }
-    LLVMValueRef fnref = ensure_def_fn(d.name, d.lo, d, ret_ty, *param_tys);
+    /* 捕获**在调用点**算（参考实现也是在调用点解析自由名），声明参数只是它的一部分。 */
+    Closure cl = def_captures(d);
+    LLVMValueRef fnref = ensure_def_fn(d.name, d.lo, d, ret_ty, *param_tys, cl);
     std::vector<LLVMValueRef> vals;
     for (size_t i = 0; i < node.args.size(); ++i) {
         V conv = convert(e(*node.args[i]), (*param_tys)[i], node.src_line);
         vals.push_back((*param_tys)[i]->kind == TyKind::Struct ? conv.ll : llv(conv));
     }
+    for (const auto& c : cl.caps) vals.push_back(c.ptr);
     LLVMValueRef ll = emit_call(fnref, vals);
     if (ret_ty->kind == TyKind::Void) return V::instr(nullptr, ty_void());
     return V::instr(ll, ret_ty);
@@ -2304,25 +2355,47 @@ LLVMValueRef Lower::ensure_prefix_fn(const std::string& name, const TyRef& ret_t
 }
 
 LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const FunctionDef& d,
-                                  const TyRef& ret_ty, const std::vector<TyRef>& param_tys) {
-    auto key = std::make_tuple(static_cast<int>(1), name, lo, std::string());
+                                  const TyRef& ret_ty, const std::vector<TyRef>& param_tys,
+                                  const Closure& closure) {
+    const std::vector<Capture>& caps = closure.caps;
+    /* 捕获签名：空串 = 无捕获 —— 那种实例的键、函数名、参数表与闭包化之前**逐字节相同**
+     * （参数只看**声明**参数，多出来的只是 `ptr` 捕获），所以没碰到 root 体本地的 def
+     * 产物不变。 */
+    std::string sig;
+    for (size_t j = 0; j < caps.size(); ++j) {
+        if (j != 0) sig += ',';
+        sig += caps[j].name;
+        sig += ':';
+        sig += ty_key(*caps[j].ty);
+    }
+    auto key = std::make_tuple(static_cast<int>(1), name, lo, sig);
     auto hit = fns_.find(key);
     if (hit != fns_.end()) return hit->second.fnref;
+    int& instances = cap_instances_[{name, lo}];
+    /* 互调的顶层 def 按捕获签名各发一份实例，理论上签名集是有限的，但代价可能会长（名字集合
+     * 的幂集）；超过这个数就报掉 —— 报错会回退到参考产物，比在这里无界发函数安全。 */
+    if (!sig.empty() && instances >= 64) {
+        throw Unsupported(name + " 的闭包实例数不收剑（" + sig + "）", d.lo);
+    }
     std::vector<LLVMTypeRef> ptypes;
     for (const auto& t : param_tys) ptypes.push_back(val_ll(*t));
+    for (size_t j = 0; j < caps.size(); ++j) ptypes.push_back(ptr_);
     LLVMTypeRef rty = ret_ty->kind == TyKind::Void ? void_ty_ : val_ll(*ret_ty);
-    const std::string gname =
+    std::string gname =
         defs_.count(name) != 0 && defs_[name].size() == 1
             ? name
             : name + "#L" + std::to_string(lo);
+    if (!sig.empty()) gname += "$c" + std::to_string(instances++);
     LLVMValueRef fnref = LLVMAddFunction(
         module(), gname.c_str(),
         LLVMFunctionType(rty, ptypes.data(), static_cast<unsigned>(ptypes.size()), 0));
     LLVMSetLinkage(fnref, LLVMInternalLinkage);
-    fns_[key] = Fn{fnref, ret_ty, param_tys, {}};
+    fns_[key] = Fn{fnref, ret_ty, param_tys, caps};
     fn_seen_++;
     FnState saved = save_state();
-    cur_name_ = name;
+    /* 嵌套 def 的键与名字都靠 `cur_name_` 分开（同名 def 的不同捕获实例里，同一个嵌套 def
+     * 的捕获表不同，不能合并）；无捕获时与改前一致（就是 def 名）。 */
+    cur_name_ = sig.empty() ? name : gname;
     cur_def_ = &d;
     begin_function(fnref, ret_ty);
     for (size_t i = 0; i < d.params.size(); ++i) {
@@ -2332,6 +2405,16 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
         store_addr(a, V::instr(LLVMGetParam(fnref, static_cast<unsigned>(i)), ty), ty,
                    d.params[i]->src_line);
         bind_root_scope(d.params[i]->name, Binding::local(a, ty));
+    }
+    for (size_t j = 0; j < caps.size(); ++j) {
+        bool is_param = false;
+        for (const auto& p : d.params) is_param = is_param || p->name == caps[j].name;
+        if (is_param) continue;
+        /* 捕获只传**指针**（按引用），不复制内存 —— 赋值/读回都落在调用者那块栈槽上。 */
+        bind_root_scope(
+            caps[j].name,
+            Binding::capture(LLVMGetParam(fnref, static_cast<unsigned>(param_tys.size() + j)),
+                             caps[j].ty));
     }
     lower_block(*d.body);
     finish_function();
@@ -2343,7 +2426,7 @@ LLVMValueRef Lower::ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
                                      const std::vector<TyRef>& param_tys,
                                      const Closure& closure) {
     const std::vector<Capture>& caps = closure.caps;
-    const std::string owner = cur_def_ != nullptr ? cur_def_->name : std::string("closure");
+    const std::string owner = cur_def_ != nullptr ? cur_name_ : std::string("closure");
     auto key = std::make_tuple(static_cast<int>(2), cur_name_, int64_t(st.src_line), st.name);
     auto hit = fns_.find(key);
     if (hit != fns_.end()) return hit->second.fnref;

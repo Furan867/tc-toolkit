@@ -263,7 +263,11 @@ protected:
     void s_DefStmt(const DefStmt& st);
 
     Closure captures_of(const DefStmt& st);
-    void collect_captures(const DefStmt& st, Closure& out, std::set<const DefStmt*>& visiting);
+    /* 顶层 `def` 的闭包面（按**调用点**算，见定义处）。 */
+    Closure def_captures(const FunctionDef& d);
+    void collect_captures(const Block& body, const std::vector<std::string>& params,
+                          bool into_own_defs, Closure& out,
+                          std::set<const DefStmt*>& visiting);
 
     /* ---- 表达式 */
     V e(const Expr& node);
@@ -345,7 +349,8 @@ protected:
     LLVMValueRef byte_loop_prologue(unsigned n_param, LLVMBasicBlockRef* head_out,
                                     LLVMValueRef* n_out);
     LLVMValueRef ensure_def_fn(const std::string& name, int64_t lo, const FunctionDef& d,
-                               const TyRef& ret_ty, const std::vector<TyRef>& param_tys);
+                               const TyRef& ret_ty, const std::vector<TyRef>& param_tys,
+                               const Closure& closure);
     LLVMValueRef ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
                                   const std::vector<TyRef>& param_tys, const Closure& closure);
 
@@ -398,8 +403,12 @@ protected:
         std::vector<TyRef> params;
         std::vector<Capture> captures;
     };
-    /* 键 = (类别, 名字, 源码行, 附加名字)：与原型的三元组 / 二元组一一对应。 */
+    /* 键 = (类别, 名字, 源码行, 附加名字)：与原型的三元组 / 二元组一一对应。
+     * 类别 1（顶层 def）的第 4 位是**捕获签名**：空串 = 没有捕获，键与闭包化之前完全相同。 */
     std::map<std::tuple<int, std::string, int64_t, std::string>, Fn> fns_;
+    /* 每个顶层 def 已发过几个捕获实例（生成 `$c0`/`$c1` 这样的名字后缀，并按上限兜住
+     * 「互调 + 捕获」的发散，见 `ensure_def_fn`）。 */
+    std::map<std::pair<std::string, int64_t>, int> cap_instances_;
 
     std::unique_ptr<Context> ctx_;
     std::unique_ptr<Module> mod_;

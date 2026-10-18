@@ -397,6 +397,12 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-18-closure-var.md`；片段与命令 `work/tmp/in_scope/rootvar_{E_def_then_var,K_guard_before}.si` + `work/tmp/ul14/refcc.py`
 最后验证：2026-10-18
 
+### `clz` 的范围 = 操作数的**声明位宽**（2026-10-18 实测）
+`clz(U8 0) = 8` · `clz(U16 0) = 16` · `clz(U4 0) = 4` · `clz(Int 0) = clz(U64 0) = 64` · `clz(S8 -1) = 0`；
+常量与运行期一致。
+验证：`docs/notes/2026-10-18-small-classes.md`；探针 `work/tmp/small/clz_probe.py`
+最后验证：2026-10-18
+
 ### `random` 的语义（实测；它定义在前缀里，但 98 份里 **32 份**在用）
 - 递推：`state ← ((x ^ (x<<12) ^ (x>>25) ^ (x>>27)) * 0x02545F4914F6CDD1) mod 2^64`
   （**前缀写的是 15 位常数**，不是教科书那个 `…CDD1D`），初值 `state = 1`；

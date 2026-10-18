@@ -347,6 +347,14 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`work/freq/m45_shell.json`、`work/freq/bench_20261018_133133.tsv`、`docs/notes/2026-10-18-m45-game-bench.md`
 最后验证：2026-10-18
 
+### campaign 的 `test.si` 是**测试片段**，不是完整编译单元
+游戏自带的 `campaign/<关卡>/test.si` 只含 `const` + `def get_input` / `def check_output` + 顶层初始化代码，
+**没有程序根**：`grep -lE "^label " simplexc/corpus/campaign/*/test.si | wc -l` = **0**；
+而 hook 抓的生成源码 **98/98** 都含 `run_sim: while true { … }`。直接喂我们的 CLI 必然报「没有顶层语句块（程序根）」。
+所以「campaign 92 份全装不出来」首先说明的是**语料形状**，不能读成 92 个编译缺口。
+验证：`docs/notes/2026-10-18-campaign-survey.md`；`python simplexc/tools/m5/coverage.py --dir simplexc/corpus/campaign --no-diff`
+最后验证：2026-10-18
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

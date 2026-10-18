@@ -15,6 +15,9 @@
 目标：把游戏目录的 `compile.dll` 换成自研实现 —— Simplex → LLVM IR → 优化 → 装配成游戏可 JIT 的 blob。
 正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 
+**验收边界（2026-10-18 负责人确认）**：沙盒模式**只看 RV32IM 电路**（它几乎覆盖所有元件；其他沙盒电路的编译正确性也已测过没问题）。
+98 份语料（`work/hook/all/` 去重，以关卡/地图电路为主）的缺口**不影响沙盒可用** —— 它们决定的是**能不能关掉回退**（M6）。
+
 - 接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.2）；主设计 = `…-simplex-llvm-compiler-design.md`；
   主频层 = `…-freq-measurement-design.md`。代码在 `reversing/simplexc/`；LLVM 固定 **23.1.3**。
 

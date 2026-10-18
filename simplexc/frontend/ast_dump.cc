@@ -271,6 +271,9 @@ Json node_to_json(const Node* n) {
     case NK::Break:
       d.set("label", str_or_null(static_cast<const BreakStmt&>(*n).label));
       break;
+    case NK::BlockStmt:
+      d.set("block", node_to_json(static_cast<const BlockStmt&>(*n).block.get()));
+      break;
     case NK::Def: {
       const auto& x = static_cast<const DefStmt&>(*n);
       d.set("name", Json::string(x.name));
@@ -548,6 +551,11 @@ std::string render_tree(const Node* n, int indent) {
     case NK::Break: {
       const std::string& label = static_cast<const BreakStmt&>(*n).label;
       parts.scal.push_back(label.empty() ? "label=None" : "label=" + py_repr_str(label));
+      break;
+    }
+    case NK::BlockStmt: {
+      const auto& x = static_cast<const BlockStmt&>(*n);
+      kid_node("block", x.block.get());
       break;
     }
     case NK::Def: {

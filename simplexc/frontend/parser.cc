@@ -131,6 +131,7 @@ std::string_view node_py_name(NK kind) {
     case NK::Return: return "ReturnStmt";
     case NK::Break: return "BreakStmt";
     case NK::Def: return "DefStmt";
+    case NK::BlockStmt: return "BlockStmt";
     case NK::Function: return "FunctionDef";
     case NK::IfCase: return "IfCase";
     case NK::SwitchCase: return "SwitchCase";
@@ -170,6 +171,7 @@ bool is_stmt_kind(NK kind) {
     case NK::Return:
     case NK::Break:
     case NK::Def:
+    case NK::BlockStmt:
       return true;
     default:
       return false;
@@ -305,6 +307,11 @@ std::unique_ptr<Block> Parser::parse_block() {
 std::unique_ptr<Stmt> Parser::parse_statement() {
   const Tok t = peek();
   if (t.kind == "hash" && t.text == "if") return parse_ppif();
+  if (t.kind == "op" && t.text == "{") {
+    auto bs = std::make_unique<BlockStmt>(t.line);
+    bs->block = parse_block();
+    return bs;
+  }
   if (t.kind == "ident") {
     const std::string& w = t.text;
     if (w == "var" || w == "let" || w == "const") return parse_var(t);

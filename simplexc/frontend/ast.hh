@@ -61,7 +61,7 @@ enum class NK {
   // 辅助（不是 Expr 也不是 Stmt）
   FieldInit, Block, Param,
   // 语句
-  VarDecl, Assign, ExprStmt, If, PpIf, While, Switch, Return, Break, Def,
+  VarDecl, Assign, ExprStmt, If, PpIf, While, Switch, Return, Break, Def, BlockStmt,
   // 顶层函数/标签块
   Function,
   // 容器节点也各自一个类别：与父语句共用类别会让 as<T>() 把 IfStmt 认成 IfCase
@@ -282,6 +282,15 @@ struct BreakStmt : Stmt {
   static constexpr NK k = NK::Break;
   explicit BreakStmt(int line) : Stmt(k, line) {}
   std::string label;  // 空 = 无标签
+};
+
+/* 裸块 `{ … }`：语句位置上的独立块，除了引入一层作用域之外不做任何事
+   （零条指令，直接内联展开）。参考实测：块内声明的变量出块即不可见、
+   允许遮蔽外层同名变量、块内的 break/return 照常穿透到外层循环/函数。 */
+struct BlockStmt : Stmt {
+  static constexpr NK k = NK::BlockStmt;
+  explicit BlockStmt(int line) : Stmt(k, line) {}
+  std::unique_ptr<Block> block;
 };
 
 struct DefStmt : Stmt {  // 函数体里的嵌套 def

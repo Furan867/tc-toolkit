@@ -129,6 +129,13 @@ void walk_nodes(const Node* n, const NodeVisitor& on_node, const TypeRefVisitor&
     }
     case NK::Break:
       break;
+    /* 裸块本身零条指令，但里面的语句必须递归进来 —— 这个 switch 的其它分支
+       没有 default，漏掉它会让 covered_lines() 与可达闭包漏掉块内的一切。 */
+    case NK::BlockStmt: {
+      const auto* b = static_cast<const BlockStmt*>(n);
+      walk_nodes(b->block.get(), on_node, on_type);
+      break;
+    }
     case NK::Cast: {
       const auto* c = static_cast<const CastExpr*>(n);
       walk_type(c->target.get());
@@ -254,6 +261,7 @@ int close_line_of(const Node& n) {
     case NK::ArrayLit: return static_cast<const ArrayLitExpr&>(n).close_line;
     case NK::CompositeLit: return static_cast<const CompositeLitExpr&>(n).close_line;
     case NK::Block: return static_cast<const Block&>(n).close_line;
+    case NK::BlockStmt: return static_cast<const BlockStmt&>(n).block->close_line;
     default: return 0;
   }
 }

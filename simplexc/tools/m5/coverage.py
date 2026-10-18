@@ -14,6 +14,11 @@
 这里不需要额外动作。`selftest.compare` 的段名是**运行期绝对地址**，所以额外记一列
 `region_keys_same`：两边段名集合不同就说明宿主这次给的内存布局不一样，那种「差异」不能算到产物头上。
 
+`status` 除 `equal` / `diff` / `cli_fail`… 外还有一档 **`extern_only`**：装配成功、**每个 tick 的段哈希 /
+页 / `sim_cycle` 全等、tick 条数相同**，唯一的不同是 extern 序列 —— 内存状态逐 tick 等价，差异来自
+**参考侧**产物自己的分配器调了 `VirtualAlloc`（我们不调）。所以它不算「值不对」：单列一档、
+不计入差分回退率，但差异本身照旧记在 `extern_detail` 列里（审计用）。
+
 产物：
   · `--tsv`（默认 `work/tmp/m5/coverage.tsv`，不进 git）—— 机器可读，每份一行；
   · `--summary-json`（默认 `work/tmp/m5/coverage.summary.json`）—— 汇总数字与失败分类；
@@ -77,7 +82,8 @@ COVERAGE_SUMMARY = DEFAULT_SUMMARY          # 目录模式的报告拿它做「�
 
 TSV_COLUMNS = ["scope", "id", "status", "cli_rc", "cli_ms", "blob_bytes", "entry", "ref_bytes",
                "ticks_ref", "ticks_ours", "region_keys_same", "diff_lines", "diff_ticks",
-               "err_kind", "err_detail", "err_first_line", "first_diff", "host_retries", "seconds"]
+               "err_kind", "err_detail", "err_first_line", "first_diff", "extern_detail",
+               "host_retries", "seconds"]
 
 # 一行结果就是 TSV 的这些列（对外全是字符串，写盘时再字符串化）。
 Row = dict[str, object]
@@ -88,6 +94,8 @@ FLOAT_COLUMNS = ("seconds",)
 # `status` 的取值 —— 报告里的「失败分类」按前两级展开。
 STATUS_EQUAL = "equal"                 # 装配成功且 10 tick 逐 tick 全等
 STATUS_DIFF = "diff"                   # 装配成功但有差异
+STATUS_EXTERN_ONLY = "extern_only"     # 装配成功、每个 tick 的段哈希/页/sim_cycle 全等，唯一差异是 extern 序列
+                                       #   （内存逐 tick 等价：参考侧分配器调 `VirtualAlloc`，我们不调）
 STATUS_CLI_FAIL = "cli_fail"           # 装配失败（rc≠0 或没有产物）
 STATUS_CLI_TIMEOUT = "cli_timeout"
 STATUS_REF_MISSING = "ref_missing"     # 装配成功，但参考产物不在（ref/ 不进 git，可能是没重新生成）
@@ -95,12 +103,14 @@ STATUS_HOST_FAIL = "host_fail"
 STATUS_HOST_TIMEOUT = "host_timeout"
 STATUS_ASSEMBLED = "assembled"         # 目录模式（--no-diff）：装出来了，没有参考产物可比，到此为止
 
+# 失败/不等分的状态。`extern_only` 刻意**不在**这里：它内存逐 tick 等价，不算「值不对」，
+# 单列一档（汇总里单独一列，见 `aggregate` 的 `extern_only` / `extern_only_details`）。
 FAIL_STATUSES = [STATUS_CLI_FAIL, STATUS_CLI_TIMEOUT, STATUS_REF_MISSING,
                  STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT, STATUS_DIFF]
 
 # 「装出来了」的状态（差分那步的结果不算 —— 它要求已经有产物）。
-ASSEMBLED_STATUSES = (STATUS_EQUAL, STATUS_DIFF, STATUS_REF_MISSING, STATUS_HOST_FAIL,
-                      STATUS_HOST_TIMEOUT, STATUS_ASSEMBLED)
+ASSEMBLED_STATUSES = (STATUS_EQUAL, STATUS_DIFF, STATUS_EXTERN_ONLY, STATUS_REF_MISSING,
+                      STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT, STATUS_ASSEMBLED)
 
 
 def fail(msg, rc) -> NoReturn:
@@ -332,8 +342,53 @@ def region_keys_same(ref_snaps, ours_snaps):
     return True
 
 
+def extern_names(snaps):
+    """一份快照序列里 extern 的 `(总条数, {符号名: 条数})`；名字缺失记 `?`。"""
+    total = 0
+    names: dict[str, int] = {}
+    for snap in snaps:
+        for ex in snap.get("extern") or []:
+            total += 1
+            name = ex.get("name") if isinstance(ex, dict) else None
+            key = str(name) if name else "?"
+            names[key] = names.get(key, 0) + 1
+    return total, names
+
+
+def names_text(names):
+    """`{符号: 条数}` → `VirtualAlloc×1、…`（空集写「无」）。"""
+    return "、".join(f"{k}×{v}" for k, v in sorted(names.items())) or "无"
+
+
+def extern_only_split(ref_snaps, ours_snaps):
+    """→ `(是否只差 extern, 审计内容)`。
+
+    判据（全部满足才算）：tick 条数相同、**每个 tick 的段哈希 / 页 / `sim_cycle` 全等**、
+    且 extern 序列至少有一处不同。
+
+    刻意**不拿 `selftest.compare` 的输出当判据**：它到 8 条差异就收口，只看它会把第 9 条往后
+    的内存差异当成「只差 extern」—— 这里逐 tick 全看一遍。返回的第二项把 extern 差异摊开写
+    （两边条数与符号名、哪些 tick 不同）：单列一档 ≠ 没差异，内容得留在表里。
+    """
+    if not ref_snaps or len(ref_snaps) != len(ours_snaps):
+        return False, ""
+    tick_differs = []
+    for i, (a, b) in enumerate(zip(ref_snaps, ours_snaps, strict=False)):
+        if a.get("regions") != b.get("regions") or a["pages"] != b["pages"] \
+                or a["sim_cycle"] != b["sim_cycle"]:
+            return False, ""
+        if a["extern"] != b["extern"]:
+            tick_differs.append(i + 1)
+    if not tick_differs:
+        return False, ""
+    ref_total, ref_names = extern_names(ref_snaps)
+    ours_total, ours_names = extern_names(ours_snaps)
+    return True, (f"extern ref {ref_total} 条（{names_text(ref_names)}）/ "
+                  f"ours {ours_total} 条（{names_text(ours_names)}）· 差异 tick {tick_differs}")
+
+
 def run_target(target, selftest, args):
-    """一个目标 → 一行结果（TSV 的那 17 列 + 报告要的原始文本）。"""
+    """一个目标 → 一行结果（TSV 的各列 + 报告要的原始文本）。"""
     row: Row = dict.fromkeys(TSV_COLUMNS, "")
     row["scope"] = target["scope"]
     row["id"] = target["id"]
@@ -445,10 +500,17 @@ def run_target(target, selftest, args):
     row["diff_lines"] = len(diff)
     row["diff_ticks"] = diff_ticks_of(diff)
     if diff:
-        row["status"] = STATUS_DIFF
         row["first_diff"] = one_line(diff[0], 300)
         row["err_kind"], row["err_detail"] = "TickDiff", diff_kind(diff[0])
         row["err_first_line"] = row["first_diff"]
+        only_extern, extern_note = extern_only_split(snaps["ref"], snaps["ours"])
+        if only_extern:
+            row["status"] = STATUS_EXTERN_ONLY
+            row["extern_detail"] = extern_note
+            row["err_kind"], row["err_detail"] = "ExternOnly", "只差 extern（内存逐 tick 等价）"
+            row["err_first_line"] = extern_note
+        else:
+            row["status"] = STATUS_DIFF
     else:
         row["status"] = STATUS_EQUAL
     row["seconds"] = round(time.perf_counter() - t0, 3)
@@ -465,9 +527,11 @@ def aggregate(rows, no_diff=False):
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
     assembled = sum(by_status.get(s, 0) for s in ASSEMBLED_STATUSES)
     equal = by_status.get(STATUS_EQUAL, 0)
+    extern_only = by_status.get(STATUS_EXTERN_ONLY, 0)
     classes = {}
     for r in corpus:
-        if r["status"] == STATUS_EQUAL:
+        # `extern_only` 内存逐 tick 等价，不进失败分类表（那些份的差异另有 `extern_only_details`）
+        if r["status"] in (STATUS_EQUAL, STATUS_EXTERN_ONLY):
             continue
         key = (r["err_kind"] or r["status"], r["err_detail"] or r["status"])
         hit = classes.setdefault(key, {"kind": key[0], "detail": key[1], "count": 0, "ids": []})
@@ -481,8 +545,15 @@ def aggregate(rows, no_diff=False):
         "assembled": assembled,
         "equal": equal,
         "by_status": by_status,
+        "extern_only": extern_only,
+        "extern_only_ids": [r["id"] for r in corpus if r["status"] == STATUS_EXTERN_ONLY],
+        "extern_only_details": [{"id": r["id"], "extern": r["extern_detail"]}
+                                for r in corpus if r["status"] == STATUS_EXTERN_ONLY],
         "fallback_rate_assemble": round((total - assembled) / total, 4) if total else None,
-        "fallback_rate_diff": round((total - equal) / total, 4) if total else None,
+        # 「差分回退率」不含 `extern_only`：那些内存逐 tick 等价，不算「值不对」。
+        # 含它们的原始比率另记 `rate_not_tick_equal`，方便与旧口径对账。
+        "fallback_rate_diff": round((total - equal - extern_only) / total, 4) if total else None,
+        "rate_not_tick_equal": round((total - equal) / total, 4) if total else None,
         "fail_classes": sorted(classes.values(), key=lambda c: (-c["count"], c["kind"], c["detail"])),
         "cli_ms_median": cli_ms[len(cli_ms) // 2] if cli_ms else None,
         "cli_ms_max": cli_ms[-1] if cli_ms else None,
@@ -499,13 +570,15 @@ def summary_line(summary):
     parts = [f"总 {summary['total']}", f"可装配 {summary['assembled']}"]
     if not summary["no_diff"]:
         parts.append(f"逐 tick 全等 {summary['equal']}")
+        if summary["extern_only"]:
+            parts.append(f"只差 extern {summary['extern_only']}")
     for s in FAIL_STATUSES:
         n = summary["by_status"].get(s, 0)
         if n:
             parts.append(f"{s} {n}")
     parts.append(f"装配回退率 {summary['fallback_rate_assemble']:.1%}")
     if not summary["no_diff"]:            # 没跑差分就别报差分回退率 —— 那会读成「全都不等」
-        parts.append(f"差分回退率 {summary['fallback_rate_diff']:.1%}")
+        parts.append(f"差分回退率 {summary['fallback_rate_diff']:.1%}（不含只差 extern）")
     return " · ".join(parts)
 
 
@@ -560,7 +633,7 @@ def repro_commands(row, args):
     lines = []
     if row["status"] in (STATUS_CLI_FAIL, STATUS_CLI_TIMEOUT):
         lines.append(f"build/simplexc_cli.exe --src {row['src']} --out work/tmp/m5/out/{row['id']}.bin")
-    elif row["status"] in (STATUS_DIFF, STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT):
+    elif row["status"] in (STATUS_DIFF, STATUS_EXTERN_ONLY, STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT):
         src = row["src"]
         lines.append(f"python simplexc/tools/host/host.py --src {src} --bin {row['ref_path']} "
                      f"--entry {row['ref_entry_s']} --ticks {args.ticks} --seed-reset-data {args.seed} "
@@ -599,8 +672,12 @@ def write_report(rows, summary, path, args, targets):
     w(f"| 语料总数 | {corpus_total}（本次已跑 {summary['total']}） |")
     w(f"| 可装配 | {summary['assembled']}（{1 - summary['fallback_rate_assemble']:.1%}） |")
     w(f"| 逐 tick 全等 | {summary['equal']}（{summary['equal'] / summary['total']:.1%}） |")
+    w(f"| 只差 extern（内存逐 tick 等价） | {summary['extern_only']} |")
     w(f"| 装配回退率 | **{summary['fallback_rate_assemble']:.1%}**（{summary['total'] - summary['assembled']} 份装不出来） |")
-    w(f"| 差分回退率 | **{summary['fallback_rate_diff']:.1%}**（{summary['total'] - summary['equal']} 份不能逐 tick 全等） |")
+    w(f"| 差分回退率（不含只差 extern） | **{summary['fallback_rate_diff']:.1%}**"
+      f"（{summary['total'] - summary['equal'] - summary['extern_only']} 份不能逐 tick 全等、且不是只差 extern） |")
+    w(f"| 不能逐 tick 全等（含只差 extern） | {summary['total'] - summary['equal']}"
+      f"（{summary['rate_not_tick_equal']:.1%}） |")
     for s in FAIL_STATUSES:
         n = summary["by_status"].get(s, 0)
         if n:
@@ -608,7 +685,7 @@ def write_report(rows, summary, path, args, targets):
     w(f"| CLI 耗时 | 中位 {summary['cli_ms_median']} ms / 最大 {summary['cli_ms_max']} ms |")
     w(f"| 总墙上时间（语料部分） | {summary['corpus_wall_seconds']} s |")
     w("")
-    diff_rows = [r for r in corpus if r["status"] in (STATUS_EQUAL, STATUS_DIFF)]
+    diff_rows = [r for r in corpus if r["status"] in (STATUS_EQUAL, STATUS_DIFF, STATUS_EXTERN_ONLY)]
     keys_no = [r["id"] for r in diff_rows if r["region_keys_same"] != "yes"]
     host_bad = [r["id"] for r in corpus if r["status"] in (STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT)]
     timeouts = [r["id"] for r in corpus if r["status"] in (STATUS_CLI_TIMEOUT, STATUS_HOST_TIMEOUT)]
@@ -660,16 +737,30 @@ def write_report(rows, summary, path, args, targets):
                 w(line)
             w("```\n")
 
+    w("## 只差 extern（`extern_only`）\n")
+    extern_details = summary["extern_only_details"]
+    if not extern_details:
+        w("无。\n")
+    else:
+        w(f"**含义**：这 {len(extern_details)} 份**每个 tick 的段哈希 / 页 / `sim_cycle` 全等**、tick 条数相同，"
+          "唯一的不同是 extern 序列 —— 内存状态逐 tick 等价，差异来自**参考侧**产物自己的分配器调了"
+          " `VirtualAlloc`（我们产物不调）。所以单列一档：**不算「值不对」，不计入差分回退率**；"
+          "extern 差异本身照旧记下来供审计。\n")
+        w("| id | extern 差异（两边条数与符号名、哪些 tick） |")
+        w("| --- | --- |")
+        for e in extern_details:
+            w(f"| {e['id']} | {md_cell(e['extern'])} |")
+        w("")
+
     w("## 覆盖表（每份一行）\n")
     w("`差异 tick` = `selftest.compare` 报出的差异涉及多少个 tick；它自己会在 ~8 条处收口，"
       "所以差异明细看 `work/tmp/m5/logs/<id>.{ref,ours}.jsonl`。\n")
     w("| id | 装配 | blob B | entry | 差异 tick | 状态 | 失败类别 | 说明 |")
     w("| --- | --- | --- | --- | --- | --- | --- | --- |")
     for r in corpus:
-        asm = "ok" if r["status"] in (STATUS_EQUAL, STATUS_DIFF, STATUS_REF_MISSING,
-                                      STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT) else "fail"
+        asm = "ok" if r["status"] in ASSEMBLED_STATUSES else "fail"
         diff = (f"{r['diff_ticks']}/{r['ticks_ref']}"
-                if r["status"] in (STATUS_EQUAL, STATUS_DIFF) else "—")
+                if r["status"] in (STATUS_EQUAL, STATUS_DIFF, STATUS_EXTERN_ONLY) else "—")
         note = r["err_first_line"] or r["first_diff"]
         w(f"| {r['id']} | {asm} | {r['blob_bytes'] or '—'} | {r['entry'] or '—'} | {diff} | "
           f"{r['status']} | {md_cell(r['err_kind'] or '—', 40)} | {md_cell(note)} |")
@@ -969,7 +1060,7 @@ def main(argv=None):
         rows.append(row)
         print(f"[{i}/{len(todo)}] {row['scope']}/{row['id']} {row['status']} "
               f"rc={row['cli_rc'] or '—'} {row['cli_ms']}ms blob={row['blob_bytes']}B "
-              f"entry={row['entry'] or '—'} diff={row['diff_lines'] if row['status'] in (STATUS_EQUAL, STATUS_DIFF) else '—'}"
+              f"entry={row['entry'] or '—'} diff={row['diff_lines'] if row['status'] in (STATUS_EQUAL, STATUS_DIFF, STATUS_EXTERN_ONLY) else '—'}"
               + (f" · {row['err_kind']}: {row['err_first_line']}" if row["status"] != STATUS_EQUAL else ""),
               flush=True)
         if i % args.batch == 0 or i == len(todo):

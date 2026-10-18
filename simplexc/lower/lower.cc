@@ -3118,13 +3118,28 @@ V Lower::array_literal(const ArrayLitExpr& node) {
     LLVMTypeRef el = storage_ll(*ty);
     std::vector<LLVMValueRef> elems;
     for (const auto& e : ev) elems.push_back(const_for_storage(e));
-    LLVMTypeRef arrty = LLVMArrayType2(el, elems.size());
+    /* 载荷前必须带 8 字节 Nim 头（`p[-8] = len << 16`，读法见 `len_of` 与 facts §数组/字符串布局）：
+     * 少了它，`.len()` 那条越界的**常量** `load` 在 O2 里是 undef，靠它判分支的整条 `if`
+     * 会被折掉 —— 实测 008 的 `check_output` 因此恒返回 fail（`sim_test_result` 2 而非 1、
+     * `sim_cycle` 每 tick 少 1），机理与探针在 `docs/notes/2026-10-18-test-result-chain.md`。
+     * 头低 16 位是 log2 容量，静态数据取 0（与 `array(<T>, n)` / `empty_array` 同口径）。 */
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    const uint64_t header = elems.size() << 16;
+    std::vector<LLVMValueRef> head;
+    for (int i = 0; i < 8; ++i) head.push_back(LLVMConstInt(i8, (header >> (8 * i)) & 0xFF, 0));
+    LLVMTypeRef head_ty = LLVMArrayType2(i8, head.size());
+    LLVMTypeRef payload_ty = LLVMArrayType2(el, elems.size());
+    LLVMTypeRef fields[2] = {head_ty, payload_ty};
+    LLVMTypeRef sty = LLVMStructTypeInContext(ctx(), fields, 2, 0);
     const std::string gname = ".arr" + std::to_string(node.src_line);
-    LLVMValueRef g = LLVMAddGlobal(module(), arrty, gname.c_str());
+    LLVMValueRef g = LLVMAddGlobal(module(), sty, gname.c_str());
     LLVMSetLinkage(g, LLVMPrivateLinkage);
     LLVMSetGlobalConstant(g, 1);
-    LLVMSetInitializer(g, LLVMConstArray2(el, elems.data(), elems.size()));
-    return V::instr(g, make_array(ty));
+    LLVMValueRef parts[2] = {LLVMConstArray2(i8, head.data(), head.size()),
+                             LLVMConstArray2(el, elems.data(), elems.size())};
+    LLVMSetInitializer(g, LLVMConstStructInContext(ctx(), parts, 2, 0));
+    std::vector<LLVMValueRef> gi{const_int(0), const_int(1)};
+    return V::instr(LLVMConstGEP2(sty, g, gi.data(), 2), make_array(ty));
 }
 
 /* 元素（结构体字段）的**存储形态**值 —— 与 `store_addr` 同一套口径：整数按字段宽度截断

@@ -566,18 +566,23 @@ LLVMBasicBlockRef Lower::br_new_block(const char* name) {
     return bb;
 }
 
-LLVMValueRef Lower::alloca_slot(const TyRef& ty, const std::string& name) {
-    /* 局部变量一律 alloca，插在 **entry 块最前面**：循环里声明也不会每次迭代吃栈。 */
+LLVMValueRef Lower::alloca_in_entry(LLVMTypeRef ty, const std::string& name) {
+    /* 插在 **entry 块最前面**：循环里声明也不会每次迭代吃栈，而且它是**静态** alloca
+       （LLVM 只把「在 entry 块 + 尺寸是常量」的 alloca 当静态 —— 否则会拉出 `___chkstk_ms` 且每轮涨栈）。 */
     LLVMValueRef first = LLVMGetFirstInstruction(entry_);
     if (first == nullptr) {
         LLVMPositionBuilderAtEnd(bd_, entry_);
     } else {
         LLVMPositionBuilderBefore(bd_, first);
     }
-    LLVMValueRef a = LLVMBuildAlloca(bd_, ll_type(*ty), name.c_str());
+    LLVMValueRef a = LLVMBuildAlloca(bd_, ty, name.c_str());
     LLVMSetAlignment(a, 1);
     LLVMPositionBuilderAtEnd(bd_, cur_block_);
     return a;
+}
+
+LLVMValueRef Lower::alloca_slot(const TyRef& ty, const std::string& name) {
+    return alloca_in_entry(ll_type(*ty), name);
 }
 
 /* ================================================================ Lower：作用域与绑定 */
@@ -2238,16 +2243,32 @@ V Lower::template_expr(const TemplateExpr& node) {
     vals.reserve(node.parts.size());
     for (const ExprPtr& p : node.parts) vals.push_back(e(*p));
 
+    /* 缓冲尺寸：文字段 + 每段的最坏字节数。**没有 Str 段时它是编译期常量** → 把 alloca 放进
+       entry 块（静态 alloca：循环里不涨栈，也不会拉出 `___chkstk_ms`）；只有 Str 段的长度是
+       运行期的，那时才只能开动态 alloca。 */
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
-    LLVMValueRef size = const_int(8);
+    uint64_t fixed = 8;
+    bool const_size = true;
     for (std::size_t i = 0; i < node.texts.size(); ++i) {
-        size = LLVMBuildAdd(bd_, size, const_int(node.texts[i].size()), "ts");
-        if (i < vals.size()) {
-            size = LLVMBuildAdd(bd_, size, part_capacity(vals[i], node.src_line), "ts");
+        fixed += node.texts[i].size();
+        if (i >= vals.size()) break;
+        if (vals[i].ty->kind == TyKind::Str) {
+            const_size = false;
+        } else {
+            fixed += part_capacity(vals[i], node.src_line);
         }
     }
-    LLVMValueRef buf = LLVMBuildArrayAlloca(bd_, i8, size, "tbuf");
-    LLVMSetAlignment(buf, 8);
+    LLVMValueRef buf = nullptr;
+    if (const_size) {
+        buf = alloca_in_entry(LLVMArrayType2(i8, fixed), "tbuf");
+    } else {
+        LLVMValueRef size = const_int(fixed);
+        for (const V& v : vals) {
+            if (v.ty->kind == TyKind::Str) size = LLVMBuildAdd(bd_, size, len_of(v, node.src_line), "ts");
+        }
+        buf = LLVMBuildArrayAlloca(bd_, i8, size, "tbuf");
+        LLVMSetAlignment(buf, 8);
+    }
     std::vector<LLVMValueRef> g8{const_int(8)};
     LLVMValueRef payload = LLVMBuildGEP2(bd_, i8, buf, g8.data(), 1, "tpl");
     LLVMValueRef cur = payload;
@@ -2255,6 +2276,7 @@ V Lower::template_expr(const TemplateExpr& node) {
         cur = write_literal(cur, node.texts[i], node.src_line);
         if (i < vals.size()) cur = render_part(cur, vals[i], node.src_line);
     }
+    /* 长度按**实际游标**算，不按缓冲尺寸 —— 所以尺寸只是个上界，不需要预先知道十进制位数。 */
     LLVMValueRef len = LLVMBuildSub(bd_, LLVMBuildPtrToInt(bd_, cur, i64_, "tce"),
                                     LLVMBuildPtrToInt(bd_, payload, i64_, "tpe"), "tlen");
     std::vector<LLVMValueRef> g0{const_int(0)};
@@ -2264,11 +2286,13 @@ V Lower::template_expr(const TemplateExpr& node) {
     return V::instr(payload, ty_str());
 }
 
-/* 一段值的**最坏字节数**（缓冲开多大）。不可渲染的类型在这里就报错，不拖到写入时。 */
-LLVMValueRef Lower::part_capacity(const V& v, int line) {
-    if (v.ty->kind == TyKind::Str) return len_of(v, line);
-    if (v.ty->kind == TyKind::Ptr) return const_int(21);          /* 20 位十进制 + '-' */
-    if (v.ty->kind == TyKind::Int) return const_int(v.ty->is_bool ? 5 : 21);
+/* 一段值的**最坏字节数**（缓冲开多大）：`Bool` 5、其它整数/`Ptr` 21（20 位十进制 + '-'）。
+   `Str` 的长度是运行期的，不算在这里（调用方单独用 `len_of` 加）——所以返回 0。
+   不可渲染的类型在这里就报错，不拖到写入时。 */
+uint64_t Lower::part_capacity(const V& v, int line) {
+    if (v.ty->kind == TyKind::Str) return 0;
+    if (v.ty->kind == TyKind::Ptr) return 21;
+    if (v.ty->kind == TyKind::Int) return v.ty->is_bool ? 5 : 21;
     throw Unsupported("模板插值遇到 " + std::string(ty_kind_name(v.ty->kind)), line);
 }
 

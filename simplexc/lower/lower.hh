@@ -209,6 +209,8 @@ protected:
     void finish_function();
     LLVMBasicBlockRef new_block(const char* name);
     LLVMBasicBlockRef br_new_block(const char* name);
+    /* entry 块最前面的 alloca（**静态** alloca）；`alloca_slot` 是它的类型化包装。 */
+    LLVMValueRef alloca_in_entry(LLVMTypeRef ty, const std::string& name);
     LLVMValueRef alloca_slot(const TyRef& ty, const std::string& name);
 
     /* ---- 作用域 */
@@ -272,7 +274,7 @@ protected:
     V template_expr(const TemplateExpr& node);
     V str_concat(const V& a, const V& b, int line);
     LLVMValueRef render_part(LLVMValueRef cur, const V& v, int line);
-    LLVMValueRef part_capacity(const V& v, int line);
+    uint64_t part_capacity(const V& v, int line);
     LLVMValueRef write_literal(LLVMValueRef cur, const std::string& text, int line);
     LLVMValueRef len_of(const V& obj, int line);
     /* 产物内联的两个辅助函数（internal linkage，**不引外部符号**）：

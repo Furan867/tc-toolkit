@@ -61,9 +61,11 @@ SEED_PATTERNS = ("seq", "xorshift")
 XORSHIFT_SEED = 0x2545F4914F6CDD1D
 U64_MASK = (1 << 64) - 1
 MEM_COMMIT, MEM_RESERVE, MEM_RELEASE = 0x1000, 0x2000, 0x8000
-PAGE_RW, PAGE_RWX = 0x04, 0x40
+PAGE_NOACCESS, PAGE_RW, PAGE_RWX = 0x01, 0x04, 0x40
 ARENA_BASE = 0x100000000          # 确定性 bump 分配器的固定首址（4 GB，x64 用户空间内）
 ARENA_SIZE = 0x10000000           # 256 MB
+RSV_BASE = 0x400000000000         # 只 RESERVE 的保留区首址（64 TiB：远高于游戏段 ≈2.4 TB 与 arena 4 GB，向上按块长）
+RSV_BLOCK = 0x4000000000          # 保留区一块 256 GB（够装 27 个参考产物的 10 GB arena，用时才留）
 ARR_LEN, ARR_CAP_LOG2 = 4096, 13  # 宿主给数组的 len/cap（与游戏给的值可能不同，两遍一致即可）
 EXIT_MAPPED_MOVABS = 2            # 地址表外已映射 movabs：与 tick 失败同码（非 0 即判据失败）
 EXIT_STUB_CONTRACT = 3            # sidecar 与产物对不上 / extern 符号没有宿主桩
@@ -308,6 +310,8 @@ class Detours:
         self.clock = 0
         self.arena = 0
         self.arena_end = 0
+        self.rsv_cur = RSV_BASE           # RESERVE-only 的保留区（只留地址空间，不提交页）
+        self.rsv_end = RSV_BASE
         self._cbs = {}
         self._make_handlers()
 
@@ -345,6 +349,29 @@ class Detours:
         self.arena += size
         return p
 
+    def _reserve(self, size):
+        """只保留地址空间、一页都不提交 —— `VirtualAlloc(MEM_RESERVE)` 的语义。
+
+        返回值进 `extern` 记录（两遍跑要逐字节比），所以地址必须确定：从固定首址顺序切，
+        而不是让系统自己挑（`VirtualAlloc(NULL, …)` 的返回值随机器负载变）。
+        保留区按需一块块留，请求多大就至少留多大。
+        """
+        size = (int(size) + 0xFFF) & ~0xFFF
+        if self.rsv_cur + size > self.rsv_end:
+            block = max(size, RSV_BLOCK)
+            p = k32.VirtualAlloc(ctypes.c_void_p(self.rsv_end), block, MEM_RESERVE, PAGE_NOACCESS)
+            if not p or p != self.rsv_end:
+                # 跑在产物线程上，抛异常会被 ctypes 吞掉 → 只能吵 + 返回 0（与真实 API 失败同形）
+                print(f"[host] 硬错误：保留区 0x{self.rsv_end:X}+0x{block:X} 的 "
+                      f"VirtualAlloc(MEM_RESERVE) 失败（返回 0x{(p or 0):X}，"
+                      f"err={ctypes.get_last_error()}）—— 宿主环境问题，不是产物的差异",
+                      file=sys.stderr, flush=True)
+                return 0
+            self.rsv_cur, self.rsv_end = self.rsv_end, self.rsv_end + block
+        p = self.rsv_cur
+        self.rsv_cur += size
+        return p
+
     # -- 各桩 ------------------------------------------------------------
     def _exit_thread(self, code, *_):
         self._rec("ExitThread", [code], 0)
@@ -369,11 +396,21 @@ class Detours:
         return 0
 
     def _virtual_alloc(self, addr, size, typ, prot, *_):
-        if not addr:
-            out = self._bump(size)
-        else:
+        """`typ` 里的 MEM_RESERVE 与 MEM_COMMIT 必须分开：只有 RESERVE 时一页都不许提交。
+
+        参考产物（Nim 分配器）启动就 `VirtualAlloc(NULL, 10^10, MEM_RESERVE, PAGE_NOACCESS)` ×N
+        当 arena，之后按需 COMMIT 里面的小片。宿主原来把 `addr == 0` 一律当 COMMIT 走 `_bump`
+        （arena 装不下就**真提交 10 GB**）：提交到 ≈40 GB 时失败返回 0，参考产物不查返回值、
+        拿它当 seq 数据指针写头 → 写 AV，20 份语料的参考产物因此在宿主里判不了
+        （`docs/notes/2026-10-18-tickdiff-diagnosis.md` §2）。
+        """
+        if addr:
             out = k32.VirtualAlloc(ctypes.c_void_p(addr), size, typ or MEM_COMMIT | MEM_RESERVE,
                                    prot or PAGE_RW) or 0
+        elif typ & MEM_RESERVE and not typ & MEM_COMMIT:
+            out = self._reserve(size)
+        else:
+            out = self._bump(size)
         self._rec("VirtualAlloc", [addr, size, typ, prot], out)
         return out
 

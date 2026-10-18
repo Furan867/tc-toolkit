@@ -2097,6 +2097,11 @@ V Lower::cv(const Node& node) {
             if (n.name == "true" || n.name == "false") {
                 return V::konst(ty_bool(), n.name == "true" ? 1 : 0);
             }
+            /* 局部 `const` 只活在作用域里（`e_IdentExpr` 同样先查 lookup）——
+               不查这里，函数内的 `const #N = #A | #B` 会被判成「初始化式不是常量」。 */
+            if (const Binding* b = lookup(n.name)) {
+                if (b->kind == Binding::Kind::Const) return *b->value;
+            }
             auto cst = consts_.find(n.name);
             if (cst != consts_.end()) return cst->second;
             auto em = enum_member_.find(n.name);

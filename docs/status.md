@@ -16,67 +16,40 @@
 提升游戏内电路仿真主频。正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 
 **设计与接口**：
-- **接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.1 + RelocMode=PIC 更正）**；
+- 接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.2）；
   主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md` 只定分区与纪律。
-- 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（架构定稿 + 5 项决策已确认；
-  **旧实现存在但没分层**：`tools/read_freq.py` / `watch_freq.py`（566 行）/ `bench_rewrite.py` 三份采样口径互不相同，
-  设计要求的 `tools/freq/` 包重构**未做**，正在做 —— 它是 M4 的前置，之前被漏掉。
+- 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（`tools/freq/` 重构已完成）。
 - 代码落库 `reversing/simplexc/`；LLVM 固定 **23.1.3**。
 
 **已完成**：
-- **M0 观测设施**：98 份语料 + manifest + 覆盖率矩阵。
-- **M1 spike / M2 差分宿主**：装配链、`.stubs` sidecar、`selftest --entry`、壳的失败路径与熔断。
-- **装配器**：`.bss` 无原始数据节、桩/槽两趟定址、返回前 sidecar 自校验。
-- **M1.5 已终止**（负责人决定）：宿主内直译慢 ~25%、热状态进寄存器快 ~2.95×，**游戏内无证据**。
-- **语义档案（实验定死）**：`U-L1`（load/store 字节地址、无对齐、窄写只写宽度）·
-  `U-L7`+运行期复核（常量按符号性、运行期一律 `zext(trunc_W)`）· `U-L8`（`>>` 永远 lshr、移位量按 W 取模、
-  除零不 trap、`asr` 饱和）· `/`、`%`（看被除数类型；折叠窄常量零扩展是参考实现的不自洽，要复刻）。
-- **前端**：`decls.py`（词法 + 顶层声明 + 函数体只配平）→ `expr.py`（语句 + 表达式 AST，`mode_run` 覆盖 100%，
-  AST 保真：`src_line`、cast 带目标类型、字面量不折叠）。
-- **判据补强**：每 tick 对每个映射段算 sha256（`regions` 字段）+ `selftest.compare` 纳入比较；
-  `--seed-reset-data seq|xorshift` 给 `#RESET_DATA_*` 灌图案 —— 272 MB RAM 镜像才真的被读写。
-  **强判据下 rv32im 仍逐 tick 全等**，且因此抓出并修掉一个 `memory_copy` 方向反的 bug。
-- **freq 层重构完成**（M4 前置）：`tools/freq/` 11 个模块（`probe`/`variants`/`products`/`sampler`/
-  `report`/`driver`/三个 CLI），`watch_freq.py` 566→25 行、`bench_rewrite.py`→27 行薄壳；聚合统一 median、
-  `hook.log` 迁到 `work/hook/`（`resolve()` 写跟随读，窗口期不分裂 `cfg`/`opt`）；39 单测。
-  ⚠️ 游戏相连路径全部**未验**（真按键/真内存读/preflight 真分支），留给 M4。
-- **M4 达成（游戏内主频，判据入口可复现）**：RV32IM —— **ours 25.835 MHz vs reference 5.369 MHz
-  （+381.2%，4.8×）**，一条命令 `bench_rewrite --variant reference:off --variant ours:off --json …` 可复现；
-  手动两轮交叉验证 4.78×；我们的 lowering 产物在游戏内执行成功（`impl=ours result=ok`，游戏不崩）。
-- **pi-lens 清零**：`ir_build.py` 17 条 → 0（`lens_diagnostics` 权威入口确认），产物 md5 逐字节不变。
-- **M3 达成（宿主面）**：`lower/ir_build.py`（AST → LLVM-C → 目标码 → `tcblob`）。
-  **006 与 rv32im 都与参考产物 10 tick 逐 tick 全等（差异 0 条）**；rv32im 产物 **58612 B vs 参考 219088 B**。
-  全程没有手写 C 参与。接口级更正：`RelocMode` `Static` → **PIC**。
+- **M0** 观测设施（98 份语料 + manifest + 覆盖率矩阵）· **M1** spike · **M2** 差分宿主 ·
+  装配器（桩/槽两趟定址、`.stubs` sidecar、返回前 sidecar 自校验）。
+- **M3（宿主面，Python 原型）**：006 与 rv32im 与参考产物逐 tick 全等。
+- **M4 主频对照（游戏内）**：RV32IM ours **25.835** vs reference **5.369 MHz**（+381.2%，4.8×）。
+- **M4.5 C++17 前端 + lowering + CLI + 壳接线**：`check.py` **5 PASS · 0 FAIL**（2026-10-18 主程复跑）；
+  壳的 ours 段已是**进程内**调 `simplexc_compile()`（不再读预编译 blob）；依赖门过（导入表只有 LLVM-C/KERNEL32/msvcrt）。
+- **M5 第一步：98 份覆盖表**（`simplexc/tools/m5/coverage.py` → `docs/notes/2026-10-18-m5-coverage.md`）：
+  可装配 **29**（29.6%）· 逐 tick 全等 **10** · 装配回退率 **70.4%** · 差分回退率 89.8% · 全量 24 s。
+- 语义档案（实验定死）：`U-L1`（load/store 字节地址、无对齐、窄写只写宽度）· `U-L7`+运行期复核 ·
+  `U-L8`（`>>` 永远 lshr、移位量按 W 取模、除零不 trap）· `/`、`%`（看被除数类型）。
 
-### 已完成：M4.5 前端换 C++17（M5 前置）
+### 下一步（已决定）
 
-`frontend/` + `lower/` 已是 C++17 产品实现（Python 原型冻结为 oracle），范围限于生成代码子集。
-接口 `simplexc/frontend/ast.hh` 冻结（24 节点逐条对应原型的 dataclass）。
-产品路径入口：`build/simplexc_cli.exe --src <si> --out <blob>`（`build.py simplexc_cli`）。
-
-**三条判据全绿**：
-1. **逐 tick 等价** —— `rv32im.si` → 26340 B / entry `0x63A0`，与参考产物（`0x215B`）10 tick **差异 0 条**；
-   同源 IR 与 Python 版**逐字节相同**（md5 `869677f0…`）→ lowering 是精确搬运。
-2. **延迟门** —— `corpus/src/177.si`（479225 B）前端 27 ms + lowering 10 ms + LLVM 147 ms + 装配 1 ms ≈ **190–266 ms**
-   （门 ≤4 s）；**依赖门** —— `compile_hook.dll` 导入表只有 KERNEL32/msvcrt。
-3. **判据入口** —— `check.py` 五步全 PASS（新增的 `lower_equiv` 用的就是 C++ 生产者）。
-
-**还差最后一段（进行中）**：壳（`tools/compile_hook.c`）的 ours 段**仍是读 M4 留下的预编译 blob**
-（地址绑死在别的进程上）。要换成进程内调 `simplexc_compile()`（`simplexc/shell/simplexc_core.h` 已冻结边界），
-再**用 M4 的测试验收**（部署 → 同一会话现取源码 → `bench_rewrite --variant reference:off --variant ours:off`）。
-只在宿主里等价不足以证明产品形态正确。
-**顺带查清一个一直存在的 bug**：`ir_build.py` 把 `LLVMCodeGenLevelDefault` 写成 0（那是 `None`），
-所以 Python 原型的机器码一直是 **-O0**（只有 IR 层做了 O2）。C++ 走官方头文件拿正确值 2 → 产物小 2.2 倍。
-含义：M4 的 24.83 MHz 是 -O0 代码生成的成绩，C++ 产物有望显著更快（**待游戏内实测**）。
-### 下一步（M4.5 之后，已决定）
-3. **M5 全量语料**：98 份逐份跑「能否装配 + 逐 tick 是否全等」，出一张覆盖表。
-4. **优化（M3 §11 U1–U4/U7）**：现在全 i64 + `alloca` + `align 1`，我们 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。
+1. **M5 后续：先诊断两类前端缺口**（它们合计 66/98，是装配率的主瓶颈）——
+   ① 模板字面量 `{…}` 插值 **49 份**（现被前端主动拒为「U-L3 未决」）·
+   ② 表达式里意外的 `')'` **17 份**（疑似解析器缺陷）。诊断清楚再定「补语义」还是「修解析」。
+2. **游戏内验收新壳**（M4.5 收尾）：部署新壳 + `build/LLVM-C.dll`（deploy 脚本不会替你拷）→ 同一会话现取源码 →
+   `bench_rewrite --variant reference:off --variant ours:off`。**需要人在游戏里配合**（起游戏、加载 RV32IM 电路）。
+3. **优化（IR 质量）**：现在全 i64 + `alloca` + `align 1`，rv32im 708 条指令 vs 手写 C 版 508 条 —— 明确有余量。
 
 ### 待定 / 未解
 
-- 空 struct 的 `packed { i8 }` 1 字节占位是 U-L4 未定下的临时选择。
-- 剩余语义：`U-L2`（数组下标/越界）、`U-L4`（struct 布局）、`U-L5`（enum 底层宽度）、
-  `U-L10`（字符串字面量编码）、`U-L12`（min/max 类型规则）—— **写一条验一条**。
+- 剩余语义：`U-L2`（数组下标/越界）、`U-L3`（`Str` 是否 NUL 终止、`+` 拼接的分配语义 —— 它是 ① 的前置）、
+  `U-L4`（struct 布局）、`U-L5`（enum 底层宽度）、`U-L10`（字符串字面量编码）、`U-L12`（min/max 类型规则）
+  —— **写一条验一条**。
+- **`-O0` 伏笔**：M4 的 25.835 MHz 是 Python 原型 `-O0` 代码生成的成绩（`ir_build.py` 把 `CodeGenOptLevel` 写成 0）。
+  C++ 走正确的 2、产物小 2.2 倍 → **游戏内更快是待测的**，别拿 25.835 当 C++ 产物的基线。
+- 034 / 090 的**参考产物**在宿主里间歇崩溃（AV，重试时好时坏）→ 这两份的差分判定不稳定，不能据它判我们的产物。
 - 游戏内真环境未验（真 `Sleep`/时钟、游戏设的 `target_cycle`）。
-- `entry`（`Result[2]`）的用途仍只知「相对机器码起点的偏移」。
+- `entry`（`Result[2]`）用途仍只知「相对机器码起点的偏移」。
 - `campaign/` 的 92 份没编译过；参考产物的热环没定位到（要 RIP 采样）。

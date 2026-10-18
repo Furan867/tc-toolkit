@@ -61,6 +61,10 @@
    （门 ≤4 s）；**依赖门** —— `compile_hook.dll` 导入表只有 KERNEL32/msvcrt。
 3. **判据入口** —— `check.py` 五步全 PASS（新增的 `lower_equiv` 用的就是 C++ 生产者）。
 
+**还差最后一段（进行中）**：壳（`tools/compile_hook.c`）的 ours 段**仍是读 M4 留下的预编译 blob**
+（地址绑死在别的进程上）。要换成进程内调 `simplexc_compile()`（`simplexc/shell/simplexc_core.h` 已冻结边界），
+再**用 M4 的测试验收**（部署 → 同一会话现取源码 → `bench_rewrite --variant reference:off --variant ours:off`）。
+只在宿主里等价不足以证明产品形态正确。
 **顺带查清一个一直存在的 bug**：`ir_build.py` 把 `LLVMCodeGenLevelDefault` 写成 0（那是 `None`），
 所以 Python 原型的机器码一直是 **-O0**（只有 IR 层做了 O2）。C++ 走官方头文件拿正确值 2 → 产物小 2.2 倍。
 含义：M4 的 24.83 MHz 是 -O0 代码生成的成绩，C++ 产物有望显著更快（**待游戏内实测**）。

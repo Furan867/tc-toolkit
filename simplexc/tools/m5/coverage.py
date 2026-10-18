@@ -25,6 +25,17 @@ checkpoint：每 `--batch` 份就重写一次上面三个文件（不是跑完�
     python simplexc/tools/m5/coverage.py                  # 全量（98 + rv32im 基准行）
     python simplexc/tools/m5/coverage.py --limit 10       # 只跑前 10 份（验脚本用）
     python simplexc/tools/m5/coverage.py --resume         # 接着上次跑
+
+**目录模式**（`--dir`）：扫一个目录、只做第 ①步，不差分。给的是 `corpus/campaign/` 这类
+**没有 manifest、也没有参考产物**的语料 —— 没有参考产物可比，所以到「装得出来」为止：
+
+    python simplexc/tools/m5/coverage.py --dir simplexc/corpus/campaign --no-diff \
+        --report docs/notes/2026-10-18-campaign-survey.md
+
+目录模式的形状 = 每个一级子目录里的 `test.si` 是一份语料，id = 子目录名。三个产物
+（`--tsv` / `--summary-json` / `--report`）的默认值在这条路上全部落在 `--out-dir` 下
+（`survey.tsv` / `survey.summary.json` / `survey.md`）—— 默认值若还指向仓库里那 98 份的报告，
+跑一次摸底就把它们覆盖了。报告里带一节「与 98 份失败分类的对照」（口径见 `write_survey_report`）。
 """
 from __future__ import annotations
 
@@ -58,6 +69,12 @@ DEFAULT_TSV = os.path.join(DEFAULT_OUT_DIR, "coverage.tsv")
 DEFAULT_SUMMARY = os.path.join(DEFAULT_OUT_DIR, "coverage.summary.json")
 DEFAULT_REPORT = os.path.join(ROOT, "docs", "notes", "2026-10-18-m5-coverage.md")
 
+# 目录模式的产物名（落在 `--out-dir` 下，不进 git）与 98 份那轮的汇总的位置。
+SURVEY_TSV = "survey.tsv"
+SURVEY_SUMMARY = "survey.summary.json"
+SURVEY_REPORT = "survey.md"
+COVERAGE_SUMMARY = DEFAULT_SUMMARY          # 目录模式的报告拿它做「与 98 份对照」
+
 TSV_COLUMNS = ["scope", "id", "status", "cli_rc", "cli_ms", "blob_bytes", "entry", "ref_bytes",
                "ticks_ref", "ticks_ours", "region_keys_same", "diff_lines", "diff_ticks",
                "err_kind", "err_detail", "err_first_line", "first_diff", "host_retries", "seconds"]
@@ -76,9 +93,14 @@ STATUS_CLI_TIMEOUT = "cli_timeout"
 STATUS_REF_MISSING = "ref_missing"     # 装配成功，但参考产物不在（ref/ 不进 git，可能是没重新生成）
 STATUS_HOST_FAIL = "host_fail"
 STATUS_HOST_TIMEOUT = "host_timeout"
+STATUS_ASSEMBLED = "assembled"         # 目录模式（--no-diff）：装出来了，没有参考产物可比，到此为止
 
 FAIL_STATUSES = [STATUS_CLI_FAIL, STATUS_CLI_TIMEOUT, STATUS_REF_MISSING,
                  STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT, STATUS_DIFF]
+
+# 「装出来了」的状态（差分那步的结果不算 —— 它要求已经有产物）。
+ASSEMBLED_STATUSES = (STATUS_EQUAL, STATUS_DIFF, STATUS_REF_MISSING, STATUS_HOST_FAIL,
+                      STATUS_HOST_TIMEOUT, STATUS_ASSEMBLED)
 
 
 def fail(msg, rc) -> NoReturn:
@@ -181,6 +203,24 @@ def load_manifest_targets():
                         "ref": rel(os.path.join(REF_DIR, cid + ".bin")),
                         "ref_entry": int(row[ci["entry"]], 0)})
     return targets
+
+
+def load_dir_targets(root):
+    """扫一个目录 → 目标列表。id = 子目录名，`src` = 子目录里的 `test.si`。
+
+    目录语料（`corpus/campaign/` 那种）没有 manifest、没有参考产物，所以 `ref` / `ref_entry` 留空
+    —— `--no-diff` 那条路上用不到它们。空目录不算「成功跑完 0 份」，宁可在这里停。"""
+    try:
+        names = sorted(e.name for e in os.scandir(root)
+                       if e.is_dir() and os.path.isfile(os.path.join(e.path, "test.si")))
+    except OSError as e:
+        fail(f"读不了语料目录 {root}：{e}", 2)
+    if not names:
+        fail(f"{root} 下没有「子目录/test.si」—— 目录语料的形状是一层子目录加一份 test.si"
+             "（比如 simplexc/corpus/campaign/<关卡名>/test.si）", 2)
+    return [{"scope": "survey", "id": name,
+             "src": rel(os.path.join(root, name, "test.si")), "ref": "", "ref_entry": 0}
+            for name in names]
 
 
 def rv32im_ref_entry():
@@ -340,6 +380,12 @@ def run_target(target, selftest, args):
         row["seconds"] = round(time.perf_counter() - t0, 3)
         return row
 
+    if args.no_diff:
+        # 目录语料没有参考产物 —— 判到「装得出来」为止（差分要两边都有产物才能比）。
+        row["status"] = STATUS_ASSEMBLED
+        row["seconds"] = round(time.perf_counter() - t0, 3)
+        return row
+
     if not (ref and os.path.exists(ref)):
         row["status"] = STATUS_REF_MISSING
         row["err_kind"], row["err_detail"] = "RefMissing", rel(ref or "")
@@ -409,16 +455,15 @@ def run_target(target, selftest, args):
     return row
 
 
-def aggregate(rows):
-    """汇总数字。`corpus` 口径只数 98 份语料；`baseline`（rv32im）单独报。"""
-    corpus = [r for r in rows if r["scope"] == "corpus"]
+def aggregate(rows, no_diff=False):
+    """汇总数字。语料口径 = 除 rv32im 基准行以外的所有行（`corpus` 与目录模式的 `survey` 都算）。"""
+    corpus = [r for r in rows if r["scope"] != "baseline"]
     baseline = [r for r in rows if r["scope"] == "baseline"]
     total = len(corpus)
     by_status = {}
     for r in corpus:
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
-    assembled = sum(by_status.get(s, 0) for s in (STATUS_EQUAL, STATUS_DIFF, STATUS_REF_MISSING,
-                                                 STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT))
+    assembled = sum(by_status.get(s, 0) for s in ASSEMBLED_STATUSES)
     equal = by_status.get(STATUS_EQUAL, 0)
     classes = {}
     for r in corpus:
@@ -432,6 +477,7 @@ def aggregate(rows):
     summary = {
         "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": total,
+        "no_diff": no_diff,
         "assembled": assembled,
         "equal": equal,
         "by_status": by_status,
@@ -450,13 +496,16 @@ def aggregate(rows):
 
 
 def summary_line(summary):
-    parts = [f"总 {summary['total']}", f"可装配 {summary['assembled']}", f"逐 tick 全等 {summary['equal']}"]
+    parts = [f"总 {summary['total']}", f"可装配 {summary['assembled']}"]
+    if not summary["no_diff"]:
+        parts.append(f"逐 tick 全等 {summary['equal']}")
     for s in FAIL_STATUSES:
         n = summary["by_status"].get(s, 0)
         if n:
             parts.append(f"{s} {n}")
     parts.append(f"装配回退率 {summary['fallback_rate_assemble']:.1%}")
-    parts.append(f"差分回退率 {summary['fallback_rate_diff']:.1%}")
+    if not summary["no_diff"]:            # 没跑差分就别报差分回退率 —— 那会读成「全都不等」
+        parts.append(f"差分回退率 {summary['fallback_rate_diff']:.1%}")
     return " · ".join(parts)
 
 
@@ -484,7 +533,7 @@ def read_tsv(path):
         if not line.strip():
             continue
         cells = line.split("\t")
-        row = {col: (cells[i] if i < len(cells) else "") for i, col in enumerate(head)}
+        row: Row = {col: (cells[i] if i < len(cells) else "") for i, col in enumerate(head)}
         for col in INT_COLUMNS:                              # TSV 里全是字符串 → 数值列还原
             cell = str(row[col]).strip()
             try:
@@ -633,11 +682,223 @@ def write_report(rows, summary, path, args, targets):
     return path
 
 
+def read_json(path):
+    """读一个 JSON；读不到返回 None —— 调用方自己决定「没有」算不算错。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except OSError:
+        return None
+    except ValueError as e:
+        fail(f"读不了 {rel(path)}：{e}", 2)
+
+
+def kind_totals(classes):
+    """失败分类 → 按 `err_kind` 计数（对照先看这一层，再看逐类）。"""
+    out = {}
+    for c in classes:
+        out[c["kind"]] = out.get(c["kind"], 0) + c["count"]
+    return out
+
+
+_ID_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def family_key(kind, detail):
+    """摸底口径的分类键：`err_detail` 里的**标识符也抹成 `<id>`**。
+
+    `normalize_detail` 只抹数字与路径，所以同一条消息换个变量名就成了新类
+    （`顶层 var registers …` / `顶层 var ram …`）—— 摸底问的是「卡在哪一类」，不是「哪个变量名」：
+    不抹标识符就会把 14 份同一形态的失败拆成 8 个 1 份的类。"""
+    return (kind or "?", _ID_TOKEN.sub("<id>", detail or "?"))
+
+
+def families(entries):
+    """[(kind, detail, count, ids)] → 按 `family_key` 合并（总数不变）。
+
+    展示用的 `kind` / `detail` 取**首见**那一份的原文 —— 归并键只用来配对，不去当列名；
+    一个族里有多种原文时额外记 `variants`，免得「14 份写成 `顶层 var input`」被读成只关于 `input`。"""
+    groups = {}
+    for kind, detail, count, ids in entries:
+        key = family_key(kind, detail)
+        g = groups.setdefault(key, {"kind": kind or "?", "detail": detail or "?",
+                                    "key": key, "count": 0, "ids": [], "variants": set()})
+        g["count"] += count
+        g["ids"].extend(ids)
+        g["variants"].add((kind, detail))
+    for g in groups.values():
+        g["variant_count"] = len(g["variants"])
+    return sorted(groups.values(), key=lambda c: (-c["count"], c["kind"], c["detail"]))
+
+
+def survey_families(rows):
+    """本次摸底的行 → 失败分类（同族归并）。"""
+    return families([(r["err_kind"] or r["status"], r["err_detail"] or r["status"], 1, [r["id"]])
+                     for r in rows if r["status"] != STATUS_ASSEMBLED])
+
+
+def base_round(summary_json):
+    """98 份那轮：`(原始汇总, 同族归并的失败分类)`；读不到就是 `(None, None)`。"""
+    data = read_json(summary_json)
+    if not data:
+        return None, None
+    return data, families([(c["kind"], c["detail"], c["count"], c["ids"])
+                           for c in data["fail_classes"]])
+
+
+def survey_comparison(classes, base, base_classes):
+    """本次目录摸底 vs 98 份（hook 抓的生成代码）的失败分类对照 —— 这是摸底的主要产出。
+
+    口径：两边都取**同族归并**后的类（`family_key`），所以在两轮里形状相同的消息就是同一类；
+    98 份那轮的数据来自 `COVERAGE_SUMMARY`。配不上的就是这一轮新的类。"""
+    out = []
+    w = out.append
+    if base is None:
+        w(f"- 98 份那轮的汇总不在 `{rel(COVERAGE_SUMMARY)}`（先跑一次 "
+          "`python simplexc/tools/m5/coverage.py`）—— 本节留空，其余结论不受影响。\n")
+        return out
+    base_by_key = {c["key"]: c for c in base_classes}
+    mine_keys = {c["key"] for c in classes}
+    w(f"98 份那轮（同一口径）：总 {base['total']} · 可装配 {base['assembled']} · "
+      f"逐 tick 全等 {base['equal']}（`{rel(COVERAGE_SUMMARY)}`）。\n")
+
+    w("### 按 err_kind\n")
+    w("| err_kind | 本次目录 | 98 份 |")
+    w("| --- | --- | --- |")
+    mine_kind, base_kind = kind_totals(classes), kind_totals(base_classes)
+    for kind in sorted(set(mine_kind) | set(base_kind)):
+        w(f"| {md_cell(kind, 40)} | {mine_kind.get(kind, 0)} | {base_kind.get(kind, 0)} |")
+    w("")
+
+    w("### 逐类配对（标识符抹成 `<id>`）\n")
+    w("| 缺口（err_kind / err_detail） | 本次目录 | 98 份 | 两边都有？ |")
+    w("| --- | --- | --- | --- |")
+    overlap = []
+    for c in classes:
+        hit = base_by_key.get(c["key"])
+        if hit:
+            overlap.append((c, hit))
+        w(f"| {md_cell(c['kind'], 40)} / {md_cell(c['detail'])} | {c['count']} | "
+          f"{hit['count'] if hit else '—'} | {'**是**' if hit else '**否（本轮新增）**'} |")
+    w("")
+    new_here = [c for c in classes if c["key"] not in base_by_key]
+    only_base = [c for c in base_classes if c["key"] not in mine_keys]
+    w("- 本轮有、98 份没有的类：" + ("无" if not new_here else "；".join(
+        f"{c['kind']}/{md_cell(c['detail'], 60)}（{c['count']} 份）" for c in new_here)))
+    w("- 98 份有、本轮没有的类：" + ("无" if not only_base else "；".join(
+        f"{c['kind']}/{md_cell(c['detail'], 60)}（{c['count']} 份）" for c in only_base)))
+    if not classes:
+        w("- 本轮没有失败类。")
+    elif not overlap:
+        w(f"- **结论：两轮没有一类重合**（本轮 {len(classes)} 类 vs 98 份 {len(base_classes)} 类）"
+          " —— 两类语料卡住的不是同一类缺口。")
+    else:
+        w(f"- **结论：重合 {len(overlap)} 类**：" + "；".join(
+            f"{c['kind']}/{md_cell(c['detail'], 60)}（本轮 {c['count']} 份 · 98 份 {b['count']} 份）"
+            for c, b in overlap))
+    w("")
+    return out
+
+
+def write_survey_report(rows, summary, path, args, targets):
+    """目录摸底的人读报告（`--dir` 那条路）：汇总 + 失败分类（带原文首行）+ 与 98 份的对照 + 每份一行。
+
+    **没有差分那一段**：目录语料没有参考产物，判定到「装得出来」为止。"""
+    corpus = [r for r in rows if r["scope"] != "baseline"]
+    src_of = {t["id"]: t for t in targets}
+    total = len([t for t in targets if t["scope"] != "baseline"])
+    failed = summary["total"] - summary["assembled"]
+    out = []
+    w = out.append
+    root = args.dir or "（--dir）"
+    w(f"# 目录摸底：`{rel(root)}` 的 {total} 份能不能装出来（只装配、不差分）\n")
+    w(f"生成 {summary['generated']} · 已完成 {len(corpus)}/{total} 份 · "
+      f"{'**中途快照（还没跑完）**' if len(corpus) < total else '跑完'}\n")
+    w("判据口径：每份语料只做第 ①步 `build/simplexc_cli.exe --src <子目录>/test.si --out <blob>`；"
+      "这个目录没有 manifest、也没有参考产物，所以**不做差分、不生成参考产物**。"
+      "错误类别按 CLI 的 catch 分支前缀归类，细节里行号/列号/数字已抹掉（同一类缺口合并计数）。"
+      f"注意：没参考产物就分不清「我们缺功能」与「文件本身不是完整程序」—— {total} 份里的失败，"
+      "有一部分可能属于后者，要它自己编一遍才知道。\n")
+    w(f"重跑：`python simplexc/tools/m5/coverage.py --dir {rel(root)} --no-diff "
+      f"--out-dir {rel(args.out_dir)} --report {rel(path)}` · 机器可读：`{rel(args.tsv)}`\n")
+
+    w("## 汇总\n")
+    w("| 指标 | 值 |")
+    w("| --- | --- |")
+    w(f"| 语料总数 | {total}（本次已跑 {summary['total']}） |")
+    if summary["total"]:
+        w(f"| 可装配 | {summary['assembled']}（{summary['assembled'] / summary['total']:.1%}） |")
+        w(f"| 装不出来 | {failed}（{failed / summary['total']:.1%}） |")
+    else:
+        w("| 可装配 | 0 |")
+        w("| 装不出来 | 0 |")
+    for s in FAIL_STATUSES:
+        n = summary["by_status"].get(s, 0)
+        if n:
+            w(f"| 其中 {s} | {n} |")
+    w(f"| CLI 耗时 | 中位 {summary['cli_ms_median']} ms / 最大 {summary['cli_ms_max']} ms |")
+    w(f"| 总墙上时间 | {summary['corpus_wall_seconds']} s |")
+    timeouts = [r["id"] for r in corpus if r["status"] == STATUS_CLI_TIMEOUT]
+    w(f"| 超时 | {timeouts or '无'} |")
+    w("")
+
+    w("## 失败分类\n")
+    classes = survey_families(corpus)
+    base, base_classes = base_round(COVERAGE_SUMMARY)
+    if not classes:
+        w("无失败 —— 全部装出来了。\n")
+    else:
+        w("按 `err_kind`：" + " · ".join(
+            f"{k} {v}" for k, v in sorted(kind_totals(classes).items(), key=lambda kv: (-kv[1], kv[0]))) + "\n")
+        w("逐类（同一个键 = 同一类；细节里的标识符抹成 `<id>`，见 `family_key`）：\n")
+        w("| 类别 | 细节 | 数量 | 语料 |")
+        w("| --- | --- | --- | --- |")
+        for c in classes:
+            variants = f"（{c['variant_count']} 种原文，细节取首见）" if c["variant_count"] > 1 else ""
+            w(f"| {md_cell(c['kind'], 40)} | {md_cell(c['detail'])}{variants} | {c['count']} | "
+              f"{'、'.join(c['ids'])} |")
+        w("")
+        w("### 每一类的原文错误首行\n")
+        for c in classes:
+            rep = next(r for r in corpus if r["id"] in c["ids"])
+            blob = rel(os.path.join(args.out_dir, "out", rep["id"] + ".bin"))
+            w(f"**{c['kind']}：{md_cell(c['detail'], 80)}**（{c['count']} 份，例 {rep['id']}）\n")
+            w("```")
+            w(f"# 原始错误首行：{rep['err_first_line'] or '—'}")
+            w(f"build/simplexc_cli.exe --src {src_of[rep['id']]['src']} --out {blob}")
+            w("```\n")
+
+    w("## 与 98 份（hook 抓的生成代码）失败分类的对照\n")
+    w("这一节是本次摸底的主要产出：两轮跑的是**两类不同的语料**（campaign = 关卡自带的手写测试程序，"
+      "98 份 = hook 抓的游戏生成代码），比的是它们「卡在哪一类」是否同一批。\n")
+    for line in survey_comparison(classes, base, base_classes):
+        w(line)
+
+    w("## 覆盖表（每份一行）\n")
+    w("| id | 装配 | blob B | entry | cli ms | 状态 | 失败类别 | 原始错误首行 |")
+    w("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    for r in corpus:
+        asm = "ok" if r["status"] in ASSEMBLED_STATUSES else "fail"
+        w(f"| {r['id']} | {asm} | {r['blob_bytes'] or '—'} | {r['entry'] or '—'} | {r['cli_ms']} | "
+          f"{r['status']} | {md_cell(r['err_kind'] or '—', 40)} | {md_cell(r['err_first_line'])} |")
+    w("")
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(out))
+    except OSError as e:
+        fail(f"写不了报告 {rel(path)}：{e}", 2)
+    return path
+
+
 def main(argv=None):
     # 宿主是 Python：它的 stderr 按**控制台编码**（GBK）输出，而 `selftest.run_host` 按 utf-8 解码
     # —— 中文会变成乱码。让子进程按 utf-8 输出，与调用方的解码口径对齐（CLI 是 C++，不受影响）。
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-    ap = argparse.ArgumentParser(description="M5 覆盖表：装配 + 逐 tick 差分")
+    ap = argparse.ArgumentParser(description="M5 覆盖表：装配 + 逐 tick 差分；--dir = 目录摸底（只装配）")
+    ap.add_argument("--dir", default=None,
+                    help="扫一个目录：每个一级子目录里的 test.si 是一份语料（无 manifest、不差分）")
+    ap.add_argument("--no-diff", action="store_true",
+                    help="只装配不差分；只有跟 --dir 一起用才有意义（目录语料没有参考产物）")
     ap.add_argument("--ids", default=None, help="只跑这些 id（逗号分隔）")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 份语料（0 = 全部）")
     ap.add_argument("--ticks", type=int, default=10)
@@ -647,13 +908,29 @@ def main(argv=None):
                     help="宿主失败（非超时）的重试次数：固定地址撞车、参考产物间歇崩溃都靠它拿稳定结果")
     ap.add_argument("--cli-timeout", type=float, default=300.0)
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
-    ap.add_argument("--tsv", default=DEFAULT_TSV)
-    ap.add_argument("--summary-json", default=DEFAULT_SUMMARY)
-    ap.add_argument("--report", default=DEFAULT_REPORT)
+    ap.add_argument("--tsv", default=None,
+                    help=f"默认 manifest 模式 {rel(DEFAULT_TSV)} · 目录模式 <out-dir>/{SURVEY_TSV}")
+    ap.add_argument("--summary-json", default=None,
+                    help=f"默认 manifest 模式 {rel(DEFAULT_SUMMARY)} · 目录模式 <out-dir>/{SURVEY_SUMMARY}")
+    ap.add_argument("--report", default=None,
+                    help=f"默认 manifest 模式 {rel(DEFAULT_REPORT)} · 目录模式 <out-dir>/{SURVEY_REPORT}"
+                         "（默认值就落在 work/tmp 下 —— 不显式给就不会盖掉仓库里那 98 份的报告）")
     ap.add_argument("--batch", type=int, default=10, help="每跑完这么多份就落盘一次")
     ap.add_argument("--resume", action="store_true", help="从已有 TSV 里跳过已完成的 id")
     ap.add_argument("--no-baseline", action="store_true", help="不跑 rv32im 基准行")
     args = ap.parse_args(argv)
+
+    if args.no_diff and not args.dir:
+        fail("--no-diff 只有跟 --dir 一起才有意义：manifest 里那 98 份有参考产物，差分正是那条路的目的", 2)
+    if args.dir:
+        args.no_diff = True          # 目录语料没有参考产物 —— 这条路上差分拿不到结果，不必等它现形
+    # 目录模式的三个产物默认落在 out-dir 下：仓库里那 98 份的报告不能被一次摸底盖掉。
+    if args.tsv is None:
+        args.tsv = os.path.join(args.out_dir, SURVEY_TSV) if args.dir else DEFAULT_TSV
+    if args.summary_json is None:
+        args.summary_json = os.path.join(args.out_dir, SURVEY_SUMMARY) if args.dir else DEFAULT_SUMMARY
+    if args.report is None:
+        args.report = os.path.join(args.out_dir, SURVEY_REPORT) if args.dir else DEFAULT_REPORT
 
     if not os.path.exists(CLI):
         raise SystemExit(f"缺 {rel(CLI)}：先跑 python simplexc/tools/build.py simplexc_cli")
@@ -664,22 +941,27 @@ def main(argv=None):
             fail(f"建不了输出目录 {d}：{e}", 2)
     selftest = load_selftest()
 
-    targets = load_manifest_targets()
+    if args.dir:
+        targets = load_dir_targets(args.dir)
+    else:
+        targets = load_manifest_targets()
     if args.ids:
         want = {s.strip() for s in args.ids.split(",") if s.strip()}
         targets = [t for t in targets if t["id"] in want]
-        if not args.no_baseline and "rv32im" in want:
+        if not args.dir and not args.no_baseline and "rv32im" in want:
             targets.append(rv32im_target())
     else:
         if args.limit:
             targets = targets[:args.limit]
-        if not args.no_baseline:
+        if not args.dir and not args.no_baseline:
             targets = targets + [rv32im_target()]
+    write = write_survey_report if args.dir else write_report
 
     rows = read_tsv(args.tsv) if args.resume else []
     done_ids = {r["id"] for r in rows}
     todo = [t for t in targets if t["id"] not in done_ids]
-    print(f"M5 覆盖表：{len(targets)} 个目标，本次跑 {len(todo)} 个"
+    what = f"目录摸底（{rel(args.dir)}）" if args.dir else "M5 覆盖表"
+    print(f"{what}：{len(targets)} 个目标，本次跑 {len(todo)} 个"
           f"{'（--resume 跳过已完成 ' + str(len(done_ids)) + ' 个）' if done_ids else ''}", flush=True)
 
     for i, tgt in enumerate(todo, 1):
@@ -691,7 +973,7 @@ def main(argv=None):
               + (f" · {row['err_kind']}: {row['err_first_line']}" if row["status"] != STATUS_EQUAL else ""),
               flush=True)
         if i % args.batch == 0 or i == len(todo):
-            summary = aggregate(rows)
+            summary = aggregate(rows, args.no_diff)
             write_tsv(rows, args.tsv)
             try:
                 with open(args.summary_json, "w", encoding="utf-8", newline="\n") as f:
@@ -699,10 +981,10 @@ def main(argv=None):
                     f.write("\n")
             except OSError as e:
                 fail(f"写不了汇总 JSON {rel(args.summary_json)}：{e}", 2)
-            write_report(rows, summary, args.report, args, targets)
+            write(rows, summary, args.report, args, targets)
             print(f"  ── checkpoint：{summary_line(summary)}", flush=True)
 
-    summary = aggregate(rows)
+    summary = aggregate(rows, args.no_diff)
     write_tsv(rows, args.tsv)
     try:
         with open(args.summary_json, "w", encoding="utf-8", newline="\n") as f:
@@ -710,7 +992,7 @@ def main(argv=None):
             f.write("\n")
     except OSError as e:
         fail(f"写不了汇总 JSON {rel(args.summary_json)}：{e}", 2)
-    write_report(rows, summary, args.report, args, targets)
+    write(rows, summary, args.report, args, targets)
     print("汇总：" + summary_line(summary))
     for c in summary["fail_classes"]:
         print(f"  失败分类 {c['count']:>2} × {c['kind']}/{c['detail']}  例 {c['ids'][0]}")
@@ -723,6 +1005,7 @@ def dirname_of(path):
 
 
 if __name__ == "__main__":
-    if hasattr(sys.stdout, "reconfigure"):                   # 控制台常是 GBK，中文会花
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:                              # 控制台常是 GBK，中文会花
+        reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

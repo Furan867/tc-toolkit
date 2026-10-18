@@ -2544,17 +2544,86 @@ V Lower::array_literal(const ArrayLitExpr& node) {
     return V::instr(g, make_array(ty));
 }
 
+/* 元素（结构体字段）的**存储形态**值 —— 与 `store_addr` 同一套口径：整数按字段宽度截断
+ * （窄写只写该宽度，U-L1），非整数原样。 */
+LLVMValueRef Lower::field_storage_value(const V& v, const TyRef& ty, int line) {
+    if (!is_int(*ty)) return llv(v);
+    V conv = convert(v, ty, line);
+    LLVMTypeRef st = storage_ll(*ty);
+    LLVMValueRef ll = llv(conv);
+    if (st != i64_) ll = LLVMBuildTrunc(bd_, ll, st, "t");
+    return ll;
+}
+
 V Lower::composite_literal(const CompositeLitExpr& node) {
     TyRef ty = ty_of_ref(*node.typ, node.src_line);
     if (ty->kind != TyKind::Struct) {
         throw Unsupported(std::string("复合字面量类型 ") + ty_kind_name(ty->kind), node.src_line);
     }
-    if (!node.fields.empty()) {
-        throw Unsupported("带字段初始化的复合字面量（U-L4 布局未定）", node.src_line);
-    }
     auto it = struct_ll_.find(ty->name);
     if (it == struct_ll_.end()) throw CompileFail("struct 类型没建好：" + ty->name);
-    return V::instr(LLVMConstNull(it->second), ty);
+    /* 未列字段取**该字段元素的零值**：聚合的零值底座 + 逐字段覆盖。
+     * 字段初始化按**源码顺序**求值（求值有副作用时看得见），与字段名顺序无关 —— 实验见
+     * `work/tmp/ul4/`。先求值再拼聚合，两趟分开就是为了保住这个顺序。 */
+    struct FieldVal {
+        size_t idx;
+        V v;
+    };
+    std::vector<FieldVal> vals;
+    bool all_const = true;
+    /* 不在函数体里（顶层 `var x = T {…}`）就只能求常量：这时**不能**走 `e()` —— 它按「有
+     * builder」的前提发指令，碰到字段值里的函数调用会在 `nullptr` 上摊（实测 0xC0000005）。
+     * `const_value()` 遇运行期表达式返回 `nullopt`，于是下面报一句可读的错。 */
+    const bool in_function = bd_ != nullptr && cur_block_ != nullptr;
+    for (const auto& f : node.fields) {
+        size_t idx = ty->fields.size();
+        for (size_t i = 0; i < ty->fields.size(); ++i) {
+            if (ty->fields[i].first == f->name) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx == ty->fields.size()) {
+            throw Unsupported("struct " + ty->name + " 没有字段 " + f->name, f->src_line);
+        }
+        const TyRef& fty = ty->fields[idx].second;
+        std::optional<V> raw = in_function ? std::optional<V>(e(*f->value))
+                                          : const_value(*f->value);
+        if (!raw) {
+            throw Unsupported("复合字面量的字段 " + f->name + " 不是编译期常量", f->src_line);
+        }
+        V conv = convert(*raw, fty, f->src_line);
+        all_const = all_const && conv.c.has_value();
+        vals.push_back(FieldVal{idx, conv});
+    }
+    if (all_const) {
+        /* 常量聚合：把**每个**字段都放进去（未列的放零），于是顶层 `var x = T {…}` 的
+         * 初始化式也能用 —— 那条路拿不到 builder，只能靠聚合常量。 */
+        std::vector<LLVMValueRef> elems;
+        elems.reserve(ty->fields.size());
+        for (const auto& f : ty->fields) elems.push_back(LLVMConstNull(storage_ll(*f.second)));
+        for (const FieldVal& fv : vals) {
+            elems[fv.idx] = const_for_storage(fv.v);
+        }
+        LLVMValueRef agg = LLVMConstStructInContext(ctx(), elems.data(),
+                                                    static_cast<unsigned>(elems.size()), 1);
+        return V::instr(agg, ty);
+    }
+    if (bd_ == nullptr || cur_block_ == nullptr) {
+        /* 常量环境里出现**没有常量值**的字段（数组字面量那种「有 ll、无 c」）：不许在 nullptr
+         * 上发指令。 */
+        throw Unsupported("复合字面量里的字段值不是编译期常量", node.src_line);
+    }
+    LLVMPositionBuilderAtEnd(bd_, cur_block_);
+    LLVMValueRef agg = LLVMConstNull(it->second);
+    for (const FieldVal& fv : vals) {
+        const TyRef& fty = ty->fields[fv.idx].second;
+        unsigned pos = static_cast<unsigned>(fv.idx);
+        LLVMValueRef el = fv.v.c ? const_for_storage(fv.v)
+                                 : field_storage_value(fv.v, fty, node.src_line);
+        agg = LLVMBuildInsertValue(bd_, agg, el, pos, "cl");
+    }
+    return V::instr(agg, ty);
 }
 
 /* ================================================================ Program */

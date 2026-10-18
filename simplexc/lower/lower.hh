@@ -174,6 +174,7 @@ protected:
     LLVMValueRef const_int(uint64_t v) const;
     LLVMValueRef const_ptr(uint64_t addr) const;
     LLVMValueRef const_for_storage(const V& v);
+    LLVMValueRef field_storage_value(const V& v, const TyRef& ty, int line);
 
     /* ---- 函数的状态保存 / 恢复（「按需生成」要边发一个函数边发它调用的函数） */
     struct Binding {

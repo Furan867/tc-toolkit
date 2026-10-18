@@ -98,6 +98,11 @@
   层层扣转义后不闭合，shell 就一直**等 stdin**：命令永不返回、`bash` 工具的 5 分钟硬超时也不生效
   （实测：子 agent 因此挂死 5m33s、零输出，且 watchdog 只报「bash 开了 240s」）。
   内联脚本一律用 `write` 工具落盘再 `python <file>.py` 跑（write 不走 shell，写什么是什么）。
+- 派活时别漏掉「pi-lens 清零」这条验收判据 —— 新写的工具脚本会自带一堆
+  `unchecked-throwing-call-python`（**error 级**，命中 `open`/`json.load(s)`/`os.*`/`shutil.*`）。
+  项目的既定处置是**清零**（`docs/notes/2026-10-18-ir-build-lint.md`：真会抛的加 `try/except` +
+  「路径+原因」+ 非零退出码；规则不适配的假报也改成显式写法、行为等价），**不是判「误报」放过**。
+  实测：一次派活漏了这条，3 个文件欠 31 条债，其中 17 条来自新派活写出来的 `m5/coverage.py`。
 - 别拿默认参数跑 `simplexc/tools/m5/coverage.py` 的子集验证 —— `--report` 默认就指向仓库里的
   `docs/notes/2026-10-18-m5-coverage.md`，一次 `--ids 100,…` 就把 **98 份的全量报告覆盖成 17 份子集**
   （实测：154 行差异）。子集跑必须显式 `--report work/tmp/…`（`--tsv`/`--summary-json` 同理）。

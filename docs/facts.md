@@ -389,6 +389,14 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-18-ul4-layout.md`；器材 `work/tmp/ul4/e2.py`（探针 + 参考编译 + 宿主观测 `set_text` 字节）
 最后验证：2026-10-18
 
+### 嵌套 def 的自由变量按「**调用点**」解析，不是按 def 的文本位置
+- `def` 写在 `var x` **之前**、而调用点在 `var x` **之后** → 参考**编得过**（所以不是在 def 文本位置解析）；
+- 调用点在 `var x` **之前**（同一块）→ 参考**拒绝**：`Variable x not in scope. (1516)`（所以解析在调用点、顺序敏感）；
+- 调用点自己查不到时，链条**往外走到最外层调用点**（程序根语句树）才命中。
+⇒ 程序根体里的 `var` **不是全局**（若是全局，第二条不该报错）。我们据此改成「在调用点摊平捕获」（`ebc97c2`）。
+验证：`docs/notes/2026-10-18-closure-var.md`；片段与命令 `work/tmp/in_scope/rootvar_{E_def_then_var,K_guard_before}.si` + `work/tmp/ul14/refcc.py`
+最后验证：2026-10-18
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

@@ -188,6 +188,14 @@ Json node_to_json(const Node* n) {
       d.set("close_line", Json::integer(x.close_line));
       break;
     }
+    case NK::Template: {
+      const auto& x = static_cast<const TemplateExpr&>(*n);
+      Json texts = Json::array();
+      for (const std::string& s : x.texts) texts.push(Json::string(s));
+      d.set("texts", std::move(texts));
+      d.set("parts", node_list_json(x.parts));
+      break;
+    }
     case NK::Block: {
       const auto& x = static_cast<const Block&>(*n);
       d.set("stmts", node_list_json(x.stmts));
@@ -441,6 +449,18 @@ std::string render_tree(const Node* n, int indent) {
       kid_type("typ", x.typ.get());
       kid_nodes("fields", x.fields);
       parts.scal.push_back("close_line=" + std::to_string(x.close_line));
+      break;
+    }
+    case NK::Template: {
+      const auto& x = static_cast<const TemplateExpr&>(*n);
+      std::string texts = "texts=[";
+      for (std::size_t k = 0; k < x.texts.size(); ++k) {
+        if (k != 0) texts += ", ";
+        texts += py_repr_str(x.texts[k]);
+      }
+      texts += "]";
+      parts.scal.push_back(texts);
+      kid_nodes("parts", x.parts);
       break;
     }
     case NK::Block: {

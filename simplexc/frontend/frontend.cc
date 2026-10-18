@@ -187,6 +187,11 @@ void walk_nodes(const Node* n, const NodeVisitor& on_node, const TypeRefVisitor&
       for (const std::unique_ptr<FieldInit>& f : c->fields) walk_nodes(f.get(), on_node, on_type);
       break;
     }
+    case NK::Template: {
+      const auto* t = static_cast<const TemplateExpr*>(n);
+      for (const ExprPtr& p : t->parts) walk_nodes(p.get(), on_node, on_type);
+      break;
+    }
     case NK::Block: {
       const auto* b = static_cast<const Block*>(n);
       for (const StmtPtr& s : b->stmts) walk_nodes(s.get(), on_node, on_type);

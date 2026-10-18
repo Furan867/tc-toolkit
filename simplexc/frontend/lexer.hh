@@ -32,6 +32,11 @@ struct LexError {
 /* 末尾补一个 eof token。未闭合字面量 / 不认识的字符 → 抛 LexError。 */
 std::vector<Tok> tokenize(std::string_view text);
 
+/* 词法器内部的两个小工具，公开给 parser 拆模板插值用：模板 token 的文本是**原文**
+   （词法器不拆 `{…}`），parser 要自己找配对的花括号，那需要同一套「引号扫到哪」与「码点怎么数」。 */
+std::size_t scan_quoted_at(std::string_view text, std::size_t i);
+int code_points_between(std::string_view text, std::size_t b, std::size_t e);
+
 std::string describe(const Tok& t);
 
 }  // namespace simplexc

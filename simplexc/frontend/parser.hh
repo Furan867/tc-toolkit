@@ -95,6 +95,8 @@ class Parser {
                   std::vector<ExprPtr>& args);
   std::vector<TypeRefPtr> parse_type_arg_list();
   std::unique_ptr<Expr> parse_primary();
+  std::unique_ptr<Expr> parse_template(const Tok& t);
+  std::unique_ptr<Expr> parse_template_part(const Tok& t, std::size_t begin, std::size_t end);
   std::unique_ptr<Expr> parse_array_literal();
   std::unique_ptr<Expr> parse_composite(const Tok& t);
 

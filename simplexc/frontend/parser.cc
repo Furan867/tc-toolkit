@@ -117,6 +117,7 @@ std::string_view node_py_name(NK kind) {
     case NK::Index: return "IndexExpr";
     case NK::ArrayLit: return "ArrayLitExpr";
     case NK::CompositeLit: return "CompositeLitExpr";
+    case NK::Template: return "TemplateExpr";
     case NK::FieldInit: return "FieldInit";
     case NK::Block: return "Block";
     case NK::Param: return "Param";
@@ -150,6 +151,7 @@ bool is_expr_kind(NK kind) {
     case NK::Index:
     case NK::ArrayLit:
     case NK::CompositeLit:
+    case NK::Template:
       return true;
     default:
       return false;
@@ -685,9 +687,7 @@ std::unique_ptr<Expr> Parser::parse_primary() {
   }
   if (t.kind == "template") {
     next();
-    if (t.interp) {
-      throw err_tok(t, "模板字面量的 `{…}` 插值语义未定（U-L3 未决）→ 未支持");
-    }
+    if (t.interp) return parse_template(t);
     auto l = std::make_unique<LiteralExpr>(t.line);
     l->lit_kind = "template";
     l->text = t.text;
@@ -721,6 +721,66 @@ std::unique_ptr<Expr> Parser::parse_primary() {
     return id;
   }
   throw err_tok(t, "表达式里出现意外的 " + describe(t));
+}
+
+std::unique_ptr<Expr> Parser::parse_template(const Tok& t) {
+  /* 模板的 token 文本 = 反引号之间的**原文**（词法器不拆 `{…}`），所以这里自己拆：
+     文字段进 `texts`，`{…}` 里的代码交给一个**子 Parser**（词法器原样复用）。
+     模板不可能跨行（`scan_quoted` 遇换行即未闭合），所以子 token 只需把列号平移：
+     源列 = 模板起始列 + 1（反引号本身）+ 片段起点之前的码点数。 */
+  auto te = std::make_unique<TemplateExpr>(t.line);
+  const std::string& text = t.text;
+  std::size_t i = 0;
+  while (true) {
+    const std::size_t open = text.find('{', i);
+    if (open == std::string::npos) {
+      te->texts.push_back(text.substr(i));
+      return te;
+    }
+    te->texts.push_back(text.substr(i, open - i));
+    /* 找配对的 `}`：嵌套的 `{` 计数，引号里的花括号不算（`{'}'}`）。 */
+    std::size_t j = open + 1;
+    int depth = 1;
+    while (j < text.size() && depth > 0) {
+      const char c = text[j];
+      if (c == '{') {
+        ++depth;
+      } else if (c == '}') {
+        --depth;
+      } else if (c == '\'' || c == '"') {
+        const std::size_t end = scan_quoted_at(text, j);
+        if (end == std::string::npos) break;
+        j = end;
+        continue;
+      }
+      ++j;
+    }
+    if (depth > 0) {
+      throw ParseError{t.line, t.col + 1 + code_points_between(text, 0, open),
+                       "模板字面量的 '{' 没有配对的 '}'"};
+    }
+    const std::size_t close = j - 1; /* 指向 '}' */
+    te->parts.push_back(parse_template_part(t, open + 1, close));
+    i = close + 1;
+  }
+}
+
+std::unique_ptr<Expr> Parser::parse_template_part(const Tok& t, std::size_t begin,
+                                                  std::size_t end) {
+  std::vector<Tok> sub = tokenize(std::string_view(t.text).substr(begin, end - begin));
+  const int shift = t.col + code_points_between(t.text, 0, begin);
+  for (Tok& s : sub) {
+    s.line = t.line;
+    s.col += shift;
+  }
+  Parser p(std::move(sub), type_names_);
+  std::unique_ptr<Expr> e = p.parse_expr();
+  if (!p.at_eof()) {
+    const Tok extra = p.peek();
+    throw ParseError{extra.line, extra.col,
+                     "模板插值里多余的 " + describe(extra)};
+  }
+  return e;
 }
 
 std::unique_ptr<Expr> Parser::parse_array_literal() {

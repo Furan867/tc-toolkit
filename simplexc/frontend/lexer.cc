@@ -28,7 +28,9 @@ std::size_t ident_at(std::string_view text, std::size_t i) {
 }
 
 /* text[b,e) 的码点数（原型按 Python 字符计数，CJK 是一个码点三个字节）。 */
-int code_points(std::string_view text, std::size_t b, std::size_t e) {
+}  // namespace
+
+int code_points_between(std::string_view text, std::size_t b, std::size_t e) {
   int n = 0;
   for (std::size_t k = b; k < e && k < text.size(); ++k) {
     if ((static_cast<unsigned char>(text[k]) & 0xC0) != 0x80) ++n;
@@ -37,7 +39,7 @@ int code_points(std::string_view text, std::size_t b, std::size_t e) {
 }
 
 /* 原型 `_scan_quoted`：定界符 → 闭合定界符之后；遇换行即截断；未闭合 = kNone。 */
-std::size_t scan_quoted(std::string_view text, std::size_t i) {
+std::size_t scan_quoted_at(std::string_view text, std::size_t i) {
   const char delim = text[i];
   const std::size_t n = text.size();
   std::size_t j = i + 1;
@@ -53,6 +55,8 @@ std::size_t scan_quoted(std::string_view text, std::size_t i) {
   }
   return kNone;
 }
+
+namespace {
 
 bool is_delim(char c) { return c == '"' || c == '\'' || c == '`'; }
 
@@ -113,7 +117,7 @@ std::vector<Tok> tokenize(std::string_view text) {
       t.col = start_col;
       t.gap = gap;
       toks.push_back(std::move(t));
-      col += code_points(text, i, ident_end);
+      col += code_points_between(text, i, ident_end);
       i = ident_end;
       gap = false;
       continue;
@@ -133,7 +137,7 @@ std::vector<Tok> tokenize(std::string_view text) {
       t.col = start_col;
       t.gap = gap;
       toks.push_back(std::move(t));
-      col += code_points(text, i, e);
+      col += code_points_between(text, i, e);
       i = e;
       gap = false;
       continue;
@@ -161,14 +165,14 @@ std::vector<Tok> tokenize(std::string_view text) {
       t.col = start_col;
       t.gap = gap;
       toks.push_back(std::move(t));
-      col += code_points(text, i, j);
+      col += code_points_between(text, i, j);
       i = j;
       gap = false;
       continue;
     }
 
     if (is_delim(c)) {
-      const std::size_t end = scan_quoted(text, i);
+      const std::size_t end = scan_quoted_at(text, i);
       if (end == kNone) {
         throw LexError{start_line, start_col,
                        "第 " + std::to_string(start_line) + " 行：" + std::string(1, c) +
@@ -184,7 +188,7 @@ std::vector<Tok> tokenize(std::string_view text) {
       t.quote = std::string(1, c);
       t.interp = (t.kind == "template") && inner.find('{') != std::string::npos;
       toks.push_back(std::move(t));
-      col += code_points(text, i, end);
+      col += code_points_between(text, i, end);
       i = end;
       gap = false;
       continue;

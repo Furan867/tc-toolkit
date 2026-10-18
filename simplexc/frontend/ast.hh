@@ -57,7 +57,7 @@ struct TypeRef {
 // ---------------------------------------------------------------------------
 enum class NK {
   // 表达式
-  Literal, Ident, Cast, Unary, Binary, Cond, Call, Member, Index, ArrayLit, CompositeLit,
+  Literal, Ident, Cast, Unary, Binary, Cond, Call, Member, Index, ArrayLit, CompositeLit, Template,
   // 辅助（不是 Expr 也不是 Stmt）
   FieldInit, Block, Param,
   // 语句
@@ -103,6 +103,17 @@ struct IdentExpr : Expr {
   static constexpr NK k = NK::Ident;
   explicit IdentExpr(int line) : Expr(k, line) {}
   std::string name;  // 编译期常量带 '#' 前缀（`#SIMULATION_STATE`）
+};
+
+/* 带 `{…}` 插值的模板字面量。`texts` 是文字段（个数 = 插值个数 + 1，允许空串），
+   `parts` 是插值里的表达式（按出现顺序）。
+   无插值的模板**不走这里**：它仍是 `LiteralExpr{lit_kind="template"}` —— 那条路径的产物已验证；
+   分成两个节点，是因为「有插值 / 没插值」在语法上确实是两种形状（前者要在 lowering 里拼字符串）。 */
+struct TemplateExpr : Expr {
+  static constexpr NK k = NK::Template;
+  explicit TemplateExpr(int line) : Expr(k, line) {}
+  std::vector<std::string> texts;
+  std::vector<ExprPtr> parts;
 };
 
 // `U32 (expr)` / `U64 expr` / `S32 0` —— 显式类型转换，操作数只到 unary 级。

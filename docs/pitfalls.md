@@ -94,3 +94,7 @@
   `LLVMCreateTargetMachine` 的 `CodeGenOptLevel` 决定（`Default`=2，`None`=0）。
   Python 原型把 `Default` 传成 0 一直没被发现，因为「IR 变小了」看起来像优化生效了；
   判据必须是 `.text` 体积或指令数，不是 IR 文本长度（实测差 2.2 倍，见 facts.md）。
+- 别在 `bash -c "…"` 里用 heredoc（`python - <<'EOF'`）内联脚本 —— 尤其脚本含引号/反斜杠字面量时，定界符
+  层层扣转义后不闭合，shell 就一直**等 stdin**：命令永不返回、`bash` 工具的 5 分钟硬超时也不生效
+  （实测：子 agent 因此挂死 5m33s、零输出，且 watchdog 只报「bash 开了 240s」）。
+  内联脚本一律用 `write` 工具落盘再 `python <file>.py` 跑（write 不走 shell，写什么是什么）。

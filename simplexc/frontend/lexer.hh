@@ -14,7 +14,8 @@
 namespace simplexc {
 
 struct Tok {
-  std::string kind;  /* ident | hash | at | number | string | template | op | eof */
+  std::string kind;  /* ident | hash | at | dollar | number | string | template | op | eof */
+  /* hash / at / dollar 的 text 只装 sigil 后面的名字（`#X` / `@X` / `$x`），sigil 本身不进 text */
   std::string text;  /* ident/number/op 是原文；string/template 是定界符之间的内容 */
   int line = 0;      /* 1-based */
   int col = 0;       /* 1-based，按码点 */

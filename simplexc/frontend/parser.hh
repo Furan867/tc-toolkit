@@ -98,6 +98,10 @@ class Parser {
   std::unique_ptr<Expr> parse_template(const Tok& t);
   std::unique_ptr<Expr> parse_template_part(const Tok& t, std::size_t begin, std::size_t end);
   std::unique_ptr<Expr> parse_array_literal();
+  /* `[T] expr`（方括号转换）—— 与数组字面量在语法上共用一个 `[`，靠「类型名 + `]` + 后面
+     还跟着表达式」区分（`[a, b]` / `[x]` 两者都不满足）。 */
+  bool bracket_cast_ahead() const;
+  std::unique_ptr<Expr> parse_bracket_cast();
   std::unique_ptr<Expr> parse_composite(const Tok& t);
 
   /* 表达式节点的 kind 名（报错文本里用） */

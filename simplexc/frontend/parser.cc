@@ -239,7 +239,9 @@ TypeRefPtr Parser::type_ref_after(const Tok& t) {
   tr->src_line = t.line;
   tr->name = t.text;
   tr->at = (t.kind == "at");
-  if (at("op", "[")) {
+  /* `[` 要**紧邻**才是元素类型（`Arr[U8]`）：有空白时它是方括号转换的操作数
+     （`return Str [input]` —— `Str` 是转换目标，`[input]` 是单元素数组字面量）。 */
+  if (at("op", "[") && !peek().gap) {
     next();
     tr->elem = parse_type_ref();
     expect("op", "]", "']'");
@@ -265,12 +267,15 @@ std::vector<std::unique_ptr<Param>> Parser::parse_params() {
     return params;
   }
   while (true) {
-    const Tok n = expect("ident", "", "参数名");
+    /* `$name: T` = 传引用形参（调用点传的必须是左值，函数里的写要写回调用点）。
+       sigil 按 `#` 建过的老规矩并进名字，不另设 AST 字段 —— 否则 `--json` 与文本树会多出
+       一个冻结原型没有的键，整棵树的 deep-equal 就比不了了（而差异只是名字多一个字符）。 */
+    const Tok n = (peek().kind == "dollar") ? next() : expect("ident", "", "参数名");
     if (at("op", "=")) throw err_tok(peek(), "参数默认值未支持");
     if (!at("op", ":")) throw err_tok(peek(), "参数 '" + n.text + "' 缺类型标注");
     next();
     auto p = std::make_unique<Param>(n.line);
-    p->name = n.text;
+    p->name = (n.kind == "dollar" ? "$" : "") + n.text;
     p->typ = parse_type_ref();
     params.push_back(std::move(p));
     if (at("op", ",")) {
@@ -606,7 +611,9 @@ std::unique_ptr<Expr> Parser::parse_postfix() {
       e = std::move(ix);
     } else if (t.kind == "op" && t.text == ".") {
       next();
-      const Tok n = expect("ident", "", "成员名");
+      /* `kernel32.'ExitProcess'(code)` —— extern 成员的真正名字不是合法标识符（`_write`、
+         `ExitProcess`），所以源码用引号括起来。引号只是拼写容器，成员名照原样存。 */
+      const Tok n = (peek().kind == "string") ? next() : expect("ident", "", "成员名");
       auto m = std::make_unique<MemberExpr>(e->src_line);
       m->name = n.text;
       m->obj = std::move(e);
@@ -710,13 +717,22 @@ std::unique_ptr<Expr> Parser::parse_primary() {
   if (t.kind == "at") {
     throw err_tok(t, "'@" + t.text + "' 只能出现在类型位置");
   }
+  /* `$x` = 取 `x` 的引用（传引用形参 / 全局），在 lowering 里落地；前端只记下 sigil。 */
+  if (t.kind == "dollar") {
+    next();
+    auto id = std::make_unique<IdentExpr>(t.line);
+    id->name = "$" + t.text;
+    return id;
+  }
   if (t.kind == "op" && t.text == "(") {
     next();
     ExprPtr e = parse_expr();
     close_tok(")", t);
     return e;
   }
-  if (t.kind == "op" && t.text == "[") return parse_array_literal();
+  if (t.kind == "op" && t.text == "[") {
+    return bracket_cast_ahead() ? parse_bracket_cast() : parse_array_literal();
+  }
   if (t.kind == "ident") {
     const Tok nxt = peek(1);
     if (nxt.kind == "op" && nxt.text == "{" && nxt.line == t.line && is_type_name(t.text)) {
@@ -788,6 +804,35 @@ std::unique_ptr<Expr> Parser::parse_template_part(const Tok& t, std::size_t begi
                      "模板插值里多余的 " + describe(extra)};
   }
   return e;
+}
+
+/* `[T]` 的 T 在语法上是「无名数组类型」，语义与 `Arr[T]` 同一回事（前缀 656/770 直接拿
+   它下标、509 直接喂 `grow`）—— 存成 `Arr` 拼写，免得 lowering 认两种写法。 */
+bool Parser::bracket_cast_ahead() const {
+  const Tok t1 = peek(1);
+  if (t1.kind != "at" && !(t1.kind == "ident" && is_type_name(t1.text))) return false;
+  if (!(peek(2).kind == "op" && peek(2).text == "]")) return false;
+  const Tok t3 = peek(3);
+  if (t3.kind == "ident" || t3.kind == "number" || t3.kind == "string" ||
+      t3.kind == "template" || t3.kind == "hash" || t3.kind == "at" || t3.kind == "dollar") {
+    return true;
+  }
+  if (t3.kind != "op") return false;
+  return t3.text == "(" || t3.text == "[" || t3.text == "-" || t3.text == "+" ||
+         t3.text == "~" || t3.text == "!";
+}
+
+std::unique_ptr<Expr> Parser::parse_bracket_cast() {
+  const Tok open = next(); /* [ */
+  auto c = std::make_unique<CastExpr>(open.line);
+  auto tr = std::make_unique<TypeRef>();
+  tr->src_line = peek().line;
+  tr->name = "Arr";
+  tr->elem = parse_type_ref();
+  expect("op", "]", "']'");
+  c->target = std::move(tr);
+  c->expr = parse_unary();
+  return c;
 }
 
 std::unique_ptr<Expr> Parser::parse_array_literal() {

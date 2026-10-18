@@ -123,7 +123,7 @@ std::vector<Tok> tokenize(std::string_view text) {
       continue;
     }
 
-    if (c == '#' || c == '@') {
+    if (c == '#' || c == '@' || c == '$') {
       const std::size_t e = ident_at(text, i + 1);
       if (e == kNone) {
         throw LexError{start_line, start_col,
@@ -131,7 +131,7 @@ std::vector<Tok> tokenize(std::string_view text) {
                            "' 后面不是名字"};
       }
       Tok t;
-      t.kind = (c == '#') ? "hash" : "at";
+      t.kind = (c == '#') ? "hash" : (c == '@' ? "at" : "dollar");
       t.text = std::string(text.substr(i + 1, e - i - 1));
       t.line = start_line;
       t.col = start_col;
@@ -267,6 +267,7 @@ std::vector<Tok> tokenize(std::string_view text) {
 std::string describe(const Tok& t) {
   if (t.kind == "eof") return "这里就到头了";
   if (t.kind == "ident" || t.kind == "hash" || t.kind == "at") return "'" + t.text + "'";
+  if (t.kind == "dollar") return "'$" + t.text + "'";
   if (t.kind == "number") return "数字 " + t.text;
   if (t.kind == "string") return "字符串字面量";
   if (t.kind == "template") return "模板字面量";

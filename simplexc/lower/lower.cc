@@ -1524,6 +1524,20 @@ TyRef Lower::unify(const TyRef& a, const TyRef& b, int line) {
                       line);
 }
 
+TyRef Lower::arith_ty(const V& a, const V& b, const std::string& op, int line) {
+    /* 整型**字面量**取窄的那一侧的位宽（字面量多态）。参考在 `U8 x` 上把 `~x + 1` 算成
+     * 8 位回绕（x == 0 得 0）；按 `unify` 的「宽者胜」会得 64 位的 256，于是
+     * `check_output` 每轮都早退 fail —— 实测 `docs/notes/2026-10-18-test-result-chain2.md`。
+     * 只铺给 `+`：同一条规则套到 `%`/`<<`/`/` 上会让 176/177/180/rv32im 从全等掉成 diff。 */
+    if (op == "+" && is_int(*a.ty) && is_int(*b.ty) && a.ty->bits != b.ty->bits) {
+        const bool narrow_is_a = a.ty->bits < b.ty->bits;
+        const TyRef& narrow = narrow_is_a ? a.ty : b.ty;
+        const V& literal = narrow_is_a ? b : a;
+        if (narrow->bits < 64 && pat_const(literal).has_value()) return narrow;
+    }
+    return unify(a.ty, b.ty, line);
+}
+
 LLVMValueRef Lower::as_cond(const V& v) {
     if (v.ty->kind == TyKind::Void) throw Unsupported("None 值当条件", 0);
     return LLVMBuildICmp(bd_, LLVMIntNE, llv(v), const_int(0), "c");
@@ -1606,7 +1620,7 @@ V Lower::logical(const BinaryExpr& node) {
 
 V Lower::binop(const std::string& op, const V& a, const V& b, int line) {
     if (!is_arith(op)) throw Unsupported("运算符 " + op, line);
-    TyRef ty = unify(a.ty, b.ty, line);
+    TyRef ty = arith_ty(a, b, op, line);
     V av = convert(a, ty, line);
     V bv = convert(b, ty, line);
     if (ty->kind == TyKind::Str) {

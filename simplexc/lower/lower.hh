@@ -330,6 +330,8 @@ protected:
 
     /* ---- 运算（类型统一 + 常量折叠 + 逐 op 的参考行为） */
     TyRef unify(const TyRef& a, const TyRef& b, int line);
+    /* 算术的结果类型：整型字面量与窄整型混用时取**窄**的那一侧（不是 `unify` 的「宽者胜」）。 */
+    TyRef arith_ty(const V& a, const V& b, const std::string& op, int line);
     LLVMValueRef as_cond(const V& v);
     V compare(const std::string& op, const V& a, const V& b, int line);
     /* `Str == Str` / `Str != Str`：按**内容**（长度 + 逐字节），不是指针 —— 语料用 `switch id`

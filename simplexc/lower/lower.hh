@@ -342,6 +342,7 @@ protected:
     V string_literal(const LiteralExpr& node);
     V array_literal(const ArrayLitExpr& node);
     V composite_literal(const CompositeLitExpr& node);
+    V root_const_value(const VarDeclStmt& decl);   /* 程序根体的 `const #`：求值一次 */
 
     /* ---- 状态（Program 填；Lower 读） */
     std::map<std::string, TyRef> structs_;
@@ -357,6 +358,13 @@ protected:
     /* 程序根语句树里的嵌套 def：整单元可见（任何函数里都能按名调用），与顶层 `defs_` 同档 ——
      * U-L14 §2 的 T8/U1：引用点在别的 `def` 体里、声明在 `run_sim` 体里的名字判真。 */
     std::map<std::string, const DefStmt*> root_defs_;
+    /* 程序根语句树里的 `const #`（`collect_root_decls` 收的）：与 `root_defs_` 同档 ——
+     * 它的**值**也要能在任何函数里按名取到。引用点常常在别的函数里（008 的 `check_output`
+     * 被顶层 def `mode_run` 调用，那时这个 const 的词法作用域并不在栈上，`lookup` 查不到）。
+     * 按**声明节点指针**备忘：同一个声明只求值一次、只出一个全局常量 —— 否则
+     * 程序根自己那句声明与外部引用点会各求一次值（两个内容相同、名字不同的私有全局）。 */
+    std::map<std::string, const VarDeclStmt*> root_const_decls_;
+    std::map<const VarDeclStmt*, V> root_const_values_;
 
     struct FieldRef {
         int off = 0;

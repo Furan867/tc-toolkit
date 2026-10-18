@@ -899,8 +899,24 @@ void Lower::lower_stmt(const Stmt& st) {
     if (LLVMGetBasicBlockTerminator(cur_block_) != nullptr) new_block("dead");
 }
 
+V Lower::root_const_value(const VarDeclStmt& decl) {
+    auto hit = root_const_values_.find(&decl);
+    if (hit != root_const_values_.end()) return hit->second;
+    std::optional<V> v = const_value(*decl.init);
+    if (!v) throw Unsupported("编译期常量 " + decl.name + " 的初始化式不是常量", decl.src_line);
+    root_const_values_[&decl] = *v;
+    return *v;
+}
+
 void Lower::s_VarDeclStmt(const VarDeclStmt& st) {
     if (st.kw == "const" && !st.name.empty() && st.name[0] == '#') {
+        /* 程序根体里的声明是整单元的（见 `root_const_decls_`）：值走那条备忘，别的函数体里的
+         * 引用点取到的就是这一份 —— 两边各求一次会多出一个同内容、不同名的私有全局。 */
+        auto root = root_const_decls_.find(st.name);
+        if (root != root_const_decls_.end() && root->second == &st) {
+            bind(st.name, Binding::constant(root_const_value(st)));
+            return;
+        }
         auto v = const_value(*st.init);
         if (!v) throw Unsupported("编译期常量 " + st.name + " 的初始化式不是常量", st.src_line);
         bind(st.name, Binding::constant(*v));
@@ -1256,6 +1272,8 @@ V Lower::e_IdentExpr(const IdentExpr& node) {
         v.c = hc->second.value;
         return v;
     }
+    auto rc = root_const_decls_.find(name);
+    if (rc != root_const_decls_.end()) return root_const_value(*rc->second);
     throw Unsupported("未定义的名字 " + name, node.src_line);
 }
 
@@ -2186,6 +2204,8 @@ V Lower::cv(const Node& node) {
             }
             auto hc = hash_consts().find(n.name);
             if (hc != hash_consts().end()) return V::konst(hc->second.ty, hc->second.value);
+            auto rc = root_const_decls_.find(n.name);
+            if (rc != root_const_decls_.end()) return root_const_value(*rc->second);
             throw Unsupported("名字 " + n.name, n.src_line);
         }
         case NK::Cast: {
@@ -2688,7 +2708,10 @@ void Program::scan_scope_names() {
             in_scope_names_.insert(d->name);
             root_defs_[d->name] = d;
         }
-        for (const VarDeclStmt* v : root.consts) in_scope_names_.insert(v->name);
+        for (const VarDeclStmt* v : root.consts) {
+            in_scope_names_.insert(v->name);
+            root_const_decls_[v->name] = v;
+        }
     }
 }
 

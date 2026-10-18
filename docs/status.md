@@ -42,10 +42,10 @@ M5 只剩 98 份语料与路线 A。按「份数 × 成本」排：
 3. **28 份 cli_fail**（已逐类诊断，报告 `docs/notes/2026-10-18-clifail-diagnosis.md`）：
    裸块 `{…}` 12 · `ui_set_hidden` 6（缺 `true`/`false`，**+2 行**）· `array` 3 · switch 主体是 Str 2 ·
    `ror` 2 · 局部 `const #N` 1 · 空数组字面量 1 · `random` 1（归路线 A）。小的几类正在修。
-4. **路线 A（stdlib 前缀）**：**待定：要不要现在做** —— 摸底结论是它需要**重载 + 泛型分派**（39 个顶层算子单元，
-   声明层里完全不可见）、**IR inline asm**、以及 7 个内建（`array`/`grow`/`shrink`/`join`/`empty_array_address`/
-   `type_of_element`/`size`）；且「全有全无」（少支持一个构造 → 所有编译全挂）。
-   但内建那一项在 98 份那条路上也要用（双赢）→ **建议先把内建做掉**，重载/泛型/inline asm 单独立项。
+4. **内建（已决定先做）**：`array`（一份门票 ~15 份）+ 其余六个按需（`grow`/`shrink`/`join`/`empty_array_address`/
+   `type_of_element`/`size`）—— 它们在 98 份语料与路线 A 两边都要用。
+5. **路线 A 的其余部分（尝试性，不是里程碑）**：重载 + 泛型分派（39 个顶层算子单元）、IR inline asm
+   —— **能做就做，做不动就用路线 B**（前缀不参与编译、按需补内建）。它「全有全无」：少支持一个构造 → 所有编译全挂。
 
 ### 待定 / 未解
 

@@ -1117,10 +1117,26 @@ void Lower::s_DefStmt(const DefStmt& st) {
     bind(st.name, Binding::nested(&st));
 }
 
-std::vector<Capture> Lower::captures_of(const DefStmt& st) {
+Closure Lower::captures_of(const DefStmt& st) {
+    Closure out;
+    std::set<const DefStmt*> visiting;
+    visiting.insert(&st);   /* 兄弟 def 互调会绕回来，先把自己放进环里 */
+    collect_captures(st, out, visiting);
+    return out;
+}
+
+void Lower::collect_captures(const DefStmt& st, Closure& out,
+                             std::set<const DefStmt*>& visiting) {
     /* 嵌套 def 体里引用了哪些**外层局部**（按引用捕获 → 传 alloca 指针）。自己的参数、`var`/
-     * `let`/内层 `def` 都算「自己的」，同名遮蔽外层 —— 不往内层 `DefStmt` 的体里钻。 */
-    std::vector<Capture> caps;
+     * `let`/内层 `def` 都算「自己的」，同名遮蔽外层 —— 不往内层 `DefStmt` 的体里钻：内层 def 真被
+     * 调用时再算它自己的捕获，那时本函数的参数/局部/捕获都已经在作用域里。
+     *
+     * 但**兄弟 def**（本函数体里按名调用、定义在外面的嵌套 def）必须在这里就摊平：参考实现按
+     * **最外层调用点**解析 free variable（`docs/notes/2026-10-18-in-scope-fix.md` §6 第 1 条 ——
+     * L/M 片段里被查的 def 体直接出现在调用者代码里），而我们把它生成成一个真函数，它的捕获
+     * 只能由**调用它的那一层**带进来。006：`handle_test_result` 调 `halt`，`halt` 用
+     * `run_sim` 体的 `burst_target_cycle` —— 后者得先被 `handle_test_result` 捕获、再原样传给
+     * `halt`（110 的 `seen` / 075 的 `test` 同形）。 */
     std::set<std::string> own;
     for (const auto& p : st.params) own.insert(p->name);
 
@@ -1136,22 +1152,32 @@ std::vector<Capture> Lower::captures_of(const DefStmt& st) {
         if (n.kind == NK::Ident) {
             const auto& id = static_cast<const IdentExpr&>(n);
             if (own.count(id.name) != 0) return;
+            const DefStmt* target = nullptr;
             const Binding* b = lookup(id.name);
             if (b != nullptr) {
                 if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
                     bool known = false;
-                    for (const auto& c : caps) known = known || c.name == id.name;
-                    if (!known) caps.push_back(Capture{id.name, b->ptr, b->ty});
-                } else if (b->kind == Binding::Kind::Def) {
-                    throw Unsupported("嵌套 def 调用另一个嵌套 def（" + id.name + "）",
-                                      id.src_line);
+                    for (const auto& c : out.caps) known = known || c.name == id.name;
+                    if (!known) out.caps.push_back(Capture{id.name, b->ptr, b->ty});
+                    return;
                 }
+                if (b->kind == Binding::Kind::Def) target = b->def;
+            } else {
+                /* 程序根语句树里的嵌套 def 不在词法作用域里（`call_named` 走 root_defs_ 那条路），
+                 * 这里用同一张表认名字，否则它捕获的外层变量传不进去。 */
+                auto rd = root_defs_.find(id.name);
+                if (rd != root_defs_.end()) target = rd->second;
+            }
+            if (target != nullptr && visiting.insert(target).second) {
+                bool known = false;
+                for (const DefStmt* d : out.defs) known = known || d == target;
+                if (!known) out.defs.push_back(target);
+                collect_captures(*target, out, visiting);
             }
         }
         for_each_child(n, rec);
     };
     rec(*st.body);
-    return caps;
 }
 
 /* ================================================================ Lower：表达式 */
@@ -1746,18 +1772,18 @@ V Lower::call_user(const FunctionDef& d, const CallExpr& node) {
 
 V Lower::call_nested(const Binding& binding, const CallExpr& node) {
     const DefStmt& st = *binding.def;
-    std::vector<Capture> caps = captures_of(st);
+    Closure cl = captures_of(st);
     TyRef ret_ty = defstmt_ret(st);
     std::vector<TyRef> param_tys = defstmt_params(st);
     if (param_tys.size() != node.args.size()) {
         throw Unsupported(st.name + "() 的参数个数对不上", node.src_line);
     }
-    LLVMValueRef fnref = ensure_nested_fn(st, ret_ty, param_tys, caps);
+    LLVMValueRef fnref = ensure_nested_fn(st, ret_ty, param_tys, cl);
     std::vector<LLVMValueRef> vals;
     for (size_t i = 0; i < node.args.size(); ++i) {
         vals.push_back(llv(convert(e(*node.args[i]), param_tys[i], node.src_line)));
     }
-    for (const auto& c : caps) vals.push_back(c.ptr);
+    for (const auto& c : cl.caps) vals.push_back(c.ptr);
     LLVMValueRef ll = emit_call(fnref, vals);
     if (ret_ty->kind == TyKind::Void) return V::instr(nullptr, ty_void());
     return V::instr(ll, ret_ty);
@@ -2076,7 +2102,8 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
 
 LLVMValueRef Lower::ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
                                      const std::vector<TyRef>& param_tys,
-                                     const std::vector<Capture>& caps) {
+                                     const Closure& closure) {
+    const std::vector<Capture>& caps = closure.caps;
     const std::string owner = cur_def_ != nullptr ? cur_def_->name : std::string("closure");
     auto key = std::make_tuple(static_cast<int>(2), cur_name_, int64_t(st.src_line), st.name);
     auto hit = fns_.find(key);
@@ -2095,6 +2122,9 @@ LLVMValueRef Lower::ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
     FnState saved = save_state();
     cur_name_ = owner + "$" + st.name;
     begin_function(fnref, ret_ty);
+    /* 先绑外部嵌套 def 的名字，再绑参数与捕获：同名时**变量优先**（调用仍能按名查到 def ——
+     * `call_named` 在捕获上找不到 Def 时会走 root_defs_）。 */
+    for (const DefStmt* d : closure.defs) bind_root_scope(d->name, Binding::nested(d));
     for (size_t i = 0; i < st.params.size(); ++i) {
         if (i >= param_tys.size()) throw Unsupported(st.name + "() 的参数个数对不上", st.src_line);
         const TyRef& ty = param_tys[i];

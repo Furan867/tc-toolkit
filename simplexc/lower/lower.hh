@@ -150,6 +150,13 @@ struct Capture {
     TyRef ty;
 };
 
+/* 一个嵌套 def 的闭包面：要传进按需生成的函数的捕获表，加上它体里按名调用、
+ * 但**定义在它之外**的嵌套 def（这些名字也得在生成的函数里可解析）。 */
+struct Closure {
+    std::vector<Capture> caps;
+    std::vector<const DefStmt*> defs;
+};
+
 /* ---------------------------------------------------------------- Lower */
 class Lower {
 public:
@@ -255,7 +262,8 @@ protected:
     void s_SwitchStmt(const SwitchStmt& st);
     void s_DefStmt(const DefStmt& st);
 
-    std::vector<Capture> captures_of(const DefStmt& st);
+    Closure captures_of(const DefStmt& st);
+    void collect_captures(const DefStmt& st, Closure& out, std::set<const DefStmt*>& visiting);
 
     /* ---- 表达式 */
     V e(const Expr& node);
@@ -326,8 +334,7 @@ protected:
     LLVMValueRef ensure_def_fn(const std::string& name, int64_t lo, const FunctionDef& d,
                                const TyRef& ret_ty, const std::vector<TyRef>& param_tys);
     LLVMValueRef ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
-                                  const std::vector<TyRef>& param_tys,
-                                  const std::vector<Capture>& caps);
+                                  const std::vector<TyRef>& param_tys, const Closure& closure);
 
     /* ---- 编译期常量求值（`const_value` 是「不是常量就 None」的包装） */
     std::optional<V> const_value(const Node& node);

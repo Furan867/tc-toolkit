@@ -323,6 +323,9 @@ protected:
     V builtin_ror(const CallExpr& node);
     V builtin_minmax(const std::string& name, const CallExpr& node);
     V builtin_array(const CallExpr& node);
+    V builtin_random(const CallExpr& node);
+    /* `random` 的种子：前缀全局 `global_seed`（源码自己也会给它赋值，所以只能有一份）。 */
+    std::pair<LLVMValueRef, TyRef> seed_global(int line);
     V call_method(const MemberExpr& callee, const CallExpr& node);
     V call_prefix(const std::string& name, const CallExpr& node);
     LLVMValueRef get_extern(const std::string& name, const TyRef& ret_ty,
@@ -346,6 +349,8 @@ protected:
     V cv(const Node& node);
     V string_literal(const LiteralExpr& node);
     V array_literal(const ArrayLitExpr& node);
+    /* `Arr[T] []`：空数组字面量（类型只在外面的转换上，见定义处）。 */
+    V empty_array(const TyRef& arr_ty, int line);
     V composite_literal(const CompositeLitExpr& node);
     V root_const_value(const VarDeclStmt& decl);   /* 程序根体的 `const #`：求值一次 */
 

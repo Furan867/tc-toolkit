@@ -16,8 +16,13 @@ namespace {
 
 /* 前缀（stdlib）里定义、生成源码当作「已存在」用的名字：只登记参考实现里出现过的几个
  * （oracle:361-370）。**这不是内建表** —— 内建表的唯一来源是接口 §2 的 `builtins.def`。 */
-const std::map<std::string, TyRef>& prefix_globals() {
-    static const std::map<std::string, TyRef> m{{"global_seed", ty_seed()}};
+struct PrefixGlobal {
+    TyRef ty;
+    uint64_t init;   /* 前缀那一行给的初值（`var global_seed = Seed 1`），源码还能再赋值 */
+};
+
+const std::map<std::string, PrefixGlobal>& prefix_globals() {
+    static const std::map<std::string, PrefixGlobal> m{{"global_seed", {ty_seed(), 1}}};
     return m;
 }
 
@@ -57,6 +62,10 @@ const std::map<std::string, std::string>& assign_binop() {
 
 constexpr uint64_t kFileTimeUnix = 116444736000000000ull;   /* 1970-01-01 的 FILETIME（100ns） */
 constexpr uint64_t kNsPerMs = 1000000ull;
+
+/* 前缀里 `xorshift` 乘的那个常数（`stdlib_prefix.si:1470`）：源码写的是 **15 位**十六进制，
+ * 不是教科书的 `0x2545F4914F6CDD1D` —— 实测能分开（`docs/notes/2026-10-18-random.md`）。 */
+constexpr uint64_t kSeedMul = 0x2545F4914F6CDD1ull;
 
 /* 先序遍历一个节点的**子节点**（列表字段也下钻）。只给 `captures_of` 用：闭包捕获表要按原型
  * 的「遍历所有 dataclass 字段」来算，字段顺序必须与 `ast.hh` 的声明顺序一致（它逐条对应原型）。 */
@@ -770,10 +779,10 @@ void Lower::store_addr(LLVMValueRef p, const V& v, const TyRef& ty, int line) {
 std::pair<LLVMValueRef, TyRef> Lower::prefix_global(const std::string& name, int line) {
     auto it = prefix_globals().find(name);
     if (it == prefix_globals().end()) throw Unsupported("前缀全局 " + name, line);
-    const TyRef& ty = it->second;
+    const TyRef& ty = it->second.ty;
     LLVMValueRef g = LLVMAddGlobal(module(), ll_type(*ty), name.c_str());
     LLVMSetLinkage(g, LLVMInternalLinkage);
-    LLVMSetInitializer(g, LLVMConstNull(ll_type(*ty)));
+    LLVMSetInitializer(g, const_int(it->second.init));
     globals_[name] = {g, ty};
     return {g, ty};
 }
@@ -1290,7 +1299,12 @@ V Lower::e_IdentExpr(const IdentExpr& node) {
 }
 
 V Lower::e_CastExpr(const CastExpr& node) {
-    return convert(e(*node.expr), ty_of_ref(*node.target, node.src_line), node.src_line);
+    TyRef target = ty_of_ref(*node.target, node.src_line);
+    if (target->kind == TyKind::Array && node.expr->kind == NK::ArrayLit &&
+        static_cast<const ArrayLitExpr&>(*node.expr).items.empty()) {
+        return empty_array(target, node.src_line);
+    }
+    return convert(e(*node.expr), target, node.src_line);
 }
 
 V Lower::e_UnaryExpr(const UnaryExpr& node) {
@@ -1615,7 +1629,7 @@ TyRef Lower::static_type(const Node& node) {
                 auto g = globals_.find(n.name);
                 if (g != globals_.end()) return g->second.second;
                 auto pg = prefix_globals().find(n.name);
-                if (pg != prefix_globals().end()) return pg->second;
+                if (pg != prefix_globals().end()) return pg->second.ty;
                 auto em = enum_member_.find(n.name);
                 if (em != enum_member_.end()) return make_enum(em->second.first);
                 auto cst = consts_.find(n.name);
@@ -1775,6 +1789,7 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
     if (name == "ror") return builtin_ror(node);
     if (name == "min" || name == "max") return builtin_minmax(name, node);
     if (name == "array") return builtin_array(node);
+    if (name == "random") return builtin_random(node);
     if (name == "in_scope" || name == "type_of" || name == "size") {
         throw Unsupported(name + "() 只支持编译期形态", node.src_line);
     }
@@ -2019,6 +2034,57 @@ V Lower::builtin_array(const CallExpr& node) {
     LLVMSetInitializer(g, LLVMConstArray2(i8, elems.data(), elems.size()));
     std::vector<LLVMValueRef> gi{const_int(0), const_int(8)};
     return V::instr(LLVMConstGEP2(arrty, g, gi.data(), 2), make_array(elem));
+}
+
+V Lower::empty_array(const TyRef& arr_ty, int line) {
+    /* `Arr[U8] []`：**空**数组字面量自己不带元素类型（`ArrayLitExpr` 只存 items），类型只在外面
+     * 那层转换上 —— 所以只能从 `e_CastExpr` / `cv` 的转换处进来。表示与我们 `array(<T>, 0)`
+     * 同一套：8 字节零头（`len = 头 >> 16 = 0`）+ 空载荷，也就是一个指向它的私有常量全局。
+     * 空数组写不进去，所以不需要按调用点分开（参考侧那个值本身是它的 arena 分配结果，
+     * 只有「长度为 0」这一条被消费者用）。 */
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    std::vector<LLVMValueRef> elems(8, LLVMConstInt(i8, 0, 0));
+    LLVMTypeRef arrty = LLVMArrayType2(i8, elems.size());
+    const std::string gname =
+        ".empty" + std::to_string(line) + "_" + std::to_string(array_serial_++);
+    LLVMValueRef g = LLVMAddGlobal(module(), arrty, gname.c_str());
+    LLVMSetLinkage(g, LLVMPrivateLinkage);
+    LLVMSetGlobalConstant(g, 1);
+    LLVMSetInitializer(g, LLVMConstArray2(i8, elems.data(), elems.size()));
+    std::vector<LLVMValueRef> gi{const_int(0), const_int(8)};
+    return V::instr(LLVMConstGEP2(arrty, g, gi.data(), 2), arr_ty);
+}
+
+std::pair<LLVMValueRef, TyRef> Lower::seed_global(int line) {
+    auto it = globals_.find("global_seed");
+    if (it != globals_.end()) return it->second;
+    return prefix_global("global_seed", line);
+}
+
+V Lower::builtin_random(const CallExpr& node) {
+    /* `random` 定义在前缀里（`simplexc/corpus/stdlib_prefix.si`:1464–1495），98 份语料里 32 份在用，
+     * 但它只要「一个 8 字节全局 + 4 行算术」——不必把前缀整体搬进来。
+     * 实测（器材 `work/tmp/randomtask/probe_seq.py`：参考产物 + 差分宿主，8 次**连续** `random()`
+     * 落到 `ui_buffer+20000…+20056`，8/8 逐位相同）：
+     *   · 三步 xorshift 是**顺序赋值**：`x ^= x<<12; x ^= x>>25; x ^= x>>27`，再乘
+     *     `0x2545F4914F6CDD1`。常数只有 **15 位**（前缀原样），别拿教科书的 16 位那个替换；
+     *   · 返回**新** state 的全 64 位；`random(n) = U64(state) % U64(n)`，即 `[0, n)`；
+     *   · 种子就是前缀的 `var global_seed = Seed 1`：语料自己会写 `global_seed = Seed (…)`
+     *     （98 份里 98 份），所以两边必须是**同一份**全局（`seed_global`），且不许每 tick 重置。 */
+    if (node.args.size() > 1) throw Unsupported("random 的参数个数", node.src_line);
+    auto sg = seed_global(node.src_line);
+    const TyRef& ty = sg.second;
+    LLVMValueRef old = llv(load_addr(sg.first, ty));
+    LLVMValueRef x = LLVMBuildXor(bd_, old, LLVMBuildShl(bd_, old, const_int(12), "l"), "x1");
+    x = LLVMBuildXor(bd_, x, LLVMBuildLShr(bd_, x, const_int(25), "s"), "x2");
+    x = LLVMBuildXor(bd_, x, LLVMBuildLShr(bd_, x, const_int(27), "s"), "x3");
+    LLVMValueRef next = LLVMBuildMul(bd_, x, const_int(kSeedMul), "seed");
+    store_addr(sg.first, V::instr(next, ty), ty, node.src_line);
+    V out = V::instr(next, ty);
+    if (node.args.empty()) return out;
+    /* `%` 口径照抄 `div`（零除数不 trap，余数 = 被除数）：`random(0)` 返回被除数。 */
+    V m = convert(e(*node.args[0]), ty, node.src_line);
+    return V::instr(div("%", llv(out), llv(m), *ty), ty);
 }
 
 V Lower::call_method(const MemberExpr& callee, const CallExpr& node) {
@@ -2337,7 +2403,12 @@ V Lower::cv(const Node& node) {
         }
         case NK::Cast: {
             const auto& n = static_cast<const CastExpr&>(node);
-            return convert(cv(*n.expr), ty_of_ref(*n.target, n.src_line), n.src_line);
+            TyRef target = ty_of_ref(*n.target, n.src_line);
+            if (target->kind == TyKind::Array && n.expr->kind == NK::ArrayLit &&
+                static_cast<const ArrayLitExpr&>(*n.expr).items.empty()) {
+                return empty_array(target, n.src_line);
+            }
+            return convert(cv(*n.expr), target, n.src_line);
         }
         case NK::Unary: {
             const auto& n = static_cast<const UnaryExpr&>(node);

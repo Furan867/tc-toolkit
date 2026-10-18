@@ -208,6 +208,7 @@ protected:
         std::vector<std::pair<std::string, LLVMBasicBlockRef>> breaks;
         std::string cur_name;
         const FunctionDef* cur_def = nullptr;
+        std::map<std::string, TyRef> ty_binds;
     };
     FnState save_state() const;
     void restore_state(const FnState& s);
@@ -243,6 +244,32 @@ protected:
     /* ---- 类型解析（`TypeRef` 只存拼写，解析在 lowering 侧 —— ast.hh 的约定） */
     TyRef ty_of_name(const std::string& name, int line);
     TyRef ty_of_ref(const TypeRef& ref, int line);
+
+    /* ---- 泛型实例化（`@Type` / `@Size` / `@Any`）
+     * 语义（实测：docs/notes/2026-10-18-routea-semantics.md §1）：按**实参的具体类型**实例化，
+     * `size()` 折成编译期常数（单位 = 位）。接口 §1 冻结的名字规则是
+     * `实例化名 = "<函数名>$<实参规范化串>"`、同一 (函数, 实参) 只实例化一次（缓存键就是那个串）。
+     * 类型实参在调用点有**两种写法**（都实测过）：`g(<U8>)`（不占运行期槽）与 `g(load(<U8>,p))`
+     * （值本身就是实参、类型由它推出）。所以运行期形参表只能是**每个实例一份**。 */
+    struct Inst {
+        std::vector<TyRef> bind_order;               /* 类型参数的具体类型（按声明序） */
+        std::map<std::string, TyRef> binds;          /* 类型参数名 → 具体类型 */
+        std::vector<TyRef> rt_types;                 /* 运行期形参类型（按声明序，跳过不占槽的类型参数） */
+        std::vector<const Param*> rt_params;         /* 与 rt_types 一一对应 */
+        std::vector<size_t> rt_arg;                  /* 运行期形参 i ← 调用点 args[rt_arg[i]] */
+        std::string sig;                             /* 规范化串；无类型参数时为空（= 产物不变） */
+    };
+    static bool is_type_param(const TypeRef& ref);
+    static bool has_type_params(const std::vector<std::unique_ptr<Param>>& params);
+    Inst resolve_inst(const std::vector<std::unique_ptr<Param>>& params,
+                      const CallExpr& node, int line);
+    TyRef inst_ret_type(const TypeRef* ret, const Inst& inst, int line);
+    /* 类型值表达式（只出现在类型实参位置）：`load(type_of(x), p)` 的第一个实参。 */
+    TyRef type_value_of(const Expr& node, int line);
+    /* 编译期要的「这个操作数的类型」：本实例的类型参数先查，其余走 `static_type`。 */
+    TyRef operand_type(const Expr& node, int line);
+    /* `size(x)` 的编译期常数（单位 = 位）；只对类型参数成立，别的形态仍报 Unsupported。 */
+    V builtin_size(const CallExpr& node);
 
     /* ---- 语句 */
     void lower_block(const Block& block);
@@ -349,8 +376,7 @@ protected:
     LLVMValueRef byte_loop_prologue(unsigned n_param, LLVMBasicBlockRef* head_out,
                                     LLVMValueRef* n_out);
     LLVMValueRef ensure_def_fn(const std::string& name, int64_t lo, const FunctionDef& d,
-                               const TyRef& ret_ty, const std::vector<TyRef>& param_tys,
-                               const Closure& closure);
+                               const TyRef& ret_ty, const Inst& inst, const Closure& closure);
     LLVMValueRef ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
                                   const std::vector<TyRef>& param_tys, const Closure& closure);
 
@@ -406,6 +432,9 @@ protected:
     /* 键 = (类别, 名字, 源码行, 附加名字)：与原型的三元组 / 二元组一一对应。
      * 类别 1（顶层 def）的第 4 位是**捕获签名**：空串 = 没有捕获，键与闭包化之前完全相同。 */
     std::map<std::tuple<int, std::string, int64_t, std::string>, Fn> fns_;
+    /* 当前函数（或正在为某个实例发的函数体）的类型参数绑定：`size(x)` / `type_of(x)` 与
+     * 「类型参数当类型用」都从这里取。与 `FnState` 一起存/取，因为按需生成会嵌套。 */
+    std::map<std::string, TyRef> ty_binds_;
     /* 每个顶层 def 已发过几个捕获实例（生成 `$c0`/`$c1` 这样的名字后缀，并按上限兜住
      * 「互调 + 捕获」的发散，见 `ensure_def_fn`）。 */
     std::map<std::pair<std::string, int64_t>, int> cap_instances_;

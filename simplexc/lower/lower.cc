@@ -367,6 +367,14 @@ int storage_bytes(const Ty& ty) {
     }
 }
 
+/* `size(x)` 的单位是**位**（docs/facts.md「泛型」一条），宽度来源与 `storage_bytes` 同一处。
+ * Enum 是唯一例外（U-L5：只有 1/2 字节两档，而它的存储宽度是 1 个机器字），所以它在这里报掉，
+ * 不静默给一个错的 64。 */
+int size_bits(const Ty& ty) {
+    if (ty.kind == TyKind::Enum) throw Unsupported("size() 用在枚举上", 0);
+    return storage_bytes(ty) * 8;
+}
+
 /* ================================================================ 常量折叠 */
 
 int64_t as_signed(uint64_t x, int bits) {
@@ -564,6 +572,7 @@ Lower::FnState Lower::save_state() const {
     s.breaks = breaks_;
     s.cur_name = cur_name_;
     s.cur_def = cur_def_;
+    s.ty_binds = ty_binds_;
     return s;
 }
 
@@ -577,6 +586,7 @@ void Lower::restore_state(const FnState& s) {
     breaks_ = s.breaks;
     cur_name_ = s.cur_name;
     cur_def_ = s.cur_def;
+    ty_binds_ = s.ty_binds;
 }
 
 void Lower::mark_no_builtin(LLVMValueRef fnref) {
@@ -1743,6 +1753,14 @@ TyRef Lower::static_type(const Node& node) {
                 if ((name == "load" || name == "raw_cast") && !n.type_args.empty()) {
                     return ty_of_ref(*n.type_args[0], n.src_line);
                 }
+                /* `load(type_of(x), p)`：类型实参写成类型值表达式时 `type_args` 是空的。 */
+                if (name == "load" && n.type_args.empty() && n.args.size() == 2) {
+                    try {
+                        return type_value_of(*n.args[0], n.src_line);
+                    } catch (const Unsupported&) {
+                        return nullptr;
+                    }
+                }
                 /* `array(<T>, n)`：`var a = array(<U8>, 16)` 的静态类型决定 `a[i]` 的步长。 */
                 if (name == "array" && !n.type_args.empty()) {
                     return make_array(ty_of_ref(*n.type_args[0], n.src_line));
@@ -1757,7 +1775,8 @@ TyRef Lower::static_type(const Node& node) {
                 }
                 if (name == "get_time") return ty_time();
                 if (const FunctionDef* d = pick_def(name, n)) {
-                    return d->ret != nullptr ? ty_of_ref(*d->ret, d->lo) : ty_void();
+                    Inst inst = resolve_inst(d->params, n, d->lo);
+                    return inst_ret_type(d->ret.get(), inst, d->lo);
                 }
                 if (const Binding* b = lookup(name)) {
                     if (b->kind == Binding::Kind::Def) return defstmt_ret(*b->def);
@@ -1811,6 +1830,26 @@ const FunctionDef* Lower::pick_def(const std::string& name, const CallExpr& node
     auto it = defs_.find(name);
     if (it == defs_.end()) return nullptr;
     for (const FunctionDef* d : it->second) {
+        if (has_type_params(d->params)) {
+            /* 泛型候选：先定实例化（类型实参 / 推型），再只比**运行期**形参。定不下来（个数对
+             * 不上、推不出类型）就跳过这个候选 —— 不能把异常泄出去，否则同一名字的其它重载
+             * 都再也选不到（新增的这条路径只包住泛型候选，非泛型候选行为不变）。 */
+            Inst inst;
+            try {
+                inst = resolve_inst(d->params, node, d->lo);
+            } catch (const Unsupported&) {
+                continue;
+            }
+            bool ok = true;
+            for (size_t i = 0; i < inst.rt_types.size(); ++i) {
+                if (!compatible(static_type(*node.args[inst.rt_arg[i]]), inst.rt_types[i])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) return d;
+            continue;
+        }
         auto types = decl_param_types(*d);
         if (!types || types->size() != node.args.size()) continue;
         bool ok = true;
@@ -1823,6 +1862,127 @@ const FunctionDef* Lower::pick_def(const std::string& name, const CallExpr& node
         if (ok) return d;
     }
     return nullptr;
+}
+
+/* ---------------------------------------------------------------- 泛型实例化 */
+
+bool Lower::is_type_param(const TypeRef& ref) {
+    return ref.at && (ref.name == "Type" || ref.name == "Size" || ref.name == "Any");
+}
+
+bool Lower::has_type_params(const std::vector<std::unique_ptr<Param>>& params) {
+    for (const auto& p : params) {
+        if (p->typ != nullptr && is_type_param(*p->typ)) return true;
+    }
+    return false;
+}
+
+Lower::Inst Lower::resolve_inst(const std::vector<std::unique_ptr<Param>>& params,
+                                const CallExpr& node, int line) {
+    Inst out;
+    std::vector<size_t> tp;   /* 类型参数的声明位置（按声明序） */
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (params[i]->typ != nullptr && is_type_param(*params[i]->typ)) tp.push_back(i);
+    }
+    for (size_t i = 0; i < params.size(); ++i) out.rt_params.push_back(params[i].get());
+    if (tp.empty()) {
+        if (node.args.size() != params.size() || !node.type_args.empty()) {
+            throw Unsupported("实参个数对不上", line);
+        }
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (params[i]->typ == nullptr) throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+            out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
+            out.rt_arg.push_back(i);
+        }
+        return out;
+    }
+
+    /* 写法一（类型实参，不占运行期槽）：`g(a, <U8>)` —— 实参个数 = 声明参数 - 类型参数个数。
+     * 写法二（值实参，推型）：`g(load(<U8>, p))` —— 实参个数 = 声明参数个数。 */
+    const bool by_value = node.args.size() == params.size();
+    if (!by_value && node.args.size() + tp.size() != params.size()) {
+        throw Unsupported("泛型实参个数对不上", line);
+    }
+    if (node.type_args.size() > tp.size()) throw Unsupported("类型实参个数超过类型参数", line);
+    if (tp.size() > 1 && !node.type_args.empty() && node.type_args.size() != tp.size()) {
+        throw Unsupported("类型实参个数少于类型参数", line);
+    }
+
+    size_t ti = 0;   /* 下一个待定类型的类型参数（声明序） */
+    for (size_t i = 0; i < params.size(); ++i) {
+        const bool is_tp = params[i]->typ != nullptr && is_type_param(*params[i]->typ);
+        if (!is_tp) {
+            if (params[i]->typ == nullptr) throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+            out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
+            out.rt_arg.push_back(by_value ? i : i - (ti > tp.size() ? tp.size() : ti));
+            continue;
+        }
+        TyRef bound = nullptr;
+        if (ti < node.type_args.size()) {
+            bound = ty_of_ref(*node.type_args[ti], line);
+        } else if (by_value) {
+            bound = static_type(*node.args[i]);
+            if (!bound) throw Unsupported("推不出类型 " + params[i]->name, line);
+        } else {
+            throw Unsupported("类型实参没给 " + params[i]->name, line);
+        }
+        out.bind_order.push_back(bound);
+        out.binds[params[i]->name] = bound;
+        ++ti;
+        if (by_value) {
+            out.rt_types.push_back(bound);
+            out.rt_arg.push_back(i);
+        }
+    }
+    /* 同一 (函数, 实参) 只实例化一次的判据就是这个串（接口 §1）：缓存键与函数名的 `$` 后缀共用。 */
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i != 0) out.sig += ",";
+        if (params[i]->typ != nullptr && is_type_param(*params[i]->typ)) {
+            out.sig += "@" + ty_key(*out.binds.at(params[i]->name));
+        } else {
+            out.sig += ty_key(*ty_of_ref(*params[i]->typ, line));
+        }
+    }
+    if (by_value) out.sig += "#v";
+    return out;
+}
+
+TyRef Lower::inst_ret_type(const TypeRef* ret, const Inst& inst, int line) {
+    if (ret == nullptr) return ty_void();
+    if (!is_type_param(*ret)) return ty_of_ref(*ret, line);
+    /* 返回类型写成类型参数（`@Size` / `@Type`）时取**第一个**类型参数的绑定。实测语料里只有
+     * 一个类型参数（`get_ram_value(…, size: @Size) @Size`），多类型参数的形状未验。 */
+    if (inst.bind_order.empty()) throw Unsupported("返回类型 " + ret->name + " 没有绑定", line);
+    return inst.bind_order.front();
+}
+
+TyRef Lower::type_value_of(const Expr& node, int line) {
+    /* 类型值只出现在类型实参位置，语料里唯一形态是 `load(type_of(x), p)`。 */
+    const auto* call = as<CallExpr>(&node);
+    if (call == nullptr) throw Unsupported("类型值形态", line);
+    const auto* id = as<IdentExpr>(call->callee.get());
+    if (id == nullptr || id->name != "type_of" || call->args.size() != 1) {
+        throw Unsupported("类型值形态", line);
+    }
+    return operand_type(*call->args[0], line);
+}
+
+TyRef Lower::operand_type(const Expr& node, int line) {
+    /* 类型参数不占运行期槽（`g(a, <U8>)` 那种写法），所以它在作用域里**没有**变量绑定 ——
+     * 名字 → 具体类型只能从本实例的类型环境拿。 */
+    const auto* id = as<IdentExpr>(&node);
+    if (id != nullptr) {
+        auto it = ty_binds_.find(id->name);
+        if (it != ty_binds_.end()) return it->second;
+    }
+    TyRef ty = static_type(node);
+    if (!ty) throw Unsupported("拿不到类型", line);
+    return ty;
+}
+
+V Lower::builtin_size(const CallExpr& node) {
+    if (node.args.size() != 1) throw Unsupported("size(x) 的形态", node.src_line);
+    return V::konst(ty_i64(), uint64_t(size_bits(*operand_type(*node.args[0], node.src_line))));
 }
 
 TyRef Lower::defstmt_ret(const DefStmt& st) {
@@ -1842,6 +2002,7 @@ std::optional<std::vector<TyRef>> Lower::decl_param_types(const FunctionDef& d) 
     std::vector<TyRef> out;
     for (const auto& p : d.params) {
         if (p->typ == nullptr) return std::nullopt;   /* 重载解析里这会跳过这个候选 */
+        if (is_type_param(*p->typ)) return std::nullopt;   /* 泛型参数的实例化走 `resolve_inst` */
         out.push_back(ty_of_ref(*p->typ, d.lo));
     }
     return out;
@@ -1866,7 +2027,8 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
     if (name == "min" || name == "max") return builtin_minmax(name, node);
     if (name == "array") return builtin_array(node);
     if (name == "random") return builtin_random(node);
-    if (name == "in_scope" || name == "type_of" || name == "size") {
+    if (name == "size") return builtin_size(node);
+    if (name == "in_scope" || name == "type_of") {
         throw Unsupported(name + "() 只支持编译期形态", node.src_line);
     }
     if (is_prefix_func(name)) return call_prefix(name, node);
@@ -1883,18 +2045,15 @@ LLVMValueRef Lower::emit_call(LLVMValueRef fnref, const std::vector<LLVMValueRef
 }
 
 V Lower::call_user(const FunctionDef& d, const CallExpr& node) {
-    TyRef ret_ty = d.ret != nullptr ? ty_of_ref(*d.ret, d.lo) : ty_void();
-    auto param_tys = decl_param_types(d);
-    if (!param_tys || param_tys->size() != node.args.size()) {
-        throw Unsupported(d.name + "() 的参数表对不上调用", node.src_line);
-    }
+    Inst inst = resolve_inst(d.params, node, d.lo);
+    TyRef ret_ty = inst_ret_type(d.ret.get(), inst, d.lo);
     /* 捕获**在调用点**算（参考实现也是在调用点解析自由名），声明参数只是它的一部分。 */
     Closure cl = def_captures(d);
-    LLVMValueRef fnref = ensure_def_fn(d.name, d.lo, d, ret_ty, *param_tys, cl);
+    LLVMValueRef fnref = ensure_def_fn(d.name, d.lo, d, ret_ty, inst, cl);
     std::vector<LLVMValueRef> vals;
-    for (size_t i = 0; i < node.args.size(); ++i) {
-        V conv = convert(e(*node.args[i]), (*param_tys)[i], node.src_line);
-        vals.push_back((*param_tys)[i]->kind == TyKind::Struct ? conv.ll : llv(conv));
+    for (size_t i = 0; i < inst.rt_types.size(); ++i) {
+        V conv = convert(e(*node.args[inst.rt_arg[i]]), inst.rt_types[i], node.src_line);
+        vals.push_back(inst.rt_types[i]->kind == TyKind::Struct ? conv.ll : llv(conv));
     }
     for (const auto& c : cl.caps) vals.push_back(c.ptr);
     LLVMValueRef ll = emit_call(fnref, vals);
@@ -1922,11 +2081,16 @@ V Lower::call_nested(const Binding& binding, const CallExpr& node) {
 }
 
 V Lower::builtin_load(const CallExpr& node) {
-    if (node.type_args.empty() || node.args.size() != 1) {
-        throw Unsupported("load(<T>, p) 的形态", node.src_line);
+    /* 两种形态：`load(<T>, p)` 与 `load(type_of(x), p)`（后者 `type_args` 是空的、实参是 2 个）。 */
+    if (!node.type_args.empty() && node.args.size() == 1) {
+        TyRef ty = ty_of_ref(*node.type_args[0], node.src_line);
+        return load_addr(to_ptr(e(*node.args[0])), ty);
     }
-    TyRef ty = ty_of_ref(*node.type_args[0], node.src_line);
-    return load_addr(to_ptr(e(*node.args[0])), ty);
+    if (node.type_args.empty() && node.args.size() == 2) {
+        TyRef ty = type_value_of(*node.args[0], node.src_line);
+        return load_addr(to_ptr(e(*node.args[1])), ty);
+    }
+    throw Unsupported("load(<T>, p) 的形态", node.src_line);
 }
 
 V Lower::builtin_store(const CallExpr& node) {
@@ -2355,27 +2519,31 @@ LLVMValueRef Lower::ensure_prefix_fn(const std::string& name, const TyRef& ret_t
 }
 
 LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const FunctionDef& d,
-                                  const TyRef& ret_ty, const std::vector<TyRef>& param_tys,
+                                  const TyRef& ret_ty, const Inst& inst,
                                   const Closure& closure) {
     const std::vector<Capture>& caps = closure.caps;
+    const std::vector<TyRef>& param_tys = inst.rt_types;
     /* 捕获签名：空串 = 无捕获 —— 那种实例的键、函数名、参数表与闭包化之前**逐字节相同**
      * （参数只看**声明**参数，多出来的只是 `ptr` 捕获），所以没碰到 root 体本地的 def
      * 产物不变。 */
-    std::string sig;
+    std::string cap_sig;
     for (size_t j = 0; j < caps.size(); ++j) {
-        if (j != 0) sig += ',';
-        sig += caps[j].name;
-        sig += ':';
-        sig += ty_key(*caps[j].ty);
+        if (j != 0) cap_sig += ',';
+        cap_sig += caps[j].name;
+        cap_sig += ':';
+        cap_sig += ty_key(*caps[j].ty);
     }
+    /* 键 = 捕获签名 + 实例化签名。非泛型 def 的 `inst.sig` 是空串 ⇒ 键与改前完全相同。 */
+    std::string sig = cap_sig;
+    if (!inst.sig.empty()) sig += "|" + inst.sig;
     auto key = std::make_tuple(static_cast<int>(1), name, lo, sig);
     auto hit = fns_.find(key);
     if (hit != fns_.end()) return hit->second.fnref;
     int& instances = cap_instances_[{name, lo}];
     /* 互调的顶层 def 按捕获签名各发一份实例，理论上签名集是有限的，但代价可能会长（名字集合
      * 的幂集）；超过这个数就报掉 —— 报错会回退到参考产物，比在这里无界发函数安全。 */
-    if (!sig.empty() && instances >= 64) {
-        throw Unsupported(name + " 的闭包实例数不收剑（" + sig + "）", d.lo);
+    if (!cap_sig.empty() && instances >= 64) {
+        throw Unsupported(name + " 的闭包实例数不收剑（" + cap_sig + "）", d.lo);
     }
     std::vector<LLVMTypeRef> ptypes;
     for (const auto& t : param_tys) ptypes.push_back(val_ll(*t));
@@ -2385,7 +2553,10 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
         defs_.count(name) != 0 && defs_[name].size() == 1
             ? name
             : name + "#L" + std::to_string(lo);
-    if (!sig.empty()) gname += "$c" + std::to_string(instances++);
+    /* 接口 §1：实例化名 = `<函数名>$<实参规范化串>`。`$` 后绀只在泛型实例上有，所以非泛型的
+     * 函数名不变。 */
+    if (!inst.sig.empty()) gname += "$" + inst.sig;
+    if (!cap_sig.empty()) gname += "$c" + std::to_string(instances++);
     LLVMValueRef fnref = LLVMAddFunction(
         module(), gname.c_str(),
         LLVMFunctionType(rty, ptypes.data(), static_cast<unsigned>(ptypes.size()), 0));
@@ -2397,14 +2568,15 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
      * 的捕获表不同，不能合并）；无捕获时与改前一致（就是 def 名）。 */
     cur_name_ = sig.empty() ? name : gname;
     cur_def_ = &d;
+    ty_binds_ = inst.binds;
     begin_function(fnref, ret_ty);
-    for (size_t i = 0; i < d.params.size(); ++i) {
-        if (i >= param_tys.size()) throw Unsupported(d.name + "() 的参数表对不上", d.lo);
+    for (size_t i = 0; i < param_tys.size(); ++i) {
+        const std::string& pname = inst.rt_params[i]->name;
         const TyRef& ty = param_tys[i];
-        LLVMValueRef a = alloca_slot(ty, d.params[i]->name);
+        LLVMValueRef a = alloca_slot(ty, pname);
         store_addr(a, V::instr(LLVMGetParam(fnref, static_cast<unsigned>(i)), ty), ty,
-                   d.params[i]->src_line);
-        bind_root_scope(d.params[i]->name, Binding::local(a, ty));
+                   inst.rt_params[i]->src_line);
+        bind_root_scope(pname, Binding::local(a, ty));
     }
     for (size_t j = 0; j < caps.size(); ++j) {
         bool is_param = false;

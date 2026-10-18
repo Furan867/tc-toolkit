@@ -12,7 +12,7 @@
 | `ours-nosrc`       | mode=ours + **空源码** → 壳自己判 `InternalError`：失败串 `ours: InternalError`、manifest `impl=ours_failed`、hook.log 的 `error`(stage=ours/kind=InternalError) + `impl` 两条都在 |
 | `fallback-nosrc`   | mode=ours_with_fallback + 空源码 → 整单转交参考实现：产物与**同一进程里**参考实现的产物逐字节相同、manifest `impl=fallback` |
 | `ref`              | mode=reference → manifest `impl=reference`、hook.log 有 `impl` 行（回退率的分母） |
-| `ours-ok`          | mode=ours + 真源码（058.si）→ 产物是**我们的**（头 bit62=1）、`impl=ours`、无 `error` 行、同进程重复编译逐字节相同、manifest 记的 out_len/out_sha256 与产物一致 |
+| `ours-ok`          | mode=ours + 真源码（`SRC` = 176.si）→ 产物是**我们的**（头 bit62=1）、`impl=ours`、无 `error` 行、同进程重复编译逐字节相同、manifest 记的 out_len/out_sha256 与产物一致 |
 | `refcmp`           | reference 不回归：新壳与「改动前」的产物逐字节相同 |
 | `timeout-ours`     | 预算 0 → `ours: Timeout`、manifest `impl=ours_failed` |
 | `timeout-fallback` | 同上但 ours_with_fallback → 转交参考、manifest `impl=fallback` |
@@ -119,7 +119,11 @@ BASELINE_SRC = f"{BASELINE_REF}:tools/compile_hook.c"
 # 新壳的 C 壳目标文件：**不能**写成 build/objs/compile_hook_shell.o —— 那边的 -D 是产线的值，
 # 覆盖掉它等于把交付物的中间物换成测试构建的。
 SHELL_OBJ = os.path.join(WORK, "compile_hook_shell.o")
-SRC = os.path.join(SIMPLEXC, "corpus", "src", "058.si")
+SRC = os.path.join(SIMPLEXC, "corpus", "src", "176.si")
+
+# 为什么是 176.si（这里的 ours 系 case 只要「一份能编过的真源码」）：它是当前 98 份里逐 tick 全等的
+# 三份之一。换掉旧值 058.si 是因为它现在编不过 —— 那是 lowering 的已知缺口（由 `tools/m5/coverage.py`
+# 的覆盖表跟踪），不是壳的回归；判据入口红着会淹没真信号。
 GEN_EMBEDDED = os.path.join(HERE, "gen_embedded_objs.py")
 GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
 
@@ -703,7 +707,7 @@ def _case_timeout(c, mode, budget):
     """超时预算：预算 budget 毫秒（None = 走壳的默认 5000）。
 
     预算 0 = **任何**耗时都算超预算，所以不必再造大输入 —— ours 段真的要编一份源码
-    （`SRC`，058.si），耗时远大于 0 ms。
+    （`SRC`），耗时远大于 0 ms。
     """
     if budget is None:
         os.environ.pop("TC_OURS_TIMEOUT_MS", None)

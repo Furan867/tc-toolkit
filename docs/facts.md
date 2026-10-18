@@ -352,6 +352,9 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 **没有程序根**：`grep -lE "^label " simplexc/corpus/campaign/*/test.si | wc -l` = **0**；
 而 hook 抓的生成源码 **98/98** 都含 `run_sim: while true { … }`。直接喂我们的 CLI 必然报「没有顶层语句块（程序根）」。
 所以「campaign 92 份全装不出来」首先说明的是**语料形状**，不能读成 92 个编译缺口。
+**游戏自己会把它们拼进完整程序**再交给 `compile.dll`：`def get_input` / `def check_output`（正是 `test.si` 的内容）
+在 98 份捕获里 **98/98** 命中，`#CORRECT_OUTPUT` 命中 13 份且**值对得上**（`[U1 1,1]`、`[U1 1,0,0,0]` …）——
+拿 `test.si` 当编译单元属于输入口径错误。
 验证：`docs/notes/2026-10-18-campaign-survey.md`；`python simplexc/tools/m5/coverage.py --dir simplexc/corpus/campaign --no-diff`
 最后验证：2026-10-18
 

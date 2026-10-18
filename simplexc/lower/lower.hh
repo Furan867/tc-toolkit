@@ -69,6 +69,9 @@ struct Ty {
     TyKind kind = TyKind::Void;
     int bits = 64;
     bool is_signed = false;
+    /* `Bool` 与 `U1` 在算术语义上等价（接口 §1），但**插值渲染不同**：`Bool` → `true`/`false`、
+     * `U1` → `1`/`0`（实测见 docs/notes/2026-10-18-str-interp.md）—— 所以这个名义标记必须留着。 */
+    bool is_bool = false;
     std::string name;                                   /* Enum / Struct 的名字 */
     std::vector<std::pair<std::string, TyRef>> fields;  /* Struct 字段（按声明序） */
     TyRef elem;                                         /* Array / Str 的元素类型 */
@@ -263,6 +266,20 @@ protected:
     V e_IndexExpr(const IndexExpr& node);
     V e_ArrayLitExpr(const ArrayLitExpr& node);
     V e_CompositeLitExpr(const CompositeLitExpr& node);
+    V e_TemplateExpr(const TemplateExpr& node);
+
+    /* ---- 模板插值与 Str 拼接（语义实测：docs/notes/2026-10-18-str-interp.md） */
+    V template_expr(const TemplateExpr& node);
+    V str_concat(const V& a, const V& b, int line);
+    LLVMValueRef render_part(LLVMValueRef cur, const V& v, int line);
+    LLVMValueRef part_capacity(const V& v, int line);
+    LLVMValueRef write_literal(LLVMValueRef cur, const std::string& text, int line);
+    LLVMValueRef len_of(const V& obj, int line);
+    /* 产物内联的两个辅助函数（internal linkage，**不引外部符号**）：
+       `__simplexc_dec(ptr p, u64 幅度, u64 负号) -> 写完的游标`、
+       `__simplexc_copy(ptr dst, ptr src, u64 n) -> dst + n`。 */
+    LLVMValueRef ensure_dec_fn();
+    LLVMValueRef ensure_copy_fn();
 
     /* ---- 运算（类型统一 + 常量折叠 + 逐 op 的参考行为） */
     TyRef unify(const TyRef& a, const TyRef& b, int line);
@@ -331,6 +348,7 @@ protected:
     std::map<std::string, std::map<std::string, FieldRef>> field_offsets_;
     std::map<std::string, LLVMTypeRef> struct_ll_;
     std::map<std::string, V> str_pool_;
+    std::map<std::string, LLVMValueRef> helpers_;   /* 模板插值用的内联辅助函数（按需生成） */
 
     struct Fn {
         LLVMValueRef fnref = nullptr;

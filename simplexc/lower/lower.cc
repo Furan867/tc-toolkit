@@ -103,6 +103,9 @@ void for_each_child(const Node& n, F&& f) {
         case NK::CompositeLit:
             for (const auto& fi : static_cast<const CompositeLitExpr&>(n).fields) f(*fi);
             break;
+        case NK::Template:
+            for (const auto& p : static_cast<const TemplateExpr&>(n).parts) f(*p);
+            break;
         case NK::FieldInit:
             f(*static_cast<const FieldInit&>(n).value);
             break;
@@ -232,7 +235,13 @@ const TyRef& ty_i64() {
 }
 
 const TyRef& ty_bool() {
-    static const TyRef t = make_int(1, false);
+    static const TyRef t = [] {
+        auto x = std::make_shared<Ty>();
+        x->kind = TyKind::Int;
+        x->bits = 1;
+        x->is_bool = true;
+        return TyRef(x);
+    }();
     return t;
 }
 
@@ -392,6 +401,7 @@ const char* kind_name(NK k) {
         case NK::Index: return "IndexExpr";
         case NK::ArrayLit: return "ArrayLitExpr";
         case NK::CompositeLit: return "CompositeLitExpr";
+        case NK::Template: return "TemplateExpr";
         case NK::FieldInit: return "FieldInit";
         case NK::Block: return "Block";
         case NK::Param: return "Param";
@@ -1114,6 +1124,7 @@ V Lower::e(const Expr& node) {
         case NK::ArrayLit: return e_ArrayLitExpr(static_cast<const ArrayLitExpr&>(node));
         case NK::CompositeLit:
             return e_CompositeLitExpr(static_cast<const CompositeLitExpr&>(node));
+        case NK::Template: return e_TemplateExpr(static_cast<const TemplateExpr&>(node));
         default:
             throw Unsupported("表达式形态 " + std::string(kind_name(node.kind)), node.src_line);
     }
@@ -1284,6 +1295,8 @@ V Lower::e_CompositeLitExpr(const CompositeLitExpr& node) {
 
 V Lower::e_ArrayLitExpr(const ArrayLitExpr& node) { return array_literal(node); }
 
+V Lower::e_TemplateExpr(const TemplateExpr& node) { return template_expr(node); }
+
 /* ================================================================ Lower：运算 */
 
 TyRef Lower::unify(const TyRef& a, const TyRef& b, int line) {
@@ -1394,6 +1407,11 @@ V Lower::binop(const std::string& op, const V& a, const V& b, int line) {
     TyRef ty = unify(a.ty, b.ty, line);
     V av = convert(a, ty, line);
     V bv = convert(b, ty, line);
+    if (ty->kind == TyKind::Str) {
+        /* `+` 是唯一的 Str 运算（实测：`"ab" + "cd"` → 长度 4 的 `abcd`）。 */
+        if (op != "+") throw Unsupported("Str 的 " + op, line);
+        return str_concat(av, bv, line);
+    }
     auto ca = pat_const(av);
     auto cb = pat_const(bv);
     if (ty->kind == TyKind::Ptr) {
@@ -1570,6 +1588,7 @@ TyRef Lower::static_type(const Node& node) {
                 const auto& n = static_cast<const CompositeLitExpr&>(node);
                 return ty_of_ref(*n.typ, n.src_line);
             }
+            case NK::Template: return ty_str();
             default:
                 return nullptr;
         }
@@ -1784,12 +1803,7 @@ V Lower::call_method(const MemberExpr& callee, const CallExpr& node) {
             throw Unsupported(".len() 用在 " + std::string(ty_kind_name(obj.ty->kind)),
                               node.src_line);
         }
-        /* 接口 §3：`len = u64(p-8) >> 16` */
-        std::vector<LLVMValueRef> gi{const_int(static_cast<uint64_t>(-8))};
-        LLVMValueRef lp = LLVMBuildGEP2(bd_, storage_ll(*make_int(8, false)), to_ptr(obj),
-                                        gi.data(), 1, "lp");
-        V raw = load_addr(lp, make_int(64, false));
-        return V::instr(LLVMBuildLShr(bd_, llv(raw), const_int(16), "len"), ty_i64());
+        return V::instr(len_of(obj, node.src_line), ty_i64());
     }
     if (callee.name == "ms") {
         if (!is_int(*obj.ty)) {
@@ -2173,6 +2187,266 @@ V Lower::string_literal(const LiteralExpr& node) {
     V v = V::instr(payload, ty_str());
     str_pool_[node.text] = v;
     return v;
+}
+
+/* ================================================================ Lower：模板插值 / Str 拼接
+ *
+ * 渲染语义**全部实测**（参考编译器 + 差分宿主，见 docs/notes/2026-10-18-str-interp.md）：
+ *   `Int` / `S*` → 有符号十进制（按声明位宽符号扩展）；`U*` → 无符号十进制；`Bool` → `true`/`false`；
+ *   `Str` → 原样字节；`Ptr` → 地址的无符号十进制。
+ * 形状：各插值段先求值**一次** → 按最坏尺寸在栈上开缓冲 → 顺序写入 → 按实际游标回填
+ * `p[-8] = len << 16`（长度显式；不靠 NUL 终止 —— 消费方全是 `.len()` + `s[i]` + `set_text`）。
+ * 十进制转换与拷贝都是**产物内联**的（`__simplexc_dec` / `__simplexc_copy`）：参考产物那边 `extern`
+ * 也是空的，不许引出外部符号（`memcpy` 之类的 libcall 会变成未解析符号）。
+ */
+
+/* `len = u64(p-8) >> 16`（接口 §3）。`.len()` 与插值里的 Str 段共用这一处。 */
+LLVMValueRef Lower::len_of(const V& obj, int line) {
+    if (obj.ty->kind != TyKind::Str && obj.ty->kind != TyKind::Array) {
+        throw Unsupported("长度用在 " + std::string(ty_kind_name(obj.ty->kind)), line);
+    }
+    std::vector<LLVMValueRef> gi{const_int(static_cast<uint64_t>(-8))};
+    LLVMValueRef lp = LLVMBuildGEP2(bd_, storage_ll(*make_int(8, false)), to_ptr(obj), gi.data(), 1,
+                                    "lp");
+    V raw = load_addr(lp, make_int(64, false));
+    return LLVMBuildLShr(bd_, llv(raw), const_int(16), "len");
+}
+
+/* 栈上一块带头的串缓冲：`buf[0..8)` 是头、payload = `buf+8`。 */
+V Lower::str_concat(const V& a, const V& b, int line) {
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMValueRef la = len_of(a, line);
+    LLVMValueRef lb = len_of(b, line);
+    LLVMValueRef total = LLVMBuildAdd(bd_, la, lb, "sl");
+    LLVMValueRef buf = LLVMBuildArrayAlloca(bd_, i8, LLVMBuildAdd(bd_, total, const_int(8), "sb"),
+                                            "sbuf");
+    LLVMSetAlignment(buf, 8);
+    std::vector<LLVMValueRef> g8{const_int(8)};
+    LLVMValueRef payload = LLVMBuildGEP2(bd_, i8, buf, g8.data(), 1, "sp");
+    LLVMValueRef copy = ensure_copy_fn();
+    LLVMValueRef cur = emit_call(copy, {payload, to_ptr(a), la});
+    emit_call(copy, {cur, to_ptr(b), lb});
+    std::vector<LLVMValueRef> g0{const_int(0)};
+    LLVMValueRef head = LLVMBuildGEP2(bd_, i8, buf, g0.data(), 1, "shdr");
+    store_addr(head, V::instr(LLVMBuildShl(bd_, total, const_int(16), "shl"), ty_i64()), ty_i64(),
+               line);
+    return V::instr(payload, ty_str());
+}
+
+V Lower::template_expr(const TemplateExpr& node) {
+    std::vector<V> vals;
+    vals.reserve(node.parts.size());
+    for (const ExprPtr& p : node.parts) vals.push_back(e(*p));
+
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMValueRef size = const_int(8);
+    for (std::size_t i = 0; i < node.texts.size(); ++i) {
+        size = LLVMBuildAdd(bd_, size, const_int(node.texts[i].size()), "ts");
+        if (i < vals.size()) {
+            size = LLVMBuildAdd(bd_, size, part_capacity(vals[i], node.src_line), "ts");
+        }
+    }
+    LLVMValueRef buf = LLVMBuildArrayAlloca(bd_, i8, size, "tbuf");
+    LLVMSetAlignment(buf, 8);
+    std::vector<LLVMValueRef> g8{const_int(8)};
+    LLVMValueRef payload = LLVMBuildGEP2(bd_, i8, buf, g8.data(), 1, "tpl");
+    LLVMValueRef cur = payload;
+    for (std::size_t i = 0; i < node.texts.size(); ++i) {
+        cur = write_literal(cur, node.texts[i], node.src_line);
+        if (i < vals.size()) cur = render_part(cur, vals[i], node.src_line);
+    }
+    LLVMValueRef len = LLVMBuildSub(bd_, LLVMBuildPtrToInt(bd_, cur, i64_, "tce"),
+                                    LLVMBuildPtrToInt(bd_, payload, i64_, "tpe"), "tlen");
+    std::vector<LLVMValueRef> g0{const_int(0)};
+    LLVMValueRef head = LLVMBuildGEP2(bd_, i8, buf, g0.data(), 1, "thdr");
+    store_addr(head, V::instr(LLVMBuildShl(bd_, len, const_int(16), "thl"), ty_i64()), ty_i64(),
+               node.src_line);
+    return V::instr(payload, ty_str());
+}
+
+/* 一段值的**最坏字节数**（缓冲开多大）。不可渲染的类型在这里就报错，不拖到写入时。 */
+LLVMValueRef Lower::part_capacity(const V& v, int line) {
+    if (v.ty->kind == TyKind::Str) return len_of(v, line);
+    if (v.ty->kind == TyKind::Ptr) return const_int(21);          /* 20 位十进制 + '-' */
+    if (v.ty->kind == TyKind::Int) return const_int(v.ty->is_bool ? 5 : 21);
+    throw Unsupported("模板插值遇到 " + std::string(ty_kind_name(v.ty->kind)), line);
+}
+
+/* 文字段：字节常量逐个写（内容在编译期就定死了，不需要拷贝循环）。 */
+LLVMValueRef Lower::write_literal(LLVMValueRef cur, const std::string& text, int line) {
+    if (text.find('\\') != std::string::npos) {
+        throw Unsupported("模板里含转义的文字段（U-L10 未定）", line);
+    }
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    for (std::size_t k = 0; k < text.size(); ++k) {
+        std::vector<LLVMValueRef> gi{const_int(k)};
+        LLVMValueRef p = LLVMBuildGEP2(bd_, i8, cur, gi.data(), 1, "lp");
+        LLVMValueRef st =
+            LLVMBuildStore(bd_, LLVMConstInt(i8, static_cast<unsigned char>(text[k]), 0), p);
+        LLVMSetAlignment(st, 1);
+    }
+    std::vector<LLVMValueRef> gn{const_int(text.size())};
+    return LLVMBuildGEP2(bd_, i8, cur, gn.data(), 1, "lc");
+}
+
+LLVMValueRef Lower::render_part(LLVMValueRef cur, const V& v, int line) {
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    if (v.ty->kind == TyKind::Str) {
+        return emit_call(ensure_copy_fn(), {cur, to_ptr(v), len_of(v, line)});
+    }
+    if (v.ty->kind == TyKind::Int && v.ty->is_bool) {
+        /* `true` / `false`：前 4 个字节按条件选，第 5 个恒为 'e'，长度 4/5。 */
+        const char* yes = "true";
+        const char* no = "false";
+        LLVMValueRef nz = LLVMBuildICmp(bd_, LLVMIntNE, llv(v), const_int(0), "bn");
+        for (std::size_t k = 0; k < 4; ++k) {
+            std::vector<LLVMValueRef> gi{const_int(k)};
+            LLVMValueRef p = LLVMBuildGEP2(bd_, i8, cur, gi.data(), 1, "bp");
+            LLVMValueRef ch = LLVMBuildSelect(
+                bd_, nz, const_int(static_cast<unsigned char>(yes[k])),
+                const_int(static_cast<unsigned char>(no[k])), "bc");
+            LLVMValueRef st = LLVMBuildStore(bd_, LLVMBuildTrunc(bd_, ch, i8, "bt"), p);
+            LLVMSetAlignment(st, 1);
+        }
+        std::vector<LLVMValueRef> g4{const_int(4)};
+        LLVMValueRef p4 = LLVMBuildGEP2(bd_, i8, cur, g4.data(), 1, "bp");
+        LLVMValueRef st4 = LLVMBuildStore(bd_, LLVMConstInt(i8, 'e', 0), p4);
+        LLVMSetAlignment(st4, 1);
+        std::vector<LLVMValueRef> gn{
+            LLVMBuildSelect(bd_, nz, const_int(4), const_int(5), "bl")};
+        return LLVMBuildGEP2(bd_, i8, cur, gn.data(), 1, "bend");
+    }
+    if (v.ty->kind == TyKind::Int || v.ty->kind == TyKind::Ptr) {
+        LLVMValueRef x = llv(v);
+        LLVMValueRef minus = const_int(0);
+        if (v.ty->kind == TyKind::Int) {
+            x = mask_ll(x, v.ty->bits);
+            if (v.ty->is_signed) {
+                x = sext64(x, v.ty->bits);
+                LLVMValueRef neg = LLVMBuildICmp(bd_, LLVMIntSLT, x, const_int(0), "dneg");
+                minus = LLVMBuildZExt(bd_, neg, i64_, "dm");
+                /* 幅度按**无符号取负**算 —— 这样 S64 最小值也对（实测：`-9223372036854775808`）。 */
+                x = LLVMBuildSelect(bd_, neg, LLVMBuildSub(bd_, const_int(0), x, "dmg"), x, "dv");
+            }
+        }
+        return emit_call(ensure_dec_fn(), {cur, x, minus});
+    }
+    throw Unsupported("模板插值遇到 " + std::string(ty_kind_name(v.ty->kind)), line);
+}
+
+LLVMValueRef Lower::ensure_copy_fn() {
+    auto hit = helpers_.find("copy");
+    if (hit != helpers_.end()) return hit->second;
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMTypeRef params[3] = {ptr_, ptr_, i64_};
+    LLVMValueRef fn =
+        LLVMAddFunction(module(), "__simplexc_copy", LLVMFunctionType(ptr_, params, 3, 0));
+    LLVMSetLinkage(fn, LLVMInternalLinkage);
+    helpers_["copy"] = fn;
+    fn_seen_++;
+    FnState saved = save_state();
+    cur_name_ = "__simplexc_copy";
+    begin_function(fn, ty_ptr());
+    LLVMValueRef dst = LLVMGetParam(fn, 0);
+    LLVMValueRef src = LLVMGetParam(fn, 1);
+    LLVMValueRef n = LLVMGetParam(fn, 2);
+    LLVMValueRef slot = alloca_slot(ty_i64(), "ci");
+    store_addr(slot, V::instr(const_int(0), ty_i64()), ty_i64(), 0);
+    LLVMBasicBlockRef head = br_new_block("ch");
+    LLVMValueRef i = llv(load_addr(slot, ty_i64()));
+    LLVMValueRef lt = LLVMBuildICmp(bd_, LLVMIntULT, i, n, "clt");
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fn, "cb");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fn, "cd");
+    LLVMBuildCondBr(bd_, lt, body, done);
+    LLVMPositionBuilderAtEnd(bd_, body);
+    cur_block_ = body;
+    std::vector<LLVMValueRef> gi{i};
+    LLVMValueRef sp = LLVMBuildGEP2(bd_, i8, src, gi.data(), 1, "csp");
+    LLVMValueRef dp = LLVMBuildGEP2(bd_, i8, dst, gi.data(), 1, "cdp");
+    LLVMValueRef b = LLVMBuildLoad2(bd_, i8, sp, "cb0");
+    LLVMSetAlignment(b, 1);
+    LLVMValueRef st = LLVMBuildStore(bd_, b, dp);
+    LLVMSetAlignment(st, 1);
+    store_addr(slot, V::instr(LLVMBuildAdd(bd_, i, const_int(1), "ci1"), ty_i64()), ty_i64(), 0);
+    LLVMBuildBr(bd_, head);
+    LLVMPositionBuilderAtEnd(bd_, done);
+    cur_block_ = done;
+    std::vector<LLVMValueRef> gn{n};
+    LLVMBuildRet(bd_, LLVMBuildGEP2(bd_, i8, dst, gn.data(), 1, "cr"));
+    finish_function();
+    restore_state(saved);
+    return fn;
+}
+
+LLVMValueRef Lower::ensure_dec_fn() {
+    auto hit = helpers_.find("dec");
+    if (hit != helpers_.end()) return hit->second;
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMTypeRef params[3] = {ptr_, i64_, i64_};
+    LLVMValueRef fn =
+        LLVMAddFunction(module(), "__simplexc_dec", LLVMFunctionType(ptr_, params, 3, 0));
+    LLVMSetLinkage(fn, LLVMInternalLinkage);
+    helpers_["dec"] = fn;
+    fn_seen_++;
+    FnState saved = save_state();
+    cur_name_ = "__simplexc_dec";
+    begin_function(fn, ty_ptr());
+    LLVMValueRef p = LLVMGetParam(fn, 0);
+    LLVMValueRef v = LLVMGetParam(fn, 1);
+    LLVMValueRef minus = LLVMGetParam(fn, 2);
+    /* 位数：19 次比较（10^1…10^19），不写循环 —— 每个插值点都要走这一段，形状越平越好。 */
+    LLVMValueRef n = const_int(1);
+    uint64_t thr = 1;
+    for (int d = 1; d <= 19; ++d) {
+        thr *= 10;
+        LLVMValueRef ge = LLVMBuildICmp(bd_, LLVMIntUGE, v, const_int(thr), "dge");
+        n = LLVMBuildSelect(bd_, ge, const_int(static_cast<uint64_t>(d + 1)), n, "dn");
+    }
+    LLVMValueRef total = LLVMBuildAdd(bd_, n, minus, "dtot");
+    std::vector<LLVMValueRef> gt{total};
+    LLVMValueRef end = LLVMBuildGEP2(bd_, i8, p, gt.data(), 1, "dend");
+    LLVMValueRef has_minus = LLVMBuildICmp(bd_, LLVMIntNE, minus, const_int(0), "dhm");
+    LLVMBasicBlockRef neg = LLVMAppendBasicBlockInContext(ctx(), fn, "dneg");
+    LLVMBasicBlockRef head = LLVMAppendBasicBlockInContext(ctx(), fn, "dh");
+    LLVMBuildCondBr(bd_, has_minus, neg, head);
+    LLVMPositionBuilderAtEnd(bd_, neg);
+    cur_block_ = neg;
+    std::vector<LLVMValueRef> g0{const_int(0)};
+    LLVMValueRef p0 = LLVMBuildGEP2(bd_, i8, p, g0.data(), 1, "dp0");
+    LLVMValueRef sm = LLVMBuildStore(bd_, LLVMConstInt(i8, '-', 0), p0);
+    LLVMSetAlignment(sm, 1);
+    LLVMBuildBr(bd_, head);
+    LLVMPositionBuilderAtEnd(bd_, head);
+    cur_block_ = head;
+    /* 从末尾往前填：先算长度，所以 `i` 初值是总长，每轮先减再写。 */
+    LLVMValueRef slot_i = alloca_slot(ty_i64(), "di");
+    store_addr(slot_i, V::instr(total, ty_i64()), ty_i64(), 0);
+    LLVMValueRef slot_x = alloca_slot(ty_i64(), "dx");
+    store_addr(slot_x, V::instr(v, ty_i64()), ty_i64(), 0);
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fn, "db");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fn, "dd");
+    LLVMBuildBr(bd_, body);
+    LLVMPositionBuilderAtEnd(bd_, body);
+    cur_block_ = body;
+    LLVMValueRef i2 = LLVMBuildSub(bd_, llv(load_addr(slot_i, ty_i64())), const_int(1), "di2");
+    store_addr(slot_i, V::instr(i2, ty_i64()), ty_i64(), 0);
+    LLVMValueRef x = llv(load_addr(slot_x, ty_i64()));
+    LLVMValueRef dg = LLVMBuildURem(bd_, x, const_int(10), "ddg");
+    LLVMValueRef ch = LLVMBuildAdd(bd_, dg, const_int('0'), "dch");
+    std::vector<LLVMValueRef> gi{i2};
+    LLVMValueRef dp = LLVMBuildGEP2(bd_, i8, p, gi.data(), 1, "ddp");
+    LLVMValueRef st = LLVMBuildStore(bd_, LLVMBuildTrunc(bd_, ch, i8, "dbt"), dp);
+    LLVMSetAlignment(st, 1);
+    LLVMValueRef x2 = LLVMBuildUDiv(bd_, x, const_int(10), "dqx");
+    store_addr(slot_x, V::instr(x2, ty_i64()), ty_i64(), 0);
+    LLVMValueRef more = LLVMBuildICmp(bd_, LLVMIntNE, x2, const_int(0), "dmr");
+    LLVMBuildCondBr(bd_, more, body, done);
+    LLVMPositionBuilderAtEnd(bd_, done);
+    cur_block_ = done;
+    LLVMBuildRet(bd_, end);
+    finish_function();
+    restore_state(saved);
+    return fn;
 }
 
 V Lower::array_literal(const ArrayLitExpr& node) {

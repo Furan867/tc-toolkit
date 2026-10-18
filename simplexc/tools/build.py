@@ -123,8 +123,13 @@ def need(path: str, hint: str) -> None:
 
 
 def sha256(path: str) -> str:
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError as e:
+        # 读的是**刚被本脚本写出来**的产物：读不到就是这一步没产出（不是环境缺件，所以是 1 不是 2）
+        print(f"FAIL 读不了刚产出的 {REL(path)}。\n  {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------- 各目标
@@ -322,7 +327,13 @@ def main(argv: list[str]) -> int:
                   f"或 W64DEVKIT_BIN 指向工具链目录（默认 D:/bin/w64devkit/bin）。",
                   file=sys.stderr)
             return 1
-    os.makedirs(OBJDIR, exist_ok=True)
+    try:
+        os.makedirs(OBJDIR, exist_ok=True)
+    except OSError as e:
+        print(f"FAIL 建不了中间目录 {REL(OBJDIR)}。\n  {e}\n"
+              f"  它的位置在本脚本里写死；那条路径上被占成普通文件时只能先挪开它。",
+              file=sys.stderr)
+        sys.exit(2)
 
     print(f"工具链 {CXX}")
     for name in wanted:

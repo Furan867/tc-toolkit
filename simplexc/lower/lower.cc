@@ -1505,6 +1505,9 @@ TyRef Lower::static_type(const Node& node) {
             }
             case NK::Ident: {
                 const auto& n = static_cast<const IdentExpr&>(node);
+                /* `true`/`false` 不是绑定（只在 `e_IdentExpr` 里特判）：少了这两行，
+                   `ui_set_hidden("x", false)` 这种实参的重载粗判拿不到 Bool → 无候选。 */
+                if (n.name == "true" || n.name == "false") return ty_bool();
                 if (const Binding* b = lookup(n.name)) {
                     if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
                         return b->ty;

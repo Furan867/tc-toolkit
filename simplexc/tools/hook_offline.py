@@ -906,7 +906,8 @@ def main(argv=None):
         print("构建：" + (b.get("error") or f"rc={b.get('rc')}"))
     else:
         print(f"构建：rc={b.get('rc')}（{b.get('seconds')}s）")     # 每个 variant 一项，全 0 才算过
-    if res["build"].get("baseline_differs") is False:
+    baseline_differs = b.get("baseline_differs")
+    if baseline_differs is not None and not baseline_differs:
         print(f"⚠ 工作区壳与 {BASELINE_REF} 的 compile_hook.c 同源 → refcmp 是自比")
     if args.json:
         _write_json(args.json, res)

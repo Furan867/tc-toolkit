@@ -1111,7 +1111,11 @@ void Lower::s_ReturnStmt(const ReturnStmt& st) {
 
 void Lower::s_SwitchStmt(const SwitchStmt& st) {
     V subj = e(*st.subject);
-    LLVMValueRef subj_ll = subj.c ? const_int(pat_const(subj).value_or(0)) : subj.ll;
+    /* `Str` 主体按**内容**派发（case 值就是字面量）。拿 `pat_const` 当整数比会在 IR 校验就报
+     * `icmp eq ptr, i64` —— 语料里那些 `ui_set_*(\`table[{i}][{j}]\`, …)` 正是要靠内容命中。 */
+    const bool str_subj = subj.ty->kind == TyKind::Str;
+    LLVMValueRef subj_ll =
+        str_subj ? nullptr : (subj.c ? const_int(pat_const(subj).value_or(0)) : subj.ll);
     std::vector<const SwitchCase*> plain;
     std::vector<const SwitchCase*> defaults;
     for (const auto& c : st.cases) {
@@ -1123,12 +1127,21 @@ void Lower::s_SwitchStmt(const SwitchStmt& st) {
         LLVMBuildBr(bd_, end);
     };
     for (const SwitchCase* case_ : plain) {
-        auto cvv = const_value(*case_->value);
-        if (!cvv) throw Unsupported("switch case 的值不是常量", case_->src_line);
-        LLVMValueRef cval = const_int(pat_const(*cvv).value_or(0));
+        LLVMValueRef cnd = nullptr;
+        if (str_subj) {
+            auto cvv = const_value(*case_->value);
+            if (!cvv || cvv->ty->kind != TyKind::Str) {
+                throw Unsupported("Str 主体 switch 的 case 值不是 Str 常量", case_->src_line);
+            }
+            cnd = as_cond(str_compare("==", subj, *cvv, case_->src_line));
+        } else {
+            auto cvv = const_value(*case_->value);
+            if (!cvv) throw Unsupported("switch case 的值不是常量", case_->src_line);
+            LLVMValueRef cval = const_int(pat_const(*cvv).value_or(0));
+            cnd = LLVMBuildICmp(bd_, LLVMIntEQ, subj_ll, cval, "sc");
+        }
         LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "case");
         LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "casenext");
-        LLVMValueRef cnd = LLVMBuildICmp(bd_, LLVMIntEQ, subj_ll, cval, "sc");
         LLVMBuildCondBr(bd_, cnd, then_bb, next_bb);
         LLVMPositionBuilderAtEnd(bd_, then_bb);
         cur_block_ = then_bb;
@@ -1468,6 +1481,7 @@ LLVMValueRef Lower::sext64(LLVMValueRef ll, int bits) {
 
 V Lower::compare(const std::string& op, const V& a, const V& b, int line) {
     TyRef ty = unify(a.ty, b.ty, line);
+    if (ty->kind == TyKind::Str) return str_compare(op, a, b, line);
     V av = convert(a, ty, line);
     V bv = convert(b, ty, line);
     auto ca = pat_const(av);
@@ -1493,6 +1507,20 @@ V Lower::compare(const std::string& op, const V& a, const V& b, int line) {
     }
     LLVMValueRef cnd = LLVMBuildICmp(bd_, pred, x, y, "cmp");
     return V::instr(LLVMBuildZExt(bd_, cnd, i64_, "cmpz"), ty_bool());
+}
+
+V Lower::str_compare(const std::string& op, const V& a, const V& b, int line) {
+    if (op != "==" && op != "!=") throw Unsupported("Str 比大小（" + op + "）", line);
+    LLVMValueRef la = len_of(a, line);
+    LLVMValueRef lb = len_of(b, line);
+    LLVMValueRef same = LLVMBuildICmp(bd_, LLVMIntEQ, la, lb, "sleq");
+    /* 长度不等时把比较长度取 0 —— 否则逐字节会读越过短的那一条的 payload。 */
+    LLVMValueRef n = LLVMBuildSelect(bd_, same, la, const_int(0), "sln");
+    LLVMValueRef eqv = emit_call(ensure_streq_fn(), {to_ptr(a), to_ptr(b), n});
+    LLVMValueRef eq = LLVMBuildICmp(bd_, LLVMIntNE, eqv, const_int(0), "seq");
+    LLVMValueRef res = LLVMBuildAnd(bd_, eq, same, "seqb");
+    if (op == "!=") res = LLVMBuildNot(bd_, res, "snot");
+    return V::instr(LLVMBuildZExt(bd_, res, i64_, "seqz"), ty_bool());
 }
 
 V Lower::logical(const BinaryExpr& node) {
@@ -2699,6 +2727,58 @@ LLVMValueRef Lower::ensure_copy_fn() {
     cur_block_ = done;
     std::vector<LLVMValueRef> gn{n};
     LLVMBuildRet(bd_, LLVMBuildGEP2(bd_, i8, dst, gn.data(), 1, "cr"));
+    finish_function();
+    restore_state(saved);
+    return fn;
+}
+
+LLVMValueRef Lower::ensure_streq_fn() {
+    auto hit = helpers_.find("streq");
+    if (hit != helpers_.end()) return hit->second;
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMTypeRef params[3] = {ptr_, ptr_, i64_};
+    LLVMValueRef fn =
+        LLVMAddFunction(module(), "__simplexc_streq", LLVMFunctionType(i64_, params, 3, 0));
+    LLVMSetLinkage(fn, LLVMInternalLinkage);
+    helpers_["streq"] = fn;
+    fn_seen_++;
+    FnState saved = save_state();
+    cur_name_ = "__simplexc_streq";
+    begin_function(fn, ty_i64());
+    LLVMValueRef a = LLVMGetParam(fn, 0);
+    LLVMValueRef b = LLVMGetParam(fn, 1);
+    LLVMValueRef n = LLVMGetParam(fn, 2);
+    LLVMValueRef slot = alloca_slot(ty_i64(), "qi");
+    store_addr(slot, V::instr(const_int(0), ty_i64()), ty_i64(), 0);
+    LLVMBasicBlockRef head = br_new_block("qh");
+    LLVMValueRef i = llv(load_addr(slot, ty_i64()));
+    LLVMValueRef lt = LLVMBuildICmp(bd_, LLVMIntULT, i, n, "qlt");
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fn, "qb");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fn, "qd");
+    LLVMBuildCondBr(bd_, lt, body, done);
+    LLVMPositionBuilderAtEnd(bd_, body);
+    cur_block_ = body;
+    std::vector<LLVMValueRef> gi{i};
+    LLVMValueRef ap = LLVMBuildGEP2(bd_, i8, a, gi.data(), 1, "qap");
+    LLVMValueRef bp = LLVMBuildGEP2(bd_, i8, b, gi.data(), 1, "qbp");
+    LLVMValueRef av = LLVMBuildLoad2(bd_, i8, ap, "qa0");
+    LLVMSetAlignment(av, 1);
+    LLVMValueRef bv = LLVMBuildLoad2(bd_, i8, bp, "qb0");
+    LLVMSetAlignment(bv, 1);
+    LLVMValueRef ne = LLVMBuildICmp(bd_, LLVMIntNE, av, bv, "qne");
+    LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(ctx(), fn, "qc");
+    LLVMBasicBlockRef diff = LLVMAppendBasicBlockInContext(ctx(), fn, "qx");
+    LLVMBuildCondBr(bd_, ne, diff, cont);
+    LLVMPositionBuilderAtEnd(bd_, cont);
+    cur_block_ = cont;
+    store_addr(slot, V::instr(LLVMBuildAdd(bd_, i, const_int(1), "qi1"), ty_i64()), ty_i64(), 0);
+    LLVMBuildBr(bd_, head);
+    LLVMPositionBuilderAtEnd(bd_, diff);
+    cur_block_ = diff;
+    LLVMBuildRet(bd_, const_int(0));
+    LLVMPositionBuilderAtEnd(bd_, done);
+    cur_block_ = done;
+    LLVMBuildRet(bd_, const_int(1));
     finish_function();
     restore_state(saved);
     return fn;

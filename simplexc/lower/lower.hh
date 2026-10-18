@@ -292,6 +292,8 @@ protected:
        `__simplexc_copy(ptr dst, ptr src, u64 n) -> dst + n`。 */
     LLVMValueRef ensure_dec_fn();
     LLVMValueRef ensure_copy_fn();
+    /* `__simplexc_streq(ptr a, ptr b, u64 n) -> 1/0`：Str 内容相等（`switch` 与 `==` 共用）。 */
+    LLVMValueRef ensure_streq_fn();
     /* `llvm.ctlz.i64` 的声明（`clz` 用，见 `builtin_clz`）。 */
     LLVMValueRef ensure_clz_fn();
 
@@ -299,6 +301,9 @@ protected:
     TyRef unify(const TyRef& a, const TyRef& b, int line);
     LLVMValueRef as_cond(const V& v);
     V compare(const std::string& op, const V& a, const V& b, int line);
+    /* `Str == Str` / `Str != Str`：按**内容**（长度 + 逐字节），不是指针 —— 语料用 `switch id`
+     * 拿**运行期插值出来**的名字派发 UI 元素，指针比永远不会命中。 */
+    V str_compare(const std::string& op, const V& a, const V& b, int line);
     LLVMValueRef sext64(LLVMValueRef ll, int bits);
     V logical(const BinaryExpr& node);
     V binop(const std::string& op, const V& a, const V& b, int line);

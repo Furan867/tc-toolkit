@@ -79,18 +79,18 @@ tools/freq/                 # 包（位置与命名已确认）
 
 - **变体轴**：`Variant(compiler ∈ {reference, ours, ours_with_fallback}, rewrite ∈ {off, on, short, short_cse})`。
   控制通道仍是 `opt.ini`（新增 `[opt] compiler=`，由转发层读；当前只有 `rewrite`，见 `compile_hook.c:340`）。
-- **缺失键的 fail-safe 必须先定义**：`opt.ini` 读不到键时，`rewrite` 现按 `on` 兜底（`facts.md:192`；
+- **缺失键的 fail-safe 必须先定义**：`opt.ini` 读不到键时，`rewrite` 现按 `on` 兜底（`facts/perf-tooling.md`；
   实测当前生效值就是 `on`）；新增的 `compiler` 必须兜底到 **`reference`**，否则 A/B 会把“没配”误当“我们的实现”。
 - **归属只认 `hook.log`，且要分清三行**：`cfg` = **配置了什么**（原样搬运）、`opt` = **改写器实际做了什么**、
   新增的 per-call `impl` 行 = **实际走了哪个实现**。不能用“我们写了什么配置”当归属
-  （`facts.md` §「产物 rewrite 模式的权威来源」已记该坑）；加 compiler 轴后，只记 `cfg` 会把回退误当我们的实现。
+  （`facts/forwarding.md` §「产物 rewrite 模式的权威来源」已记该坑）；加 compiler 轴后，只记 `cfg` 会把回退误当我们的实现。
 - **必须新增 per-call「实际用了哪个实现」行**（已确认；`impl` 词表与 manifest 列的定义在
   `2026-10-15-simplexc-interfaces.md` §5，那边是唯一一处）：回退是 per-call 的，只记 `cfg` 会重演
   "标注 vs 实际"错位（`compile_hook.c:337` 记的 `short_cse` 被静默改写成 `on` 那次就是同类问题）。
 - **`hook.log` 移到 `work/hook/`**（已确认，名字更符合直觉）：
   - C 侧 `compile_hook.c:299`（`sprintf(path, "%s%chook.log", OPT_DIR, SEP)`）与 `:297` 的 `CreateDirectoryA`；
   - Python 侧 `tools/hook_log.py` 的 `PATH`；
-  - 文档：`docs/map.md:18`、`docs/facts.md:196`、`compile_hook.c` 头部注释、`hook_log.py` docstring。
+  - 文档：`docs/map.md:18`、`docs/facts.md`、`compile_hook.c` 头部注释、`hook_log.py` docstring。
   - 消费者通过 `hook_log.PATH` / `hook_log.find()` 取路径，改这两处即可，不用逐个改调用方。
 - **判据入口调用方式**：`cli_bench --variant reference:off --variant ours:off --json out.json`；
   判据入口**只消费 JSON**，人读摘要留在终端。
@@ -118,7 +118,7 @@ tools/freq/                 # 包（位置与命名已确认）
 ## 6. 风险（容易改坏的地方）
 
 - **混合窗口**：丢掉"丢首个 + 中位数 + 过渡标注"会让数字静默变样。
-- **停机哨兵 `0` vs 电路自带限速的低非零值**：把低非零当噪声丢，就丢了真信号（`facts.md` §「采样判据四条」）。
+- **停机哨兵 `0` vs 电路自带限速的低非零值**：把低非零当噪声丢，就丢了真信号（`facts/perf-tooling.md` §「采样判据四条」）。
 - **不能用 `last_speed_check` 判断是否在跑**：停机时它照常刷新。
 - **前台抢占**：不校验前台就发键，会把 Ctrl+Z 打到别的程序上。
 - **undo 净消耗记账与栈空**：栈空时 `recompile` 静默无效，"`hook.log` 无新行"是唯一可靠探测。
@@ -157,5 +157,5 @@ tools/freq/                 # 包（位置与命名已确认）
 | median vs mean 口径不一致 | `watch_freq.py:148,446` vs `bench_rewrite.py:248,262,291,394` |
 | `hook.log` 现有行类型 | `cut -f3 work/opt/hook.log \| sort \| uniq -c` → `cfg/entry/opt/writeback` |
 | 日志契约（两个写入者） | `tools/hook_log.py` docstring + `compile_hook.c:296` |
-| 权威配置来源只认 `hook.log` | `docs/facts.md` §「产物 rewrite 模式的权威来源」 |
-| 采样判据四条 | `docs/facts.md` §「采样判据四条」 |
+| 权威配置来源只认 `hook.log` | `docs/facts/forwarding.md` §「产物 rewrite 模式的权威来源」 |
+| 采样判据四条 | `docs/facts/perf-tooling.md` §「采样判据四条」 |

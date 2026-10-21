@@ -348,7 +348,7 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 - 主频底层 = 读游戏内存（已确认、已做好）；benchmark 固定 RV32IM 电路；协议：多轮取中位数、同一次游戏会话内交替。
 - **主频/bench 这一层已重写立项并定稿**：设计见 `docs/specs/2026-10-15-freq-measurement-design.md`。
   归属语义在这里统一（三条线含义不同，别混）：`cfg` = **配置了什么**、`opt` = **改写器实际做了什么**、
-  新增的 per-call `impl` 行 = **实际走了哪个实现**；**归属只认后两者**。落地时同步 `docs/facts.md:196`
+  新增的 per-call `impl` 行 = **实际走了哪个实现**；**归属只认后两者**。落地时同步 `facts/forwarding.md`
   与 `tools/hook_log.py` 的事件表（搬 `hook.log` 时一并改）。
 
 ### 7.4 语义档案（semantics dossier）

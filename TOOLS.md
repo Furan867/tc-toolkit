@@ -65,7 +65,7 @@ work/reports/  分析报告      work/tmp/   一次性中间产物
 build/         compile_hook.dll（构建产物）
 ```
 
-清空语义见 [`facts.md`](facts.md)。**取主频数只读 `work/freq/freq_summary.txt`**。
+清空语义见 [`facts/forwarding.md`](facts/forwarding.md)。**取主频数只读 `work/freq/freq_summary.txt`**。
 
 ## 技术债
 

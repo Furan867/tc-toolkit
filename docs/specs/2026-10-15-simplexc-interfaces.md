@@ -268,7 +268,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
   参考产物的 movabs 全部落在 **`compile_real.dll` 自己的镜像**里 —— 导入 thunk / DLL 内部代码 / DLL 的 `.bss` 全局，
   **不是 kernel32 自身的地址**。所以宿主必须 **`LoadLibrary` 真 `compile_real.dll`** → 把产物里 baked 基址
   重定位到实际加载基址（加 delta）→ 把 DLL 的 **IAT 槽**换成宿主桩；桩记录 `{name, args, ret}` 进快照。
-  取证见 `docs/facts.md` §「参考产物会直接调用 compile_real.dll 里的运行时函数」+ `docs/notes/2026-10-17-m2-host-design.md`。
+  取证见 `docs/facts/corpus-host.md` §「参考产物会直接调用 compile_real.dll 里的运行时函数」+ `docs/notes/2026-10-17-m2-host-design.md`。
 - **`stub` sidecar（版本 1.1 增量）**：**我们自己的**产物形态不同 —— 装配器把未定义符号解析成 `.text` 尾部的
   `movabs rax, imm64 ; jmp rax` 代码桩（以及 `__imp_*` 的 8 字节数据槽），`imm64` 是**编译期**在别的进程里
   `GetProcAddress` 得的绝对地址（`Sleep` 等）→ 它会落在宿主进程里「已映射但不在地址表内」的位置，

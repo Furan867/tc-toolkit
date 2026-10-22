@@ -3,7 +3,7 @@
 源码文本（`.si`）→ **类型化 AST**：词法/语法、`#if in_scope` 与预处理、作用域、类型系统、
 常量求值、重载解析、内建识别、根确定与 DCE。
 
-**现状**：**C++17 实现已落地**（M4.5），接口 `frontend/ast.h`、`frontend/frontend.h`。
+**现状**：**C++17 实现已落地**（M4.5），接口 `frontend/ast.hh`、`frontend/frontend.hh`。
 M3 期的 Python 原型（`decls.py` / `expr.py`）已于 2026-10-18 删除（git 历史可查），
 **不再有任何实现被当作语义权威** —— 语义以原版编译器的实测行为为准（`docs/facts/semantics.md`）。
 

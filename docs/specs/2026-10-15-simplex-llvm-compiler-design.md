@@ -6,6 +6,8 @@
   2026-10-15 负责人确认：§7.5 判据入口 / §8 agent 工作流 / §10 版本锁定与重验脚本；代码落库位置 = `reversing/simplexc/`；
   **LLVM 链接方式 = `LLVM-C.dll` + C API + 现有 w64devkit g++**（不引入 CMake；构建方式照抄
   `tools/deploy_compile_hook.py` 的直调 gcc）；语料实测见 §2.7；MVP 验收下界 = 沙盒模式能跑起来。
+- 2026-10-18：§3 / §3.1 / §8 第 1、2、3、6 项已由 `docs/specs/2026-10-18-compiler-architecture.md` 取代；
+  本文的 §2（实测事实）、§4（产物契约）、§5（语义保真）、§7.1/§7.2、§10 仍然有效。
 - 相关文档：`docs/facts.md`（复用结论）、`docs/status.md`（当前进度）、`docs/pitfalls.md`（踩过的坑）
 - 证据等级：✅已证（跑过命令 / 反汇编核对）｜🔍推断（由实测数据推得）｜❓未确认
 
@@ -200,8 +202,8 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 | 组件 | 输入 → 输出 | 职责 | 现状 |
 |---|---|---|---|
 | 转发层（壳） | 游戏调用 → 产物 | 选实现、记录 `flags`/Result、异常熔断（绝不让游戏崩）、失败转交 | **既有 `tools/compile_hook.c` 演进**（它已承担 manifest/捕获/purge/配置读取/entry 回写）；`simplexc/shell/` 只放“选实现 + 失败转交 + 核心入口”这段新代码，契约只有一份 |
-| 前端 | 源码文本 → 类型化 AST | 词法/语法、`#if in_scope` 预处理、作用域、类型系统、常量求值、重载解析、内建识别、根确定与 DCE | **C++17 版待写**；现有 Python 原型（冻结为 oracle，见下） |
-| Lowering | 类型化 AST → LLVM IR | 语义保真映射（§5）、内建映射表、extern 声明、entry 包装 | **C++17 版待写**；现有 Python 原型（同上） |
+| 前端 | 源码文本 → 类型化 AST | 词法/语法、`#if in_scope` 预处理、作用域、类型系统、常量求值、重载解析、内建识别、根确定与 DCE | 已落地（M4.5）；职责与分层见 architecture §1 |
+| Lowering | 类型化 AST → LLVM IR | 语义保真映射（§5）、内建映射表、extern 声明、entry 包装 | 已落地（M4.5）；职责与分层见 architecture §1 |
 | LLVM 管线 | LLVM IR → 目标码 | 固定版本 + pass pipeline + 目标三元组/ABI | **已定**：`LLVM-C.dll` + C API（`LLVMRunPasses` + `LLVMTargetMachineEmitToMemoryBuffer`）；三元组 `x86_64-pc-windows-gnu`；链接与构建方式见 §8 |
 | 装配器 | 目标码/目标文件 → blob | 局部符号 PC 相对、extern `GetProcAddress`、8 字节头、entry 偏移、blob 生命周期 | **可用**（`assemble/`；含桩/槽两趟定址与 sidecar 自校验） |
 | 离线 CLI | `.si` → blob 文件 | 与壳共用核心；给 agent、差分宿主、回归用（不碰游戏） | **可用**（`cli/tcblob`、`cli/llvm_prog`、`cli/prog_empty`） |
@@ -228,12 +230,12 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 | `out[1]` | 缓冲指针（我们分配、我们持有） | ✅ 2.3 |
 | `out[2]` | `entry_off`，**相对机器码起点**（= `blob+8`） | ✅ 2.2 |
 | `out[3]`/`out[4]` | 成功必须 `0`/`0`；失败给 `{len≠0, ptr}` 的 Nim 字符串形状 | ✅ 2.2 |
-
-> 失败**不自造**错误消息 —— 整单转交参考实现并原样返回它的 Result（§3）。若将来自造，才需要上面这个形状。
 | `blob[0:8]` | 小端 u64 = **`out[0] \| (1<<62)`**（bit62 = 不要 free） | ✅ 2.3 |
 | `blob[8:]` | 机器码；内部引用一律 PC 相对 | ✅ 2.3 / 🔍 |
 | 缓冲实际分配 | **`out[0] + 8` 字节**（多 8 字节 padding） | 见下 |
 | 释放 | 由我们负责：每次编译分配一块，**下次编译释放上一块**（或泄漏） | ✅ 2.3 |
+
+> 失败**不自造**错误消息 —— 整单转交参考实现并原样返回它的 Result（§3）。若将来自造，才需要上面这个形状。
 
 两条容易踩的点：
 

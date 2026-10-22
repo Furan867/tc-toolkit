@@ -11,6 +11,12 @@
   这意味着：**没有任何实现被当作语义权威**。语义以「原版编译器（游戏目录 `compile_real.dll`）的实测行为」为准，
   结论登记在 `docs/facts/semantics.md`；「跑不起来 / 结果不可复现」不再是改原型的理由（原型不在了）。
   版本 1.2（2026-10-17）曾把该原型列为只读参考实现，那条已随文件删除而失效。
+- **版本 1.4（2026-10-18，只有状态说明、不改任何接口）**：分层、职责边界、错误模型、状态与所有权、
+  判据体系、调试信息改由 `docs/specs/2026-10-18-compiler-architecture.md` 定义（框架级）；
+  本文件只管**接口形状**（类型、内建表、runtime ABI、装配器、壳、宿主协议）。
+  ⚠️ **§1 中 `Type`/`TypeKind`/`TypedProgram`/`parse_and_typecheck` 从未实现**（全仓不存在；
+  `TyRef` 实际在 `lower/lower.hh`，sema 逻辑在 `lower.cc`）——该节自本条起降级为**未实现的草案**，
+  不是契约；分层形态见 architecture §1。
 - 上游（唯一权威，本文件不复制其内容）：
   - 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 §2/§4、语义保真 §5、验证 §7、工作流 §8、里程碑 §9）
   - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（变体轴、归属语义、`hook.log` 迁移）
@@ -43,6 +49,9 @@ reversing/simplexc/
 ---
 
 ## 1. 前端产物：类型化 AST 与类型表示
+
+> ⚠️ **本节不是契约**：`Type`/`TypeKind`/`TypedProgram`/`parse_and_typecheck` 从未实现，本节是未实现的草案
+> —— 见顶部「版本 1.4」；分层形态见 architecture §1。
 
 **语言与文件**：C++17；接口头 `simplexc/frontend/ast.hh`、`simplexc/frontend/frontend.hh`。
 （2026-10-18 更正：扩展名是 `.hh` 不是 `.h` —— 项目规则「C++ 用 `.hh`/`.cc`，C 用 `.h`/`.c`」，因为 pi-lens 按扩展名判语言，`.h` 会被当 C 检查，C++17 头里的 `std::`/模板会报假错。`ast.hh` 已落库并通过编译验证。）

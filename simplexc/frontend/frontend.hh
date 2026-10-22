@@ -1,7 +1,6 @@
 // 文件级上下文：decls + 按 def 解析（M4.5 的 C++17 产品实现）。
 //
-// 语义 oracle = 冻结原型 `frontend/expr.py` 的 `Frontend` + `declared_type_names` /
-// `covered_lines` / `stats_for`（只读）。按 `decls.hh` 给的 `lo`/`hi` 切出某个 def 的 token 流，
+// 按 `decls.hh` 给的 `lo`/`hi` 切出某个 def 的 token 流，
 // 解析成语法树 —— **只到语法层**，类型仍只是源里的拼写。
 //
 // 错误沿用原型的形状（抛异常）：
@@ -38,8 +37,8 @@ struct SrcText {
 };
 
 /* 读源文件 + 词法掩码 + 切行 + 声明扫描（**不分词**）。
-   为什么单独拆一步：`decls.py` 那一路从不分词 —— 语料里的 `stdlib_prefix.si` 第 172 行有个
-   `$`，分词会报错（`expr.py` 就是整个文件失败），但没有词法错误的文件仍应出声明表。 */
+   为什么单独拆一步：声明表那一路从不分词 —— 语料里的 `stdlib_prefix.si` 第 172 行有个
+   `$`，分词会报错（整文件分词就是整个文件失败），但没有词法错误的文件仍应出声明表。 */
 struct ScannedSource {
   std::vector<std::string> code_lines;
   std::vector<std::string> raw_lines;

@@ -1,6 +1,5 @@
 // 分词（M4.5 的 C++17 产品实现）。
 //
-// 语义 oracle = 冻结原型 `frontend/expr.py` 的 `tokenize` / `Tok` / `LexError`（只读）。
 // token 里带「前面有没有空白」——那是消歧 `f(x)`（调用）与 `T (x)`（转换）的唯一依据。
 //
 // 列号按**码点**计（原型是 Python str，列号也是码点）：语料里有 CJK（`label == '内存'`），

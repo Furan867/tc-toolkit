@@ -3,16 +3,14 @@
 源码文本（`.si`）→ **类型化 AST**：词法/语法、`#if in_scope` 与预处理、作用域、类型系统、
 常量求值、重载解析、内建识别、根确定与 DCE。
 
-**现状**：C++17 版未开始；Python 原型已有 `decls.py`（词法掩码 + 顶层声明表 + 花括号配平 + 名字级可达性）与 `expr.py`。
-**产品实现 = C++17（待写，M4.5，接口 `frontend/ast.h`）**；`.py` 是 M3 的**冻结原型（oracle）**：默认只读、
-禁止在其上开发 —— 见接口冻结版 §0、主设计 §3.1/§8。
-表达式/语句/类型一律还没有：函数体**只配平不解析**（纪律见 `docs/status.md`「下一步」第 2 条）。
-类型表示、泛型单态化、内建表与可见性规则都已经冻结，不要按自己的理解先写一版。
+**现状**：**C++17 实现已落地**（M4.5），接口 `frontend/ast.h`、`frontend/frontend.h`。
+M3 期的 Python 原型（`decls.py` / `expr.py`）已于 2026-10-18 删除（git 历史可查），
+**不再有任何实现被当作语义权威** —— 语义以原版编译器的实测行为为准（`docs/facts/semantics.md`）。
 
-```
-python simplexc/frontend/decls.py --src simplexc/corpus/rv32im/rv32im.si   # 声明表(TSV) + stderr 统计
-python simplexc/frontend/decls.py --src <file> --json out.json              # 同上，结构化
-```
+判据入口：`python simplexc/tools/check.py`；构建：`python simplexc/tools/build.py`。
+
+结论与语法摸底：`docs/notes/2026-10-18-frontend-decls.md`（顶层构造只有五种、`#if` 与
+标签块怎么处理、可达性口径与 dossier 里 19 的差异）。
 
 结论与语法摸底：`docs/notes/2026-10-18-frontend-decls.md`（顶层构造只有五种、`#if` 与
 标签块怎么处理、可达性口径与 dossier 里 19 的差异）。
@@ -23,5 +21,4 @@ python simplexc/frontend/decls.py --src <file> --json out.json              # �
 - 组件职责表：主设计 §3.1
 - **禁止猜的语义**：接口文档 §9 的 U-L1…U-L14 —— 先做 `dossier/` 的实验，再把结论写死
 
-怎么用：`decls.py` 先给出「哪些声明占哪几行、哪个 def 可达」的骨架，后续语句/表达式解析按
-`--json` 里的 `lo`/`hi` 切片；与 `lower/`、`cli/` 共用核心，产物先接离线 CLI，再接壳。
+类型表示、泛型单态化、内建表与可见性规则都已经冻结，不要按自己的理解先写一版。

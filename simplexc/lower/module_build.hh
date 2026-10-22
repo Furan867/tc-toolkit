@@ -3,12 +3,12 @@
  * 为什么这一层存在
  * ----------------
  * `lower::Program` 拿的是**已解析**的 `ModuleAst`（`label`/`defs`/`top_vars`/`enums`/`structs` 都由调用方填），
- * 而源文件到它之间还差一段：`_scan_decls` / `_scan_type` / `parse_decl_stmt`（原型 `ir_build.py` 的三段）。
+ * 而源文件到它之间还差一段：`_scan_decls` / `_scan_type` / `parse_decl_stmt`（原型的三个扫描步骤）。
  * 它既不属于 lowering（lowering 只认类型化 AST），也不属于 parser（parser 只认 token）——
  * 所以放在 `lower/` 里单独一个文件，**壳（`shell/simplexc_core.cc`）与 CLI（`cli/simplexc_cli.cc`）
  * 都调这一份**，不许各留一份实现（接口冻结版 §0 的「一处定义」）。
  *
- * 语义 oracle = `lower/ir_build.py` 的同名三段（只读）。差别只在于：那边用正则，这边手写扫描 ——
+ * 与冻结原型的差别只在于：那边用正则，这边手写扫描 ——
  * 生成代码子集里 type 声明只有 `type X Enum [a, b]` 与 `type X Struct { f: T, … }` 两种形态。
  */
 #pragma once

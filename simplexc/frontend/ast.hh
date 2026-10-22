@@ -1,7 +1,7 @@
 // Simplex 的语法树（M4.5 冻结接口）。
 //
 // 这是 parser 的产出、lowering 的输入，两者按本文件对齐；改字段 = 改契约，先通知对面的写者。
-// 节点与字段**逐条对应** M3 冻结原型 `frontend/expr.py` 的 dataclass（那是语义 oracle）：
+// 节点与字段**逐条对应** M3 冻结原型的 dataclass 形状（语义依据见 `docs/facts/semantics.md`）：
 // 原型怎么表达的，这里就怎么表达 —— 包括 `TypeRef` 只存**源里的拼写**这一点（类型解析在 lowering 侧）。
 //
 // 为什么是「继承 + kind 枚举」而不是 std::variant：lowering 里有大量按节点类别分派（原型是 isinstance），

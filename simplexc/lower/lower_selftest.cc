@@ -4,7 +4,7 @@
  *   L2 手写 AST → COFF：节只应有 `.text/.data/.bss`，`.text` 的重定位只有 `REL32`；
  *   L3 接 `assemble::assemble()` → `Blob`：头 word = 大小 | bit62、entry 在码长内、`status == Ok`；
  *   L4 四条语义档案（U-L1 / U-L7 / U-L8 / `/`、`%`）的最小 AST：打印生成的 IR 片段 + 断言，
- *      每条断言都能对着 `lower/ir_build.py` 的对应行检查。
+ *      每条断言都能对着 `docs/facts/semantics.md` 的对应条目复查。
  *
  * 用法（在仓库根 `reversing/` 下跑；运行期 PATH 里要有 `build/llvm/bin` 才能找到 LLVM-C.dll）：
  *
@@ -243,7 +243,7 @@ std::unique_ptr<Param> param(int line, const char* name, const char* tname) {
 /* `Ptr 0x1000` = 到 `Ptr` 的显式转换（U-L1：地址是**字节**地址，常数直接是那个地址）。 */
 ExprPtr ptrlit(int line, uint64_t addr) { return castx(line, "Ptr", lit(line, addr)); }
 
-/* `store(<T>, p, v)` —— 注意 `store` 的写入宽度取 **v 的类型**（oracle:1385），类型实参不参与。 */
+/* `store(<T>, p, v)` —— 注意 `store` 的写入宽度取 **v 的类型**，类型实参不参与。 */
 StmtPtr stmt_store(int line, ExprPtr addr, ExprPtr value) {
     return stmt_expr(line, callx(line, id(line, "store"), mklist(std::move(addr), std::move(value))));
 }
@@ -461,11 +461,11 @@ Case build_div() {
     return c;
 }
 
-/* ---------------------------------------------------------------- oracle 对照用的探针
+/* ---------------------------------------------------------------- 参考实现对照用的探针
  *
  * `work/tmp/lower/probe.si` 是同一段源码的 **参考实现**版本；本函数手写它的 AST。
  * 两份模块的 IR 文本必须逐字节相同（同一个 LLVM 版本 + 同一条发射顺序），
- * 所以这是目前唯一能直接拿冻结 oracle 对账的手段（真源接入等 A 路 —— 见报告里的 L5）。
+ * 所以这是目前唯一能逐字节对账 IR 文本的手段（真源接入等 A 路 —— 见报告里的 L5）。
  */
 Case build_probe() {
     Case c;

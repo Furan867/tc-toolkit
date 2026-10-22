@@ -1,7 +1,7 @@
 // AST → JSON / 人读树（M4.5 的 C++17 产品实现）。
 //
-// 语义 oracle = 冻结原型 `frontend/expr.py` 的 `node_to_dict` / `render_tree`（只读），
-// 只给判据用（`frontend/ast_dump_main.cc`），不进产品路径。
+// 只给判据用（`frontend/ast_dump_main.cc`），不进产品路径 —— 输出形状照抄冻结原型的
+// `node_to_dict` / `render_tree` 口径。
 //
 // 两处必须照抄原型的地方：
 //   1. `LiteralExpr` 的字段名 `kind` 与「节点类别名」**撞车** → 原型 `node_to_dict` 里字段覆盖

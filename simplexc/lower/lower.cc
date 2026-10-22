@@ -1,7 +1,4 @@
-/* lower.cc —— 类型化 AST → LLVM IR（接口与取舍见 lower.hh）。
- *
- * 行号引用形如 `oracle:1234`，指冻结原型 `simplexc/lower/ir_build.py` 的那一行 —— 语义以它为
- * 权威，本文件只做等价翻译。改动前先读那几行。 */
+/* lower.cc —— 类型化 AST → LLVM IR（接口与取舍见 lower.hh）。 */
 #include "lower.hh"
 
 #include <algorithm>
@@ -14,8 +11,8 @@ namespace simplexc {
 namespace lower {
 namespace {
 
-/* 前缀（stdlib）里定义、生成源码当作「已存在」用的名字：只登记参考实现里出现过的几个
- * （oracle:361-370）。**这不是内建表** —— 内建表的唯一来源是接口 §2 的 `builtins.def`。 */
+/* 前缀（stdlib）里定义、生成源码当作「已存在」用的名字：只登记参考实现里出现过的几个。
+ * **这不是内建表** —— 内建表的唯一来源是接口 §2 的 `builtins.def`。 */
 struct PrefixGlobal {
     TyRef ty;
     uint64_t init;   /* 前缀那一行给的初值（`var global_seed = Seed 1`），源码还能再赋值 */

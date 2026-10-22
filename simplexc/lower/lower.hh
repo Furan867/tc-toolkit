@@ -1,8 +1,8 @@
-/* lower.hh —— 类型化 AST → LLVM IR（M4.5 的 B 路产品实现；语义 oracle = `lower/ir_build.py`，只读）。
+/* lower.hh —— 类型化 AST → LLVM IR（M4.5 的 B 路产品实现）。
  *
- * 为什么逐条复刻 oracle 而不是「按 LLVM 的自然行为写」
+ * 为什么按实测语义逐条实现，而不是「按 LLVM 的自然行为写」
  * ----------------------------------------------------
- * oracle 的行为是**实测过的参考实现语义**（`docs/facts.md` 的 U-L1 / U-L7 / U-L8 与 `/`、`%` 那张表），
+ * 下面这些行为是**实测过的原版编译器语义**（`docs/facts/semantics.md` 的 U-L1 / U-L7 / U-L8 与 `/`、`%` 那张表），
  * 其中三处与 LLVM 的直觉相反，猜错就是语义分叉：
  *   · `>>` 恒为 `lshr`（不是 `ashr`），移位量按 W 取模，`asr` 在 n ≥ W 时饱和；
  *   · 加宽分两路 —— **编译期常量**按源类型符号性扩，**运行期值**一律 `zext(trunc_W)`（同一个表达式里
@@ -10,9 +10,9 @@
  *     （N∉{8,16,32,64} 时后端假设不可控）；
  *   · `/`、`%` 的 opcode 看**被除数**的声明类型，除数完全不参与；窄常量参与运行期除法时被当成
  *     「W 位模式零扩展成 64 位」（参考实现的不自洽，不要「修正」）。
- * 每个此类取舍在实现里都标了 oracle 的行号，改动前先读那几行。
+ * 每个此类取舍在实现里都标了对应的语义档案条目，改动前先读那几条。
  *
- * 两个类的分工（与 oracle 的 `class Lower` / `class Program(Lower)` 一致）
+ * 两个类的分工
  * ---------------------------------------------------------------------
  *   `Lower`   —— **函数级** lowering：表达式/语句/调用/内建/按需生成被调函数，外加它自己要用的
  *                类型解析与常量工具（`ty_of_ref` / `const_value` / `ll_type` …）；
@@ -37,7 +37,7 @@ namespace simplexc {
 namespace lower {
 
 /* ---------------------------------------------------------------- 错误
- * 两种错误分开（oracle 同名）：`Unsupported` = 没实现 / 没定的构造（带源码行号，接口 §8 要求错误能
+ * 两种错误分开：`Unsupported` = 没实现 / 没定的构造（带源码行号，接口 §8 要求错误能
  * 定位到 span），`CompileFail` = 内部失败或环境问题。壳按 `ErrKind` 分类回退，别在这里合并。 */
 class Unsupported : public std::runtime_error {
 public:
@@ -60,7 +60,7 @@ struct Diagnostic {
 };
 
 /* ---------------------------------------------------------------- 类型
- * oracle `ir_build.py:227-278`。位宽是**真语义**（U-L7），`bits` 可以是 1..64 的任意值。 */
+ * 位宽是**真语义**（U-L7），`bits` 可以是 1..64 的任意值。 */
 enum class TyKind { Void, Int, Ptr, Enum, Struct, Array, Str };
 
 struct Ty;
@@ -78,7 +78,7 @@ struct Ty {
     TyRef elem;                                         /* Array / Str 的元素类型 */
 };
 
-/* oracle 的模块级单例（`I64` / `BOOL` / `PTR` / `STR` / `SEED` / `TIME`）。 */
+/* 模块级单例（`I64` / `BOOL` / `PTR` / `STR` / `SEED` / `TIME`）。 */
 const TyRef& ty_void();
 const TyRef& ty_i64();
 const TyRef& ty_bool();
@@ -109,7 +109,7 @@ struct V {
 };
 
 /* ---------------------------------------------------------------- 常量折叠
- * 结果是**该类型的位模式**（`0 <= v < 2^bits`）。三条参考行为照抄 oracle `312-378`：截断发生在运算
+ * 结果是**该类型的位模式**（`0 <= v < 2^bits`）。三条参考行为（见 `docs/facts/semantics.md`）：截断发生在运算
  * 结果上（U-L7）、`>>` 是 lshr 语义、除法的符号性看被除数且除数为 0 时商 0 余数为被除数。 */
 int64_t as_signed(uint64_t x, int bits);
 uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty);
@@ -117,7 +117,7 @@ uint64_t fold_unary(const std::string& op, uint64_t a, const Ty& ty);
 uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty);   /* 0 / 1 */
 
 /* ---------------------------------------------------------------- 前端 → lowering 的输入
- * oracle `Program.__init__` 从 `frontend/decls.py` 拿的那张声明表。`ast.hh` 没有顶层 `type` 声明的
+ * 声明表（`Program` 从 `frontend/decls.hh` 拿的那张）。`ast.hh` 没有顶层 `type` 声明的
  * 节点（它只管语句与表达式），所以这里给两个最小载体，字段类型仍用 `TypeRef` 的**拼写**表示。
  *
  * **AST 节点不归本模块所有**：`Program` 只持裸指针，调用方必须保证它们在 `Program` 活着期间有效
@@ -174,7 +174,7 @@ protected:
 
     void record(const std::string& msg, int line);
 
-    /* ---- LLVM 类型与常量（oracle `Program.val_ll/ll_type/storage_ll/const_int/const_ptr`） */
+    /* ---- LLVM 类型与常量（`val_ll` / `ll_type` / `storage_ll` / `const_int` / `const_ptr`） */
     LLVMTypeRef val_ll(const Ty& ty);
     LLVMTypeRef ll_type(const Ty& ty);
     LLVMTypeRef storage_ll(const Ty& ty);
@@ -228,7 +228,7 @@ protected:
     void bind_root_scope(const std::string& name, Binding b);
     const Binding* lookup(const std::string& name) const;
 
-    /* ---- 值工具（oracle `llv` / `pat_const` / `pattern_of` / `mask_ll` / `convert`） */
+    /* ---- 值工具（`llv` / `pat_const` / `pattern_of` / `mask_ll` / `convert`） */
     LLVMValueRef llv(const V& v);
     std::optional<uint64_t> pat_const(const V& v);
     LLVMValueRef pattern_of(const V& v);
@@ -374,7 +374,7 @@ protected:
     void body_sleep();
     void body_memory_clear();
     void body_memory_copy();
-    /* `i = 0` + 循环头；返回 i 的地址槽，循环头块与 `n` 从出参出（oracle 同名函数）。 */
+    /* `i = 0` + 循环头；返回 i 的地址槽，循环头块与 `n` 从出参出。 */
     LLVMValueRef byte_loop_prologue(unsigned n_param, LLVMBasicBlockRef* head_out,
                                     LLVMValueRef* n_out);
     LLVMValueRef ensure_def_fn(const std::string& name, int64_t lo, const FunctionDef& d,

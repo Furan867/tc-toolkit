@@ -1,4 +1,4 @@
-/* llvm_ffi.hh —— LLVM-C 的 C++ 薄封装（原型 ir_build.py:83-218 那份 ctypes 绑定的对应物）。
+/* llvm_ffi.hh —— LLVM-C 的 C++ 薄封装。
  *
  * 为什么只需要「薄」：产品实现是 C++，直接 include `llvm-c/Core.h` 之类的头就够了 —— 原型要
  * ctypes 是为了在 Python 里拿 C 符号。这里剩下的只有两件 Python 侧没有的东西：

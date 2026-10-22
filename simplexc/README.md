@@ -7,7 +7,7 @@
 
 | 目录 | 负责什么 | 现状 |
 |---|---|---|
-| `frontend/` | 源码文本 → 类型化 AST（**C++17**，接口 `frontend/ast.h`） | C++ 版未开始；现有 `.py` 是**冻结的原型** |
+| `frontend/` | 源码文本 → 类型化 AST（**C++17**，接口 `frontend/ast.h`） | C++17 实现（M4.5 已落地） |
 | `lower/` | 类型化 AST → LLVM IR（**C++17**） | 同上 |
 | `runtime/` | 路线 B 运行时（编成 COFF，随 blob 装配） | 只有 `rt_min.cc`（spike 用） |
 | `assemble/` | COFF → blob | 可用 |
@@ -19,10 +19,9 @@
 
 每个目录一个 README（负责什么 / 现在有什么 / 对外接口在哪 / 怎么用）。
 
-**产品 vs 原型**：产品路径（进 DLL）一律 **C++17** —— `frontend/` / `lower/` / `runtime/` / `assemble/` /
-`shell/` / `cli/`；`tools/` 下的 Python 只做离线工具。`frontend/*.py` + `lower/ir_build.py` 是 M3 的
-**冻结原型（oracle）**：默认只读，不入产品路径，禁止在其上开发，也禁止「先 Python 后移植」
-（权威清单 = 接口冻结版 §0；理由与禁令 = 主设计 §3.1、§8）。
+**产品 vs 工具**：产品路径（进 DLL）一律 **C++17** —— `frontend/` / `lower/` / `runtime/` / `assemble/` /
+`shell/` / `cli/`；`tools/` 下的 Python 只做离线工具。M3 期的 Python 原型已于 2026-10-18 删除
+（权威清单 = 接口冻结版 §0）。
 
 ## 构建
 

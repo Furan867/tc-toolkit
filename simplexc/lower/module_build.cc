@@ -1,6 +1,6 @@
 /* module_build.cc —— 声明表 + 已解析 def → `ModuleAst`（实现见头文件的「为什么这一层存在」）。
  *
- * 三段都照抄原型 `ir_build.py` 的对应实现（只读 oracle）：
+ * 三段都照抄冻结原型的对应实现（语义依据见 `docs/facts/semantics.md`）：
  *   `scan_type`     ← `_scan_type`（`type X Enum [...]` / `type X Struct { ... }`）
  *   `parse_top_var` ← `parse_decl_stmt`（切出该声明的 token，交给 parser 当一条语句解析）
  *   `build_module`  ← `Program.__init__` 里那段按声明表拼 `ModuleAst` 的循环

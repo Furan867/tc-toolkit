@@ -117,7 +117,7 @@ def fail(msg, rc) -> NoReturn:
     """失败出口。本脚本原本一个都没有（错误只能靠调用方看 rc）。
 
     消息照 `hook_offline.BuildError` 的风格写：「做什么 + 路径 + 原因」。
-    rc 口径同 `lower/ir_build.py`：环境/路径失败 2，编译/比对失败 1。
+    rc 口径：环境/路径失败 2，编译/比对失败 1。
     """
     print(msg, file=sys.stderr)
     raise SystemExit(rc)

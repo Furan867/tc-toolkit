@@ -6,12 +6,11 @@
   **版本 1.1（2026-10-17，增量）**：`AsmResult` 加 `stubs`（§4）+ 宿主 `stub` sidecar 协议（§6）——
   跨 boot 的 extern 解析让「产物里的 movabs 落在宿主镜像里」成为正常形态，原先的硬错误判据会把自己的产物挡住；
   同时 stub 不接桩 = 两遍跑没有确定性。改动理由与实现证据见 `docs/notes/2026-10-17-m1.5-probe.md`。
-- **版本 1.2（2026-10-17，只有状态说明、不改任何接口）**：现有实现有两套 —— **Python 原型**
-  （`frontend/*.py` + `lower/ir_build.py`，M3 的产出）与**产品实现**（本文件冻结的 C++17，如 `frontend/ast.hh`）。
-  自本条起 Python 原型**冻结为参考实现（oracle）**：只读，用途 = 语义查询（当规格读）、差分对照、延迟基线；
-  **默认只读**（唯一例外 = “跑不起来 / 结果不可复现”的缺陷，且不得新增语义与覆盖面 —— 见主设计 §8 流程禁令），
-  也禁止「先在 Python 上做、再移植到 C++」（M4.5 是一次性收尾，不构成先例 —— 主设计 §9）。
-  产品实现的落地里程碑 = **M4.5**，M5 之前完成（主设计 §9）；以下各节与 Python 原型实现不一致时，**以本文件为准**。
+- **版本 1.3（2026-10-18，只有状态说明、不改任何接口）**：M3 期的 Python 原型
+  （`frontend/*.py` + `lower/ir_build.py`）**已删除**（git 历史可查），产品实现 = 本文件冻结的 C++17。
+  这意味着：**没有任何实现被当作语义权威**。语义以「原版编译器（游戏目录 `compile_real.dll`）的实测行为」为准，
+  结论登记在 `docs/facts/semantics.md`；「跑不起来 / 结果不可复现」不再是改原型的理由（原型不在了）。
+  版本 1.2（2026-10-17）曾把该原型列为只读参考实现，那条已随文件删除而失效。
 - 上游（唯一权威，本文件不复制其内容）：
   - 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 §2/§4、语义保真 §5、验证 §7、工作流 §8、里程碑 §9）
   - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（变体轴、归属语义、`hook.log` 迁移）
@@ -37,8 +36,7 @@ reversing/simplexc/
 
 - **语言分工（唯一权威）**：产品路径的 `frontend/` / `lower/` / `runtime/` / `assemble/` / `shell/` / `cli/`
   = **C++17**（必要时汇编）；`tools/` 下的脚本 = Python（离线工具，不进产品路径）；
-  **产品路径不得依赖 Python**（判据 = 主设计 §7.5 依赖门）。`frontend/*.py` + `lower/ir_build.py` 是
-  M3 的**冻结原型（oracle）**：默认只读（例外见主设计 §8 流程禁令），不入产品路径。
+  **产品路径不得依赖 Python**（判据 = 主设计 §7.5 依赖门）。M3 期的 Python 原型已于 2026-10-18 删除。
 - 既有 `reversing/tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
 - 一个写者一个目录（主设计 §8）；`tools/compile_hook.c` 由 `work/tmp/locks/compile-hook.lock` 串行化。
 

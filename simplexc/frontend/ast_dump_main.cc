@@ -1,12 +1,12 @@
 // ast_dump —— 前端与判据之间的接口（**调试用 main，不进产品 DLL**）。
 //
-// 为什么有它：`frontend/` 的语义 oracle 是冻结原型 `frontend/expr.py`（+ `decls.py`），
-// 判据是「同一份源码，两边产出 deep-equal」。所以要有一个能原样复现原型三种输出的入口：
+// 为什么有它：`frontend/` 的判据是「同一份源码，两边产出 deep-equal」。所以要有一个能
+// 原样复现三种产出的入口：
 //
-//   ast_dump --src <file.si> --def <name> [--json out]   ↔ expr.py --def
-//   ast_dump --src <file.si> --all       [--json out]    ↔ expr.py --all
-//   ast_dump --src <file.si> --decls     [--json out]    ↔ decls.py（声明表 + 汇总；
-//                                                          paren 警告只在这一路里出现）
+//   ast_dump --src <file.si> --def <name> [--json out]
+//   ast_dump --src <file.si> --all       [--json out]
+//   ast_dump --src <file.si> --decls     [--json out]    （声明表 + 汇总；
+//                                                        paren 警告只在这一路里出现）
 //
 // 输出口径（与原型逐字节对齐，`diff` 就能当判据）：
 //   * stdout / stderr 走文本模式（CRLF）—— 原型 `print` 在 Windows 上就是 CRLF；
@@ -296,14 +296,14 @@ int run_all(Frontend& fe, const Opts& o) {
   return n_live_fail ? 1 : 0;
 }
 
-/* decls.py 那一路：声明表 + 汇总（`--roots` 口径也照抄）。 */
+/* 声明表那一路：声明表 + 汇总（`--roots` 口径也照抄）。 */
 int run_decls(const Opts& o) {
   std::vector<std::string> errors;
   std::vector<std::string> warnings;
   std::vector<Decl> decls;
   std::vector<std::string> code_lines, raw_lines;
   try {
-    /* 只做「读 + 掩码 + 扫描」：decls.py 那一路不分词（不可达 def 里的词法错也不该拦住它）。 */
+    /* 只做「读 + 掩码 + 扫描」：声明表那一路不分词（不可达 def 里的词法错也不该拦住它）。 */
     simplexc::ScannedSource scanned = simplexc::load_and_scan(o.src);
     decls = std::move(scanned.scan.decls);
     code_lines = std::move(scanned.code_lines);
@@ -464,9 +464,9 @@ int run_decls(const Opts& o) {
 void usage() {
   std::cerr << "用法：ast_dump --src <file.si> (--def <名字> | --all | --decls) [--json out.json]\n"
                "              [--stats] [--quiet] [--roots strict|lenient]\n"
-               "  --def    dump 一个 def（或 `run_sim:` 标签块）的 AST；对应 expr.py --def\n"
-               "  --all    体检全文件：每个有体的 def 一行 TSV；对应 expr.py --all\n"
-               "  --decls  声明表 + 汇总（含 paren 警告）；对应 decls.py\n";
+               "  --def    dump 一个 def（或 `run_sim:` 标签块）的 AST\n"
+               "  --all    体检全文件：每个有体的 def 一行 TSV\n"
+               "  --decls  声明表 + 汇总（含 paren 警告）\n";
 }
 
 }  // namespace

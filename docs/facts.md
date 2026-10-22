@@ -7,7 +7,7 @@
 
 | 文件 | 管什么（检索关键词） |
 |---|---|
-| `facts/forwarding.md` | compile.dll 转发层、参考实现 compile_real.dll（extern / stub / IAT / manifest / Nim 字符串 / 内建清单来源） |
+| `facts/forwarding.md` | compile.dll 转发层、原版编译器 compile_real.dll（extern / stub / IAT / manifest / Nim 字符串 / 内建清单来源） |
 | `facts/corpus-host.md` | 语料与判据、差分宿主、simctl、M1.5 探针（tick 全等、reset / seed、回退、判据入口） |
 | `facts/semantics.md` | 语言与 lowering 语义档案（U-L1…U-L14、位宽 / 掩码 / zext、内建、捕获 / 闭包、泛型、数组、enum、插值、`Str`、`random`） |
 | `facts/build-assemble.md` | 构建与 LLVM（版本 / 导入库）、装配器与产物确定性（stub 槽、entry、reloc、`.bss`、可复现） |

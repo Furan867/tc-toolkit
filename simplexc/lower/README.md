@@ -1,7 +1,9 @@
 # lower
 
-类型化 AST → **LLVM IR**：语义保真映射（内存模型、`$` 写回、extern 声明、entry 包装）、内建映射表，
+**HIR → LLVM IR**（目标形态；当前输入是 `frontend` 的无类型 AST，sema 也在这个目录里）：
+语义保真映射（内存模型、`$` 写回、extern 声明、entry 包装）、内建映射表，
 以及固定版本的 pass pipeline（`LLVMRunPasses` 的 `-O2`）。
+本目录将拆成 `sema/`（AST → HIR）与 `codegen/`（HIR → LLVM IR）—— 主设计 §3.2。
 
 **现状**：**C++17 实现已落地**（M4.5）。M3 期的 Python 原型 `ir_build.py` 已于 2026-10-18 删除
 （git 历史可查），不再有任何实现被当作语义权威 —— 语义以原版编译器的实测行为为准。

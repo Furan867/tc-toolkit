@@ -7,15 +7,15 @@
 
 | 目录 | 负责什么 | 现状 |
 |---|---|---|
-| `frontend/` | 源码文本 → 类型化 AST（**C++17**，接口 `frontend/ast.h`） | C++17 实现（M4.5 已落地） |
-| `lower/` | 类型化 AST → LLVM IR（**C++17**） | 同上 |
+| `frontend/` | 源码文本 → **无类型 AST**（**C++17**，接口 `frontend/ast.hh`） | C++17 实现（M4.5 已落地） |
+| `lower/` | 名字解析/类型/单态化 + **HIR → LLVM IR**（**C++17**）；sema 待拆到 `sema/`、本目录改名 `codegen/`（主设计 §3.2） | 同上 |
 | `runtime/` | 路线 B 运行时（编成 COFF，随 blob 装配） | 只有 `rt_min.cc`（spike 用） |
 | `assemble/` | COFF → blob | 可用 |
 | `shell/` | 壳里新增的那部分 | 只有入口桩与链接探针；选实现/失败转交仍在 `tools/compile_hook.c` |
 | `cli/` | 离线 CLI（不碰游戏） | `tcblob` / `llvm_prog` / `prog_empty` |
 | `tools/` | 语料/判据/宿主脚本 | 见下「判据」 |
 | `corpus/` | 98 份语料 + manifest（`ref/` 不进 git） | 已固化 |
-| `dossier/` | 语义档案（接口 §9 的实验落地处） | 未开始 |
+| `dossier/` | 语义档案（接口 §9 的实验落地处） | 已有 `ul_access_width.md`（访存宽度实测） |
 
 每个目录一个 README（负责什么 / 现在有什么 / 对外接口在哪 / 怎么用）。
 
@@ -43,7 +43,7 @@
 
 ## 接口与设计
 
-- **接口冻结版 1**：`docs/specs/2026-10-15-simplexc-interfaces.md`（改它 = 改契约，要登记版本号）
+- **接口冻结版 1.4**：`docs/specs/2026-10-15-simplexc-interfaces.md`（改它 = 改契约，要登记版本号）
 - 主设计：`docs/specs/2026-10-15-simplex-llvm-compiler-design.md`
 - 当前里程碑：M0 语料 / M1 spike / M2 差分宿主 / M3（宿主面，Python 原型）已完成；
   前端 + Lowering 的 **C++ 产品版未开始（M4.5，M5 之前完成）** —— 详见 `docs/status.md`

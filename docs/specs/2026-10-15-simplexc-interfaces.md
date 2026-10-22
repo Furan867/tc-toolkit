@@ -11,6 +11,10 @@
   这意味着：**没有任何实现被当作语义权威**。语义以「原版编译器（游戏目录 `compile_real.dll`）的实测行为」为准，
   结论登记在 `docs/facts/semantics.md`；「跑不起来 / 结果不可复现」不再是改原型的理由（原型不在了）。
   版本 1.2（2026-10-17）曾把该原型列为只读参考实现，那条已随文件删除而失效。
+- **版本 1.4（2026-10-18，改 §0/§1 的接口形状）**：编译器分四层（主设计 §3.2）。§1 从「前端产物 = 类型化 AST」
+  拆成 **§1a 前端产物 = 无类型 AST** + **§1b sema 产物 = HIR 与类型表示**；
+  `TypedProgram` / `parse_and_typecheck` 从未实现（实现是 `frontend::parse` + `lower/lower.cc` 内的 sema），
+  按新分层改写。目录树：`lower/` → `sema/` + `codegen/`。
 - 上游（唯一权威，本文件不复制其内容）：
   - 主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md`（产物契约 §2/§4、语义保真 §5、验证 §7、工作流 §8、里程碑 §9）
   - 主频层 `docs/specs/2026-10-15-freq-measurement-design.md`（变体轴、归属语义、`hook.log` 迁移）
@@ -23,8 +27,9 @@
 
 ```
 reversing/simplexc/
-  frontend/   词法/语法/ast/类型系统/consteval/重载解析/#if in_scope/内建识别   → TypedProgram
-  lower/      类型化 AST → LLVM IR（内存模型、$ 写回、extern、entry 包装）      → LLVMModuleRef
+  frontend/   词法/语法/ast（无类型）/#if in_scope 的裁剪点/span              → Ast
+  sema/       名字解析/类型/consteval/单态化/内建识别/根确定与 DCE            → HIR
+  codegen/    HIR → LLVM IR（内存模型、$ 写回、extern、entry 包装）           → LLVMModuleRef
   runtime/    路线 B 的运行时（C++17，编成 COFF，随 blob 装配）
   assemble/   COFF → blob（重定位、extern 桩、8 字节头、entry、生命周期）
   shell/      壳里**新增的那部分**（选实现、三模式、失败转交、核心入口）
@@ -34,7 +39,7 @@ reversing/simplexc/
   dossier/    语义档案（机器可执行，§9 的实验都在这里落地）
 ```
 
-- **语言分工（唯一权威）**：产品路径的 `frontend/` / `lower/` / `runtime/` / `assemble/` / `shell/` / `cli/`
+- **语言分工（唯一权威）**：产品路径的 `frontend/` / `sema/` / `codegen/` / `runtime/` / `assemble/` / `shell/` / `cli/`
   = **C++17**（必要时汇编）；`tools/` 下的脚本 = Python（离线工具，不进产品路径）；
   **产品路径不得依赖 Python**（判据 = 主设计 §7.5 依赖门）。M3 期的 Python 原型已于 2026-10-18 删除。
 - 既有 `reversing/tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
@@ -42,10 +47,32 @@ reversing/simplexc/
 
 ---
 
-## 1. 前端产物：类型化 AST 与类型表示
+## 1. 层间产物：无类型 AST（前端）与 HIR（sema）
 
-**语言与文件**：C++17；接口头 `simplexc/frontend/ast.hh`、`simplexc/frontend/frontend.hh`。
+**语言与文件**：C++17；前端 `simplexc/frontend/ast.hh`、`simplexc/frontend/frontend.hh`；
+sema 当前分散在 `lower/lower.hh` 的 `TyRef` 与 `lower.cc` 的函数里（函数体内不出现 `LLVM*` 的有 94 个、
+1545 行；待搬进 `sema/`）。
 （2026-10-18 更正：扩展名是 `.hh` 不是 `.h` —— 项目规则「C++ 用 `.hh`/`.cc`，C 用 `.h`/`.c`」，因为 pi-lens 按扩展名判语言，`.h` 会被当 C 检查，C++17 头里的 `std::`/模板会报假错。`ast.hh` 已落库并通过编译验证。）
+
+### 1a 前端产物：无类型 AST
+
+**只负责形状**：节点种类、子节点、源码 span。**不做**类型推导、不解析泛型实参、不判断可达性。
+
+```cpp
+// 冻结：无类型 AST（当前实现形态见 ast.hh）与预处理裁剪
+struct Node { NodeKind kind; Span span; /* 子节点依 kind 而异 */ };
+struct CompileOptions { bool allow_unsupported = false; /* 恒 false：见 §8 */ };
+Result<Ast, ParseError> parse(std::string_view src, const CompileOptions&);
+```
+
+**编译期构造**（U12 实测：98 份语料里 `#` 只出现两类）：(a) `#if <const-expr>{ … }`（语料里唯一形态是
+`#if in_scope("name"){ … }`）；(b) `const #NAME = <const-expr>`。`in_scope("name")` = "该名字在此处可见（含后置定义）"
+→ 必须做**两遍/不动点**判定；判定结果是**保留/删除子树**，不产生类型信息。
+
+### 1b sema 产物：HIR 与类型表示
+
+**当前形态**：类型标识是 `lower/lower.hh` 的 `TyRef`；下面的 `Type`/`TypeKind` 是**目标形态**（从未实现过，
+2026-10-18 核实）。HIR 必须满足主设计 §3.2 的六条不变量。
 
 ```cpp
 // 冻结：类型标识 ------------------------------------------------------------
@@ -67,7 +94,7 @@ struct Type {
 
 // 冻结：泛型 = 单态化 -------------------------------------------------------
 // @Type → TypeValue 参数；@Size → 编译期整数参数；@Any → 任意类型参数。
-// 实例化名 = "<函数名>$<实参规范化字符串>"（同一 (函数, 实参) 只实例化一次）。
+// 实例化名 = "<函数名>$<实参规范化字符串>"（同一 (函数, 实参, 环境类型) 只实例化一次；不含调用点）。
 // 实例化集合在编译期封闭；不留运行期泛型分发。
 
 // 冻结：程序根 -------------------------------------------------------------
@@ -80,14 +107,13 @@ struct Type {
 //   (b) `const #NAME = <const-expr>`
 // in_scope("name") = "该名字在此处可见（含后置定义）" → 必须做**两遍/不动点**判定。
 
-// 冻结：前端接口 -----------------------------------------------------------
-struct CompileOptions { bool allow_unsupported = false; /* 恒 false：见 §8 */ };
-struct CompileError  { ErrKind kind; std::string message; Span span; };
-Result<TypedProgram, CompileError> parse_and_typecheck(std::string_view src, const CompileOptions&);
+// 冻结：sema 接口（目标形态；当前实现 = frontend::parse 之后，lower 内的 sema 直接消费 AST）
+struct CompileError { Responsibility resp; Stage stage; Span span; std::string detail; };  // 三轴见主设计 §3.4
+Result<Hir, CompileError> analyze(const Ast&, SemaContext&);
 ```
 
-- `TypedProgram` 必须给 lowering 提供：`main` 块、函数表（含单态化实例）、全局 var 表、编译期常量表、
-  `extern` 声明表、内建调用点表、每个表达式/左值的**解析后类型**。
+- `Hir` 必须给 codegen 提供：`main` 块、函数表（含单态化实例）、全局 var 表、编译期常量表、
+  `extern` 声明表、内建调用点表、每个表达式/左值的**解析后类型**、每个节点的 span。
 - **未支持构造一律 `CompileError`**（§8）。禁止"猜一个语义"。
 - 布局/宽度规则（struct 布局、enum 底层宽度、整数提升与截断）**不在本文件冻结**，由 §9 的实验给出后写进
   `docs/facts.md`，前端只允许调用唯一实现 `layout_struct()` / `enum_storage_bits()`。
@@ -96,7 +122,7 @@ Result<TypedProgram, CompileError> parse_and_typecheck(std::string_view src, con
 
 ## 2. 内建表 schema（唯一来源）
 
-- 单一来源文件：`simplexc/lower/builtins.def`（X-macro，一处定义，前后端与 runtime 都从它生成/校验）。
+- 单一来源文件：`simplexc/codegen/builtins.def`（X-macro，一处定义，前后端与 runtime 都从它生成/校验）。
 
 ```c
 // BUILTIN(名字, 签名, 是否 mutating, 副作用, 对齐, lowering)
@@ -320,9 +346,10 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 - 错误分类（回退率报告按此分类）：`UnsupportedConstruct` / `InternalError` / `Timeout` / `OursFault` /
   `BlobTooLarge` / `RelocUnsupported` / `SymbolUndefined`。
-- **禁止静默降级**：任何不支持 → 显式错误 + （按模式）回退；不允许"猜一个语义"或"悄悄用参考实现"。
+- **禁止静默降级**：任何不支持 → 显式错误 + （按模式）回退；不允许"猜一个语义"或"悄悄转交原版编译器"。
 - 每条错误必须能定位到源码 span（`UnsupportedConstruct` 尤其），供覆盖率矩阵与最小复现。
-- `CompileError.kind` 与 §5 的记录字段一一对应，别在别处再定义一套分类。
+- `CompileError` 与 §5 的记录字段一一对应，别在别处再定义一套分类；三轴（责任/阶段/位置）是归类维度，
+  本节的 7 类是责任与阶段的细化标签，二者不得互相取代（主设计 §3.4）。
 
 ---
 
@@ -333,7 +360,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 | # | 问题 | 影响 |
 |---|---|---|
-| U-L1 | `load`/`store` 的**地址单位**（字节 or 位）与对齐要求；`load(<U5>, p)` 这类非字节宽度怎么读 | 内存模型的地基；错则全盘错 |
+| U-L1 | ~~`load`/`store` 的地址单位与对齐要求；`load(<U5>, p)` 这类非字节宽度怎么读~~ **已闭合（2026-10-18）**：字节地址、无对齐要求；`N≤32` → `ceil(N/8)` 字节，`N>32` → 8 字节零扩展写（会清邻居）、`N<8` 为整字节访问；验证见主设计 §5.1 / `docs/facts/semantics.md` | 内存模型的地基 |
 | U-L2 | `arr[i]` 越界语义（trap / 未定义 / 掩码） | 索引 lowering |
 | U-L3 | `Str` 是否 NUL 终止；`+` 拼接的分配语义 | 字符串 runtime |
 | U-L4 | struct 布局与对齐规则（字段序、padding、嵌套） | 前端布局 + `raw_cast` |

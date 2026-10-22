@@ -1,9 +1,9 @@
 # frontend
 
-源码文本（`.si`）→ **类型化 AST**：词法/语法、`#if in_scope` 与预处理、作用域、类型系统、
-常量求值、重载解析、内建识别、根确定与 DCE。
+源码文本（`.si`）→ **无类型 AST**：词法/语法、`#if in_scope` 的裁剪点、span。
+类型推导、常量求值、泛型单态化、根确定与 DCE 属于 `sema/`（主设计 §3.2）。
 
-**现状**：**C++17 实现已落地**（M4.5），接口 `frontend/ast.h`、`frontend/frontend.h`。
+**现状**：**C++17 实现已落地**（M4.5），接口 `frontend/ast.hh`、`frontend/frontend.hh`。
 M3 期的 Python 原型（`decls.py` / `expr.py`）已于 2026-10-18 删除（git 历史可查），
 **不再有任何实现被当作语义权威** —— 语义以原版编译器的实测行为为准（`docs/facts/semantics.md`）。
 
@@ -12,10 +12,7 @@ M3 期的 Python 原型（`decls.py` / `expr.py`）已于 2026-10-18 删除（gi
 结论与语法摸底：`docs/notes/2026-10-18-frontend-decls.md`（顶层构造只有五种、`#if` 与
 标签块怎么处理、可达性口径与 dossier 里 19 的差异）。
 
-结论与语法摸底：`docs/notes/2026-10-18-frontend-decls.md`（顶层构造只有五种、`#if` 与
-标签块怎么处理、可达性口径与 dossier 里 19 的差异）。
-
-- 对外接口（冻结版 1）：`docs/specs/2026-10-15-simplexc-interfaces.md` **§1**（类型化 AST 与类型表示）、
+- 对外接口（冻结版 1.4）：`docs/specs/2026-10-15-simplexc-interfaces.md` **§1a**（无类型 AST）、
   **§2**（内建表 schema，唯一来源）
 - 必须交给 LLVM 什么：主设计 `docs/specs/2026-10-15-simplex-llvm-compiler-design.md` §5
 - 组件职责表：主设计 §3.1

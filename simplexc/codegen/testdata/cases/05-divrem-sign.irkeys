@@ -1,0 +1,4 @@
+udiv i64
+sdiv i64
+urem i64
+sdiv i64 4294967289

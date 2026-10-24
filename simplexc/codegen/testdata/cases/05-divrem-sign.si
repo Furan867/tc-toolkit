@@ -1,0 +1,19 @@
+// 引 `docs/facts/semantics.md` §`/`、`%`：opcode 由**被除数的声明类型**决定，除数完全不参与；
+// 两个**窄类型字面量**折叠出来的常量按「W 位模式零扩展成 64 位」再送**有符号**除法（原版编译器
+// 那处不自洽，要复刻 —— 见该条）。
+// 期望见 `05-divrem-sign.irkeys`。
+run_sim: while true {
+  var d = S32 2
+  // 被除数 U32 → udiv（同一个位模式 0xFFFFFFF9 换成 S32 就翻成 sdiv，见下）
+  var u = U32 4294967289
+  var q1 = u / d
+  // 被除数 S32 → sdiv
+  var s = S32 -7
+  var q2 = s / d
+  // 被除数 U64 → urem（`%` 的 opcode 跟 `/` 同一条规则）
+  var m = U64 9
+  var q3 = m % d
+  // 窄常量折叠：`S32 0 - S32 7` 零扩展成 4294967289 再 sdiv（不是 -7）
+  var f = (S32 0 - S32 7) / d
+  break
+}

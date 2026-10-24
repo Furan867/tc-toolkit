@@ -1,0 +1,4 @@
+store i64 -8
+zext i32
+4294967295
+store i8 -1

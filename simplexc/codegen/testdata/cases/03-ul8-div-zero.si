@@ -1,0 +1,10 @@
+// 引 `docs/facts/semantics.md` §U-L8：除零**不 trap**（商 0、余数 = 被除数），无符号/有符号/
+// 常量/运行期一致。IR 形状 = `icmp eq` 判零 + `select` 兜底，除数先换成 1 再除。
+// 期望见 `03-ul8-div-zero.irkeys`。
+run_sim: while true {
+  var zero = S32 0
+  var a = S32 -7
+  var q = a / zero
+  var r = a % zero
+  break
+}

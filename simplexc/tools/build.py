@@ -27,6 +27,8 @@
                `sema::analyze` → dump，与 `sema/testdata/cases/` 的 golden 逐字节比 + 六条不变量
                （不进产品路径，不依赖 LLVM）
     ast_dump   build/ast_dump.exe     前端的判据入口（frontend/ 的 C++17 实现，不进产品 DLL）
+    codegen_selftest build/codegen_selftest.exe  codegen 的 L4 判据入口：`.si` → IR，逐条查
+               `codegen/testdata/cases/*.irkeys` 的期望子串（不判产物；要链 LLVM）
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
                现在**没有判据**读它：新版壳在进程内编源码，基线壳只在 reference 模式下被驱动。
@@ -311,6 +313,34 @@ def step_simplexc_cli() -> None:
         print(f"  警告：找不到 {dll}，CLI 跑起来会缺依赖")
 
 
+def step_codegen_selftest() -> None:
+    print("== codegen_selftest ==")
+    need(os.path.join(LLVM_INC, "llvm-c", "Core.h"),
+         "先取 LLVM：python tools/fetch_llvm.py --dest D:/downloads（build/llvm 不进 git）")
+    out = os.path.join(BUILD, "codegen_selftest.exe")
+    # codegen 的判据入口（不进产品路径）：`.si` 走产品链（Frontend → build_module → analyze →
+    # `codegen::Program`）出 IR，再逐条查 `codegen/testdata/cases/*.irkeys`。要链 LLVM 是因为
+    # 被测对象（codegen.cc + llvm_ffi.cc）本来就在 LLVM 上；不用 assemble.o —— 它只出 IR，
+    # 不出产物（产物那一路由 blob_baseline 判）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "-I", "simplexc", "-I", REL(LLVM_INC),
+         "simplexc/codegen/codegen_selftest.cc",
+         "simplexc/frontend/decls.cc",
+         "simplexc/frontend/lexer.cc",
+         "simplexc/frontend/parser.cc",
+         "simplexc/frontend/frontend.cc",
+         "simplexc/codegen/module_build.cc",
+         "simplexc/codegen/codegen.cc",
+         "simplexc/codegen/llvm_ffi.cc",
+         "simplexc/sema/analyze.cc",
+         "simplexc/sema/layout.cc",
+         "simplexc/sema/types.cc",
+         "-L", REL(LLVM_LIB), "-lLLVM-C",
+         "-o", REL(out)], out=out,
+        hint="链接失败 → 确认 build/llvm/{include,lib} 都在（LLVM 固定 23.1.3，见 docs/facts.md）；"
+             "运行期要 PATH 里有 build/llvm/bin 或 build/LLVM-C.dll 才找得到 LLVM-C.dll。")
+
+
 def step_spike() -> None:
     print("== spike ==")
     out = os.path.join(BUILD, "blob_empty.bin")
@@ -338,9 +368,11 @@ STEPS = {
     "hir_selftest": step_hir_selftest,
     "analyze_selftest": step_analyze_selftest,
     "ast_dump": step_ast_dump,
+    "codegen_selftest": step_codegen_selftest,
     "spike": step_spike,
 }
-ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analyze_selftest"]
+ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analyze_selftest",
+       "codegen_selftest"]
 DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"],
            "hook": ["objs"], "simplexc_dll": ["objs"], "core_selftest": ["objs"]}
 

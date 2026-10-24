@@ -133,6 +133,32 @@ int storage_bytes(const Ty& ty) {
             throw Unsupported("类型 " + std::string(ty_kind_name(ty.kind)) + " 没有字节宽度", 0);
     }
 }
+/* 实例键 / 捕获签名用的类型拼写（方案 §2 决策 7 的**唯一**一处；`lower/lower.cc` 里还有一份
+ * 逐行相同的拷贝，②c 接线时删那一份）。只要「同一个变量在不同宽度/种类下能分开」就够：
+ * 同名变量在两个调用点绑不同类型时，实例体里的读写宽度不同，不能复用同一个实例。 */
+std::string ty_key(const Ty& ty) {
+    switch (ty.kind) {
+        case TyKind::Int:
+            if (ty.is_bool) return "bool";
+            return std::string(ty.is_signed ? "s" : "u") + std::to_string(ty.bits);
+        case TyKind::Ptr: return "ptr";
+        case TyKind::Str: return "str";
+        case TyKind::Enum: return "enum:" + ty.name;
+        case TyKind::Struct: return "struct:" + ty.name;
+        case TyKind::Array:
+            return "arr:" + (ty.elem != nullptr ? ty_key(*ty.elem) : std::string("?"));
+        case TyKind::Void: return "void";
+    }
+    return "?";
+}
+
+/* `size(x)` 的单位是**位**（`docs/facts/semantics.md` 的泛型一条），宽度来源与 `storage_bytes`
+ * 同一处。Enum 是唯一例外（U-L5：只有 1/2 字节两档，而它的存储宽度是 1 个机器字），所以它在
+ * 这里报掉，不静默给一个错的 64。 */
+int size_bits(const Ty& ty) {
+    if (ty.kind == TyKind::Enum) throw Unsupported("size() 用在枚举上", 0);
+    return storage_bytes(ty) * 8;
+}
 
 /* ================================================================ 常量折叠 */
 

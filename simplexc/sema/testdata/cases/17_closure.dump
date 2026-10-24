@@ -1,0 +1,142 @@
+Hir funcs=10 globals=1 externs=0 consts=0 strings=0 structs=0
+  global[0] name="base" ty=S64
+  main key="main" name="main" cap_index=-1 ret=Void params=0 caps=0
+    Block span=13:0
+      While label="run_sim" span=13:0
+        Const ty=Bool const=0x1 span=13:0
+        Block span=13:0
+          VarDecl ty=S64 name="hits" span=14:0
+            Const ty=S64 const=0x1 span=14:0
+          VarDecl ty=U64 name="a" span=23:0
+            Call ty=U64 callee=func:0 span=23:0
+              Const ty=U64 const=0x2 span=23:0
+          VarDecl ty=U64 name="b" span=24:0
+            Call ty=U64 callee=func:1 span=24:0
+              Const ty=U64 const=0x3 span=24:0
+          VarDecl ty=U64 name="c" span=25:0
+            Call ty=U64 callee=func:2 span=25:0
+          VarDecl ty=U64 name="f" span=26:0
+            Call ty=U64 callee=func:3 span=26:0
+              Const ty=U64 const=0x4 span=26:0
+          VarDecl ty=U64 name="g" span=27:0
+            Call ty=U64 callee=func:5 span=27:0
+              Const ty=U64 const=0x5 span=27:0
+          VarDecl ty=U64 name="h" span=28:0
+            Call ty=U64 callee=func:6 span=28:0
+              Const ty=U64 const=0x6 span=28:0
+          Block span=29:0
+            VarDecl ty=U8 name="hits" span=30:0
+              Const ty=U8 const=0x5 span=30:0
+            VarDecl ty=U64 name="d" span=31:0
+              Call ty=U64 callee=func:8 span=31:0
+                Const ty=U64 const=0x1 span=31:0
+          VarDecl ty=U64 name="e" span=33:0
+            Call ty=U64 callee=func:9 span=33:0
+              Const ty=U64 const=0x1 span=33:0
+  func[0] key="main|twice@15|hits:s64" name="twice" cap_index=-1 ret=U64 params=1 caps=1
+    param[0] name="v" ty=U64
+    capture[0] name="hits" ty=S64 index=0
+    Block span=15:0
+      Return span=15:0
+        Binary ty=U64 op=add span=15:0
+          Local ty=U64 name="v" span=15:0
+          Cast ty=U64 cast=raw span=15:0
+            Capture ty=S64 capture=0 span=15:0
+  func[1] key="main|chain@16|hits:s64" name="chain" cap_index=-1 ret=U64 params=1 caps=1
+    param[0] name="v" ty=U64
+    capture[0] name="hits" ty=S64 index=0
+    Block span=16:0
+      Return span=16:0
+        Binary ty=U64 op=add span=16:0
+          Call ty=U64 callee=func:0 span=16:0
+            Local ty=U64 name="v" span=16:0
+          Cast ty=U64 cast=raw span=16:0
+            Capture ty=S64 capture=0 span=16:0
+  func[2] key="with_global" name="with_global" cap_index=-1 ret=U64 params=0 caps=0
+    Block span=6:0
+      Return span=6:0
+        Cast ty=U64 cast=raw span=6:0
+          Global ty=S64 global=0 span=6:0
+  func[3] key="outer" name="outer" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="v" ty=U64
+    Block span=8:0
+      VarDecl ty=U64 name="local" span=9:0
+        Local ty=U64 name="v" span=9:0
+      Return span=11:0
+        Call ty=U64 callee=func:4 span=11:0
+          Const ty=U64 const=0x1 span=11:0
+  func[4] key="outer|inner@10|local:u64" name="inner" cap_index=-1 ret=U64 params=1 caps=1
+    param[0] name="k" ty=U64
+    capture[0] name="local" ty=U64 index=0
+    Block span=10:0
+      Return span=10:0
+        Binary ty=U64 op=add span=10:0
+          Local ty=U64 name="k" span=10:0
+          Capture ty=U64 capture=0 span=10:0
+  func[5] key="main|countdown@17|hits:s64" name="countdown" cap_index=-1 ret=U64 params=1 caps=1
+    param[0] name="n" ty=U64
+    capture[0] name="hits" ty=S64 index=0
+    Block span=17:0
+      If span=18:0
+        Binary ty=Bool op=eq span=18:0
+          Local ty=U64 name="n" span=18:0
+          Const ty=U64 const=0x0 span=18:0
+        Block span=18:0
+          Return span=18:0
+            Cast ty=U64 cast=raw span=18:0
+              Capture ty=S64 capture=0 span=18:0
+      Return span=19:0
+        Call ty=U64 callee=func:5 span=19:0
+          Binary ty=U64 op=sub span=19:0
+            Local ty=U64 name="n" span=19:0
+            Const ty=U64 const=0x1 span=19:0
+  func[6] key="main|ping@21|hits:s64" name="ping" cap_index=-1 ret=U64 params=1 caps=1
+    param[0] name="n" ty=U64
+    capture[0] name="hits" ty=S64 index=0
+    Block span=21:0
+      Return span=21:0
+        Cast ty=U64 cast=raw span=21:0
+          Cond ty=S64 span=21:0
+            Binary ty=Bool op=eq span=21:0
+              Local ty=U64 name="n" span=21:0
+              Const ty=U64 const=0x0 span=21:0
+            Capture ty=S64 capture=0 span=21:0
+            Cast ty=S64 cast=raw span=21:0
+              Call ty=U64 callee=func:7 span=21:0
+                Binary ty=U64 op=sub span=21:0
+                  Local ty=U64 name="n" span=21:0
+                  Const ty=U64 const=0x1 span=21:0
+  func[7] key="main|pong@22|hits:s64" name="pong" cap_index=-1 ret=U64 params=1 caps=1
+    param[0] name="n" ty=U64
+    capture[0] name="hits" ty=S64 index=0
+    Block span=22:0
+      Return span=22:0
+        Cast ty=U64 cast=raw span=22:0
+          Cond ty=S64 span=22:0
+            Binary ty=Bool op=eq span=22:0
+              Local ty=U64 name="n" span=22:0
+              Const ty=U64 const=0x0 span=22:0
+            Capture ty=S64 capture=0 span=22:0
+            Cast ty=S64 cast=raw span=22:0
+              Call ty=U64 callee=func:6 span=22:0
+                Binary ty=U64 op=sub span=22:0
+                  Local ty=U64 name="n" span=22:0
+                  Const ty=U64 const=0x1 span=22:0
+  func[8] key="bump|hits:u8" name="bump" cap_index=0 ret=U64 params=1 caps=1
+    param[0] name="x" ty=U64
+    capture[0] name="hits" ty=U8 index=0
+    Block span=7:0
+      Return span=7:0
+        Binary ty=U64 op=add span=7:0
+          Local ty=U64 name="x" span=7:0
+          Cast ty=U64 cast=zext span=7:0
+            Capture ty=U8 capture=0 span=7:0
+  func[9] key="bump|hits:s64" name="bump" cap_index=1 ret=U64 params=1 caps=1
+    param[0] name="x" ty=U64
+    capture[0] name="hits" ty=S64 index=0
+    Block span=7:0
+      Return span=7:0
+        Binary ty=U64 op=add span=7:0
+          Local ty=U64 name="x" span=7:0
+          Cast ty=U64 cast=raw span=7:0
+            Capture ty=S64 capture=0 span=7:0

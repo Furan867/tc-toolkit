@@ -1,0 +1,16 @@
+// 泛型单态化：实例键的 `$` 段按**实参的具体类型**规范化（`ty_key` 是唯一一处），
+// 同一个 def 的不同类型实参 = 不同实例（各自一份 `HirFunc`）。
+// 两种写法都收：值实参推型（`sz(load(<U8>, p))`，签名带 `#v`）与类型实参（`widen(3, <U16>)`，
+// 类型实参不占运行期槽 ⇒ 被绑的那个形参在体内**没有**变量绑定，只能给 `size()`/`type_of()` 用）。
+def sz(t: @Type) U64 { return size(t) }
+def anyof(a: @Any) U64 { return size(a) }
+def widen(n: @Size, k: U64) U64 { return size(n) * k }
+def idv(t: @Type) @Type { return t }
+run_sim: while true {
+  var p = 1000
+  var a = sz(load(<U8>, p))
+  var b = sz(load(<Int>, p))
+  var c = anyof(load(<U32>, p))
+  var d = widen(3, <U16>)
+  var e = idv(load(<U8>, p))
+}

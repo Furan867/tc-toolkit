@@ -54,8 +54,10 @@ struct ModuleSource {
  * 本步收：程序根（`while`/`if`/`#if`/`switch`/`break`）+ 顶层 var/const + `type` 声明（enum /
  * struct）+ 整数/布尔/字符串/模板/标识符/一元/二元/比较/三目/`cast`/数组字面量/复合字面量/
  * 下标/字段这些表达式与 `VarDecl`/`Assign`/`ExprStmt`/`Return`/`Block`/`While`/`If`/`Switch`/
- * `Break`；`in_scope(…)` 在 sema 里判定并剪枝。**没做的**（调用 / `def` / 嵌套 def / 闭包 /
- * 泛型实例化）一律显式报错，不猜语义。 */
+ * `Break`；`in_scope(…)` 在 sema 里判定并剪枝；**实例闭包**（顶层 def 调用与同名重载、泛型的
+ * 两种类型实参写法、嵌套 def 与捕获、递归与互调、不收敛时按 64 上限报错）；`Str` 拼接与
+ * 转义字符串（U-L10 的表）。**没做的**（内建与前缀函数的体、方法调用、`$` 参数、`asm`）
+ * 一律显式报错，不猜语义。 */
 Hir analyze(const ModuleSource& src);
 
 }  // namespace sema

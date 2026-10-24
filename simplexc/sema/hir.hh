@@ -183,6 +183,12 @@ struct HCapture {
 struct HirFunc {
     std::string key;
     std::string name;
+    /* 有捕获时的实例序号：现状产物名里 `$c<n>` 的 n（`lower.cc` 的 `cap_instances_` 计数，按**首次
+     * 遇到**的顺序递增），`-1` = 无捕获。sema 不拼 `$c<n>`（那是 codegen 派生符号名的活，
+     * 方案 §2b 补漏 1），但把编号放在这里 —— 它是产物的一部分，而 codegen 无法自己数出来
+     * （同一 def 的多个捕获实例只能靠这个序号区分）。
+     * 嵌套 def 恒为 `-1`：现状给嵌套 def 起的产物名本来就不挂 `$c`。 */
+    int cap_index = -1;
     std::vector<HParam> params;
     std::vector<HCapture> caps;
     HNode body; /* 恒为 Block */

@@ -1,0 +1,56 @@
+Hir funcs=5 globals=0 externs=0 consts=0 strings=0 structs=0
+  main key="main" name="main" cap_index=-1 ret=Void params=0 caps=0
+    Block span=9:0
+      While label="run_sim" span=9:0
+        Const ty=Bool const=0x1 span=9:0
+        Block span=9:0
+          VarDecl ty=S64 name="p" span=10:0
+            Const ty=S64 const=0x3e8 span=10:0
+          VarDecl ty=U64 name="a" span=11:0
+            Call ty=U64 callee=func:0 span=11:0
+              Call ty=U8 callee=builtin:0 span=11:0
+                Local ty=S64 name="p" span=11:0
+          VarDecl ty=U64 name="b" span=12:0
+            Call ty=U64 callee=func:1 span=12:0
+              Call ty=S64 callee=builtin:0 span=12:0
+                Local ty=S64 name="p" span=12:0
+          VarDecl ty=U64 name="c" span=13:0
+            Call ty=U64 callee=func:2 span=13:0
+              Call ty=U32 callee=builtin:0 span=13:0
+                Local ty=S64 name="p" span=13:0
+          VarDecl ty=U64 name="d" span=14:0
+            Call ty=U64 callee=func:3 span=14:0
+              Const ty=U64 const=0x3 span=14:0
+          VarDecl ty=U8 name="e" span=15:0
+            Call ty=U8 callee=func:4 span=15:0
+              Call ty=U8 callee=builtin:0 span=15:0
+                Local ty=S64 name="p" span=15:0
+  func[0] key="sz$@u8#v" name="sz$@u8#v" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="t" ty=U8
+    Block span=5:0
+      Return span=5:0
+        Const ty=U64 const=0x8 span=5:0
+  func[1] key="sz$@s64#v" name="sz$@s64#v" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="t" ty=S64
+    Block span=5:0
+      Return span=5:0
+        Const ty=U64 const=0x40 span=5:0
+  func[2] key="anyof$@u32#v" name="anyof$@u32#v" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="a" ty=U32
+    Block span=6:0
+      Return span=6:0
+        Const ty=U64 const=0x20 span=6:0
+  func[3] key="widen$@u16,u64" name="widen$@u16,u64" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="k" ty=U64
+    Block span=7:0
+      Return span=7:0
+        Cast ty=U64 cast=raw span=7:0
+          Binary ty=S64 op=mul span=7:0
+            Const ty=S64 const=0x10 span=7:0
+            Cast ty=S64 cast=raw span=7:0
+              Local ty=U64 name="k" span=7:0
+  func[4] key="idv$@u8#v" name="idv$@u8#v" cap_index=-1 ret=U8 params=1 caps=0
+    param[0] name="t" ty=U8
+    Block span=8:0
+      Return span=8:0
+        Local ty=U8 name="t" span=8:0

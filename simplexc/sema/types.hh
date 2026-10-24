@@ -4,7 +4,8 @@
  * codegen 只读已折好的 `Const`。搬的时候一行逻辑没改，`lower/lower.hh` 用 using 把名字引入
  * `simplexc::lower`（刻意的过渡态，②d 再清理调用点）。
  *
- * 留在这里不搬的：`V`（带值句柄，属 codegen 侧）、`ty_key` / `size_bits`（lower 内部用的拼写与位宽）。 */
+ * 留在这里不搬的：`V`（带值句柄，属 codegen 侧）。`ty_key` / `size_bits` 已随 S2b-3 搬进来
+ * （实例键与 `size()` 都要用），`lower/` 里那两份拷贝 ②c 接线时删。 */
 #pragma once
 
 #include <cstdint>
@@ -52,6 +53,10 @@ TyRef make_array(TyRef elem);
 inline constexpr uint64_t kMask64 = ~uint64_t{0};
 uint64_t mask_of(int bits);
 int storage_bytes(const Ty& ty);   /* 内存字节宽度；Void / 未知抛 Unsupported */
+/* 实例键 / 捕获签名的类型拼写（决策 7 的唯一一处；②c 之前 `lower/` 里还有一份拷贝）。 */
+std::string ty_key(const Ty& ty);
+/* `size(x)` 的返回值，单位 = 位（`docs/facts/semantics.md` 的泛型一条）。 */
+int size_bits(const Ty& ty);
 const char* ty_kind_name(TyKind k);
 inline bool is_int(const Ty& ty) { return ty.kind == TyKind::Int; }
 

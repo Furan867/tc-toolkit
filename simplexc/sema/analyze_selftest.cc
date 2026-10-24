@@ -17,6 +17,11 @@
  * 用例的命令行形状与后缀都是判据的一部分：`.`si` 源码 + 同名 `.dump` golden（golden 与 `.si`
  * 同目录，所以删掉一个 `.dump` 就是「少了一份期望」，不会静默跳过）。
  *
+ * **报错用例**用同名 `.err` 代替 `.dump`：`analyze` 必须抛异常，且 `what()` 与 `.err` 逐字相同
+ * （两边都把 CRLF 折成 LF）。一份 `.si` 只能有 `.dump` 与 `.err` 之一 —— 两条都要就等于说「既该
+ * 编过又该编不过」。判报错这一档是必须单独有的：不收敛、未实现的构造**必须报错**，而不是死循环
+ * 或者静默生一棵半成品树。
+ *
  * 退出码：0 = 全过；1 = 有失败；2 = 命令行参数不认识。
  */
 #include "analyze.hh"
@@ -231,11 +236,13 @@ bool load_case(const std::string& path, CaseSource* out, std::string* err) {
             } else if (d.kind == "type" && d.depth == 0) {
                 add_type_decl(fe, d, out);
             } else if (d.kind == "def" && d.depth == 0) {
-                /* 顶层 def 本步**不接**：解析好传进去，让 `analyze` 自己抛 `Unsupported`
-                   （用例里真出现时的报错才来自被测代码，而不是这段粘合）。 */
+                /* 顶层 def：解析好传进去，`analyze` 的 `Module::defs` 在那里建重载表。 */
                 ParsedDef pd = fe.parse_def(idx);
                 out->src.defs.push_back(pd.fn.get());
                 out->fns.push_back(std::move(pd.fn));
+            } else if (d.kind == "def" && d.depth > 0) {
+                /* 体里的**嵌套** def：`parse_def` 解析程序根时已经连体把它解进 AST 了，decls 里
+                 * 这一条只是记账（`enclosing`/`depth`），再解一次会得到一份不被引用的副本。 */
             } else {
                 throw sema::CompileFail("第 " + std::to_string(d.lo) + " 行：用例里不该出现 " +
                                        d.kind + " 声明");
@@ -275,7 +282,14 @@ std::string regen_cmd(const std::filesystem::path& src) {
            " > " + (src.parent_path() / (src.stem().string() + ".dump")).generic_string();
 }
 
-/* `--dump-only <case.si>`：只打印 dump（golden 用它生成）。 */
+std::string regen_err_cmd(const std::filesystem::path& src) {
+    return "build/analyze_selftest.exe --err-only " + src.generic_string() +
+           " > " + (src.parent_path() / (src.stem().string() + ".err")).generic_string();
+}
+
+/* `--dump-only <case.si>`：只打印 dump（golden 用它生成）。
+ * `--err-only <case.si>`：只打印 `analyze` 抛出的 `what()`（报错用例的 golden 用它生成）；
+ * 没报错则返回 1 —— 那样生成的 `.err` 会是空的，本函数不能让它看起来像成功。 */
 int dump_only(const std::string& path) {
     CaseSource cs;
     std::string err;
@@ -292,14 +306,34 @@ int dump_only(const std::string& path) {
     return 0;
 }
 
+int err_only(const std::string& path) {
+    CaseSource cs;
+    std::string err;
+    if (!load_case(path, &cs, &err)) {
+        std::cerr << "FAIL 载入 " << path << "：" << err << "\n";
+        return 1;
+    }
+    try {
+        sema::analyze(cs.src);
+    } catch (const std::exception& e) {
+        std::cout << e.what() << "\n";
+        return 0;
+    }
+    std::cerr << "FAIL analyze " << path << "：没有报错（这条用例该报错）\n";
+    return 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc == 3 && std::string(argv[1]) == "--dump-only") return dump_only(argv[2]);
+    if (argc == 3 && std::string(argv[1]) == "--err-only") return err_only(argv[2]);
     if (argc != 1) {
-        std::cerr << "用法：" << argv[0] << " [--dump-only <case.si>]\n"
-                  << "  无参数          跑 testdata/cases 下所有用例（dump 逐字比 + 六条不变量）\n"
-                  << "  --dump-only     只打印某个用例的 dump（golden 用它生成）\n";
+        std::cerr << "用法：" << argv[0] << " [--dump-only <case.si> | --err-only <case.si>]\n"
+                  << "  无参数          跑 testdata/cases 下所有用例（dump 逐字比 + 六条不变量；"
+                     "有同名 .err 的用例改比报错文本）\n"
+                  << "  --dump-only     只打印某个用例的 dump（golden 用它生成）\n"
+                  << "  --err-only      只打印某个用例 analyze 抛出的报错（.err golden 用它生成）\n";
         return 2;
     }
 
@@ -326,11 +360,32 @@ int main(int argc, char** argv) {
             bad(name + " 载入失败：" + err);
             continue;
         }
+        const std::filesystem::path err_golden = src.parent_path() / (name + ".err");
+        std::string want_err;
+        const bool is_error_case = read_golden(err_golden.string(), &want_err);
         sema::Hir hir;
+        std::string got_err;
+        bool threw = false;
         try {
             hir = sema::analyze(cs.src);
         } catch (const std::exception& e) {
-            bad(name + " analyze 抛异常：" + e.what());
+            threw = true;
+            got_err = std::string(e.what()) + "\n";
+        }
+        if (is_error_case) {
+            if (!threw) {
+                bad(name + " 该报错却编过了（" + err_golden.generic_string() + "）");
+            } else if (got_err == want_err) {
+                ok(name + " 报错文本与 golden 相同");
+            } else {
+                bad(name + " 报错文本与 golden 不同（" + err_golden.generic_string() + "）");
+                std::cout << "---- 实际 ----\n" << got_err << "---- 期望 ----\n" << want_err << "----\n"
+                          << "  重生成前先判哪一版对：" << regen_err_cmd(src) << "\n";
+            }
+            continue; /* 报错用例没有树可比、也没有不变量要查 */
+        }
+        if (threw) {
+            bad(name + " analyze 抛异常：" + got_err.substr(0, got_err.size() - 1));
             continue;
         }
         const std::string got = sema::dump(hir);

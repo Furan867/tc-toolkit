@@ -1,0 +1,73 @@
+Hir funcs=5 globals=0 externs=0 consts=0 strings=1 structs=0
+  string[0] bytes="x" cstring=false
+  main key="main" name="main" cap_index=-1 ret=Void params=0 caps=0
+    Block span=12:0
+      While label="run_sim" span=12:0
+        Const ty=Bool const=0x1 span=12:0
+        Block span=12:0
+          VarDecl ty=U64 name="b" span=13:0
+            Call ty=U64 callee=func:0 span=13:0
+              Const ty=Bool const=0x1 span=13:0
+          VarDecl ty=U64 name="s" span=14:0
+            Call ty=U64 callee=func:1 span=14:0
+              Cast ty=Str cast=raw span=14:0
+                StrLit ty=Str string=0 span=14:0
+          VarDecl ty=U64 name="t" span=15:0
+            Call ty=U64 callee=func:2 span=15:0
+              Const ty=U64 const=0x3 span=15:0
+          VarDecl ty=Bool name="e" span=16:0
+            Call ty=Bool callee=func:3 span=16:0
+              Const ty=U64 const=0x4 span=16:0
+  func[0] key="pick$bool" name="pick" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="a" ty=Bool
+    Block span=4:0
+      Return span=4:0
+        Const ty=U64 const=0x1 span=4:0
+  func[1] key="pick$str" name="pick" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="a" ty=Str
+    Block span=5:0
+      Return span=5:0
+        Const ty=U64 const=0x2 span=5:0
+  func[2] key="tall" name="tall" cap_index=-1 ret=U64 params=1 caps=0
+    param[0] name="n" ty=U64
+    Block span=6:0
+      If span=7:0
+        Binary ty=Bool op=eq span=7:0
+          Local ty=U64 name="n" span=7:0
+          Const ty=U64 const=0x0 span=7:0
+        Block span=7:0
+          Return span=7:0
+            Const ty=U64 const=0x0 span=7:0
+      Return span=8:0
+        Binary ty=U64 op=add span=8:0
+          Call ty=U64 callee=func:2 span=8:0
+            Binary ty=U64 op=sub span=8:0
+              Local ty=U64 name="n" span=8:0
+              Const ty=U64 const=0x1 span=8:0
+          Const ty=U64 const=0x1 span=8:0
+  func[3] key="is_even" name="is_even" cap_index=-1 ret=Bool params=1 caps=0
+    param[0] name="n" ty=U64
+    Block span=10:0
+      Return span=10:0
+        Cond ty=Bool span=10:0
+          Binary ty=Bool op=eq span=10:0
+            Local ty=U64 name="n" span=10:0
+            Const ty=U64 const=0x0 span=10:0
+          Const ty=Bool const=0x1 span=10:0
+          Call ty=Bool callee=func:4 span=10:0
+            Binary ty=U64 op=sub span=10:0
+              Local ty=U64 name="n" span=10:0
+              Const ty=U64 const=0x1 span=10:0
+  func[4] key="is_odd" name="is_odd" cap_index=-1 ret=Bool params=1 caps=0
+    param[0] name="n" ty=U64
+    Block span=11:0
+      Return span=11:0
+        Cond ty=Bool span=11:0
+          Binary ty=Bool op=eq span=11:0
+            Local ty=U64 name="n" span=11:0
+            Const ty=U64 const=0x0 span=11:0
+          Const ty=Bool const=0x0 span=11:0
+          Call ty=Bool callee=func:3 span=11:0
+            Binary ty=U64 op=sub span=11:0
+              Local ty=U64 name="n" span=11:0
+              Const ty=U64 const=0x1 span=11:0

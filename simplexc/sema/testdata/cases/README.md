@@ -21,6 +21,17 @@
 | `12_str` | `Str` 字面量进串池 + `Str == Str` 不折叠（`op=streq`/`strne`） |
 | `13_template` | 模板插值：文字段/表达式交替（kid 个数 = 2×插值数 + 1） |
 | `14_prefix` | 前缀全局 `global_seed` 按需进 `Hir.globals`（下标在顶层全局之后、初值 = 1） |
+| `15_call` | 顶层 def 调用：同名重载按实参类型挑（`pick$bool` / `pick$str` 两个实例）、自递归、互调（前向引用也能挑到） |
+| `16_generic` | 泛型单态化：同一个 def 的 `@Type`/`@Any`/`@Size` 不同绑定 = 不同实例（键里的 `$@u8#v` 等）；类型实参的两种写法（值形带 `#v`、`<U16>` 形式不占运行期槽）；`@Type` 当返回类型 |
+| `17_closure` | 嵌套 def 与捕获：`capture[i].index` = 首次遇到顺序、`cap_index` 只给顶层 def（嵌套恒 -1）、捕获面不同 = 两个实例（`$c0`/`$c1`）、递归/互调按词法键收敛到同一个实例 |
+| `18_strcat` | `Str` 拼接（`Binary{Add, ty=Str}`，开缓冲是 codegen 的事）+ U-L10 的转义表（`\t` → 0x08、`\b`/`\x42` 原样留反斜杠），模板文字段走同一处 |
+| `19_cap_runaway` | **报错用例**：同一个顶层 def 的第 65 个捕获签名 → `CompileError{Unimplemented, Sema}`（不是死循环、不是栈溢出），断言文本在同名 `.err` |
+
+两份 golden 的形状：
+
+- `<case>.dump`：`analyze` 成功时的 dump，逐字比 + 六条不变量（默认）。
+- `<case>.err`：**该报错**的用例，`analyze` 必须抛异常且 `what()` 与 golden 逐字相同；这类用例没有
+  dump、也不跑不变量（没有树）。一份 `.si` 只能有 `.dump` 与 `.err` 之一。
 
 每个用例的根都是语料里唯一的形态 `run_sim: while true { … }`：`decls.cc` 的 `match_label`
 要求 `名字:` 同一行跟 `while|for|loop`，别的写法整行会被当成未知行（根块不存在）。
@@ -32,6 +43,13 @@ python simplexc/tools/build.py analyze_selftest
 for f in simplexc/sema/testdata/cases/*.si; do
   build/analyze_selftest.exe --dump-only "$f" > "${f%.si}.dump"
 done
+```
+
+报错用例的 golden 用 `--err-only`（没报错时它返回 1，不会静默生成空文件）：
+
+```bash
+build/analyze_selftest.exe --err-only simplexc/sema/testdata/cases/19_cap_runaway.si \
+    > simplexc/sema/testdata/cases/19_cap_runaway.err
 ```
 
 `.dump` 里是 CRLF（Windows 下 stdout 是文本模式），而 dump 只出 LF；`analyze_selftest.cc`

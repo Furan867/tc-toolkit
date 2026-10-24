@@ -1,5 +1,5 @@
 Hir funcs=1 globals=0 externs=0 consts=0 strings=0 structs=0
-  main key="main" name="main" ret=U64 params=1 caps=0
+  main key="main" name="main" cap_index=-1 ret=U64 params=1 caps=0
     param[0] name="n" ty=U64
     Block span=1:0
       VarDecl ty=U64 name="x" span=2:0
@@ -15,7 +15,7 @@ Hir funcs=1 globals=0 externs=0 consts=0 strings=0 structs=0
         Binary ty=U64 op=add span=6:0
           Local ty=U64 name="x" span=6:0
           Local ty=U64 name="n" span=6:0
-  func[0] key="f$u64" name="f$u64" ret=U64 params=1 caps=0
+  func[0] key="f$u64" name="f$u64" cap_index=-1 ret=U64 params=1 caps=0
     param[0] name="k" ty=U64
     Block span=9:0
       Return span=9:0

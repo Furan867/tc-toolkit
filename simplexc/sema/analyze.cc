@@ -37,6 +37,7 @@
  */
 #include "analyze.hh"
 
+#include "builtins.hh"
 #include "errors.hh"
 #include "layout.hh"
 
@@ -44,6 +45,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -161,6 +163,159 @@ const std::map<std::string, HashConst>& hash_consts() {
     return m;
 }
 
+/* ---------------------------------------------------------------- 泛型与捕获的小件 */
+
+/* 类型参数写在形参类型那一格上（`x: @Type`）。只有**整格**是类型参数才算 —— `Arr[@Any]` 这种
+ * 嵌套拼写在 `ty_of_ref` 就报错了，与 `lower.cc` 的 `is_type_param` 同一条口径。 */
+bool is_type_param(const TypeRef& ref) {
+    return ref.at && (ref.name == "Type" || ref.name == "Size" || ref.name == "Any");
+}
+
+bool has_type_params(const std::vector<std::unique_ptr<Param>>& params) {
+    for (const auto& p : params) {
+        if (p->typ != nullptr && is_type_param(*p->typ)) return true;
+    }
+    return false;
+}
+
+/* 先序遍历一个节点的**子节点**（列表字段也下钻），字段顺序照 `ast.hh` 的声明序。
+ * 只有算捕获表要用它：原型按「遍历所有 dataclass 字段」求自由变量，而那个顺序决定捕获在闭包
+ * 环境里的槽位序号（`HCapture.index` / `$c<n>`）—— 换顺序就是换产物，不是换个遍历方法。 */
+template <class F>
+void for_each_child(const Node& n, F&& f) {
+    switch (n.kind) {
+        case NK::Cast: f(*static_cast<const CastExpr&>(n).expr); break;
+        case NK::Unary: f(*static_cast<const UnaryExpr&>(n).expr); break;
+        case NK::Binary: {
+            const auto& x = static_cast<const BinaryExpr&>(n);
+            f(*x.left);
+            f(*x.right);
+            break;
+        }
+        case NK::Cond: {
+            const auto& x = static_cast<const CondExpr&>(n);
+            f(*x.cond);
+            f(*x.then_);
+            f(*x.else_);
+            break;
+        }
+        case NK::Call: {
+            const auto& x = static_cast<const CallExpr&>(n);
+            f(*x.callee);
+            for (const auto& a : x.args) f(*a);
+            break;
+        }
+        case NK::Member: f(*static_cast<const MemberExpr&>(n).obj); break;
+        case NK::Index: {
+            const auto& x = static_cast<const IndexExpr&>(n);
+            f(*x.obj);
+            f(*x.index);
+            break;
+        }
+        case NK::ArrayLit:
+            for (const auto& it : static_cast<const ArrayLitExpr&>(n).items) f(*it);
+            break;
+        case NK::CompositeLit:
+            for (const auto& fi : static_cast<const CompositeLitExpr&>(n).fields) f(*fi);
+            break;
+        case NK::Template:
+            for (const auto& p : static_cast<const TemplateExpr&>(n).parts) f(*p);
+            break;
+        case NK::FieldInit: f(*static_cast<const FieldInit&>(n).value); break;
+        case NK::Block:
+            for (const auto& s : static_cast<const Block&>(n).stmts) f(*s);
+            break;
+        /* 裸块的体是 `BlockStmt` 自己那个字段，不走 `NK::Block` 那条 —— 漏掉它会让捕获表
+         * 看不见块内的自由变量。 */
+        case NK::BlockStmt: f(*static_cast<const BlockStmt&>(n).block); break;
+        case NK::VarDecl: f(*static_cast<const VarDeclStmt&>(n).init); break;
+        case NK::Assign: {
+            const auto& x = static_cast<const AssignStmt&>(n);
+            f(*x.target);
+            f(*x.value);
+            break;
+        }
+        case NK::ExprStmt: f(*static_cast<const ExprStmt&>(n).expr); break;
+        case NK::IfCase: {
+            const auto& x = static_cast<const IfCase&>(n);
+            f(*x.cond);
+            f(*x.block);
+            break;
+        }
+        case NK::If: {
+            const auto& x = static_cast<const IfStmt&>(n);
+            for (const auto& c : x.cases) f(*c);
+            if (x.else_block != nullptr) f(*x.else_block);
+            break;
+        }
+        case NK::PpIf: {
+            const auto& x = static_cast<const PpIfStmt&>(n);
+            for (const auto& c : x.cases) f(*c);
+            if (x.else_block != nullptr) f(*x.else_block);
+            break;
+        }
+        case NK::While: {
+            const auto& x = static_cast<const WhileStmt&>(n);
+            f(*x.cond);
+            f(*x.block);
+            break;
+        }
+        case NK::SwitchCase: {
+            const auto& x = static_cast<const SwitchCase&>(n);
+            f(*x.block);
+            if (x.value != nullptr) f(*x.value);
+            break;
+        }
+        case NK::Switch: {
+            const auto& x = static_cast<const SwitchStmt&>(n);
+            f(*x.subject);
+            for (const auto& c : x.cases) f(*c);
+            break;
+        }
+        case NK::Return:
+            if (static_cast<const ReturnStmt&>(n).value != nullptr) {
+                f(*static_cast<const ReturnStmt&>(n).value);
+            }
+            break;
+        case NK::Def: {
+            const auto& x = static_cast<const DefStmt&>(n);
+            for (const auto& p : x.params) f(*p);
+            f(*x.body);
+            break;
+        }
+        case NK::Function: {
+            const auto& x = static_cast<const FunctionDef&>(n);
+            for (const auto& p : x.params) f(*p);
+            f(*x.body);
+            break;
+        }
+        default: break; /* 叶子节点与 Param（只有类型拼写） */
+    }
+}
+
+/* 捕获签名（`lower.cc` 的 `ensure_def_fn` 里那段）：`名字:类型键` 逗号分隔。
+ * **不许排序、不许去重后再排** —— 它既是实例键里区分闭包面的那一段，也是 `$c<n>` 的计数依据。 */
+std::string capture_sig(const std::vector<HCapture>& caps) {
+    std::string out;
+    for (std::size_t j = 0; j < caps.size(); ++j) {
+        if (j != 0) out += ',';
+        out += caps[j].name;
+        out += ':';
+        out += ty_key(*caps[j].ty);
+    }
+    return out;
+}
+
+/* 重载粗判（`lower.cc` 的 `compatible`）：种类对得上、Int 之间一律算匹配、Enum/Struct 看名字。 */
+bool compatible(const TyRef& arg, const TyRef& param) {
+    if (!arg || arg->kind != param->kind) return false;
+    if (arg->kind == TyKind::Int) return true;
+    if (arg->kind == TyKind::Enum || arg->kind == TyKind::Struct) {
+        return arg->name == param->name;
+    }
+    return true;
+}
+
 /* ---------------------------------------------------------------- 节点小件 */
 
 Span span_at(int line) {
@@ -195,6 +350,14 @@ HNode const_node(const TyRef& ty, uint64_t bits, int line) {
 HNode local_node(const std::string& name, TyRef ty, int line) {
     HNode n = expr_node(HKind::Local, std::move(ty), line);
     n.name = name;
+    return n;
+}
+
+/* 捕获的读/写都是**这一个节点**：`capture_index` 指向 `HirFunc.caps` 的槽位序号（= 现状闭包
+ * 参数表里的位置）。名字不留在节点上（§2b 的载荷表只有序号），codegen 靠 `caps[index]` 查。 */
+HNode capture_node(TyRef ty, int index, int line) {
+    HNode n = expr_node(HKind::Capture, std::move(ty), line);
+    n.capture_index = index;
     return n;
 }
 
@@ -288,23 +451,88 @@ void collect_root_decls(const Block& block, std::vector<const DefStmt*>& defs,
 
 /* ---------------------------------------------------------------- 分析器 */
 
+struct GlobalRef {
+    int id = -1;
+    TyRef ty;
+};
+
+/* 一个 def 的实例化决定（`lower.cc` 的 `Inst`）：泛型绑定 + 运行期形参 + 规范化签名。
+ * `rt_*` 四个数组按下标对齐：`rt_params[i]` 是第 i 个**运行期**形参，`rt_types[i]` 是它的类型，
+ * `rt_arg[i]` 是它在调用点实参表里的下标 —— 类型实参不占运行期槽（`g(a, <U8>)`），所以两者可以
+ * 错位。（类型形绑定的那个形式参确实没有运行期槽 —— 体内只能拿它当 `size()`/`type_of()` 的类型
+ * 来源，读它的值是无定义的。对齐这件事是必须的：按声明位次取 `rt_params` 时，类型参数排在值参数
+ * **前面**的写法会把名字和类型错配成「把 k 绑成 U64 却叫 n」。）
+ * `sig` 就是实例键里 `$` 后面那一段（非泛型 def 是空串，⇒ 键与函数名都不带 `$`）。 */
+struct Inst {
+    std::vector<const Param*> rt_params;
+    std::vector<TyRef> rt_types;
+    std::vector<std::size_t> rt_arg;
+    std::map<std::string, TyRef> binds;
+    std::vector<TyRef> bind_order;
+    std::string sig;
+};
+
+/* 一个 def 的捕获面（`lower.cc` 的 `Closure`）：`caps` 按**首次遇到**的顺序排 —— 那个顺序同时
+ * 是闭包环境里的槽位序号（`HCapture.index`）与 `$c<n>` 里的 n，所以不能排序、不能去重后再排。
+ * `defs` 是被摊平进来的兄弟 def：它们的捕获要经调用者带进来（`collect_captures` 的注释）。 */
+struct Closure {
+    std::vector<HCapture> caps;
+    /* 被摊平进来的兄弟 def + 它们的**词法**归属（`owner|名字@行` 那个串）。归属必须在这里带
+     * 下来：兄弟 def 声明在**外层**的体里，而它是在内层的实例里被绑进作用域的 —— 拿当前实例
+     * 的词法键当它的归属，互调的链路就会一圈长一段（实测 `ping`/`pong` 直接不收敛）。 */
+    std::vector<std::pair<const DefStmt*, std::string>> defs;
+};
+
+/* 一个 def 的词法键：`归属 + "|" + 名字 + "@" + 声明行`。只由**声明位置**决定。 */
+std::string lex_of(const std::string& owner, const DefStmt& st) {
+    return owner + "|" + st.name + "@" + std::to_string(st.src_line);
+}
+
+/* 模块级共享上下文：一次分析只有一份，所有函数实例共读共写。
+ * 为什么把 `Analyzer` 拆成「模块」+「每函数」两层：实例闭包是**递归**的（def 体里发现新实例就
+ * 得当场把那个体也算完，见 `instantiate_top`），递归下去时新建一个 `Analyzer` 当子上下文，
+ * 不去保存-恢复一堆成员（方案 §3.3 的硬要求）。 */
+struct Module {
+    Module(Hir& h, const ModuleSource& s) : hir(h), src(s) {}
+
+    Hir& hir;
+    const ModuleSource& src;
+    /* 顶层 def：同名多个 = 重载，按声明序（`pick_def` 的候选表）。 */
+    std::map<std::string, std::vector<const FunctionDef*>> defs;
+    /* 程序根体里的嵌套 def：整单元可见、且前向可见（`lower.cc` 的 `root_defs_`）。 */
+    std::map<std::string, const DefStmt*> root_defs;
+    std::map<std::string, GlobalRef> globals;
+    std::map<std::string, HirConst> consts;                  /* 顶层 `const #` */
+    std::map<std::string, const VarDeclStmt*> root_consts;   /* 程序根体里的 `const #` */
+    std::map<std::string, TyRef> enums;                      /* 枚举类型名 → 类型 */
+    std::map<std::string, std::pair<std::string, int>> enum_member; /* 成员 → (枚举, 序号) */
+    std::map<std::string, StructLayout> structs;             /* struct 名 → 布局 */
+    std::map<std::pair<std::string, bool>, int> string_ids;  /* (字节, cstring) → 串池下标 */
+    /* `in_scope` 的 ① 档：整单元预扫的名字表（`lower.cc` 的 `mod_->in_scope_names`）。必须在任何剪枝
+     * 之前建好，而且只能看**未经裁剪的** AST（U-L14 的 F1/F2）。 */
+    std::set<std::string> in_scope_names;
+    /* 实例闭包的两张表：`instance` 是「规范化实例键 → `hir.funcs` 下标」的**唯一**一张表；
+     * `cap_instances` 复现 `lower` 的每 (def, lo) 捕获实例计数（`$c<n>` 的 n 与 64 上限）。 */
+    std::map<std::string, int> instance;
+    std::map<std::pair<std::string, int>, int> cap_instances;
+};
+
 class Analyzer {
 public:
-    explicit Analyzer(Hir& out) : hir_(out) {}
+    explicit Analyzer(Module& m) : mod_(&m) {}
+    /* 程序根：模块级建表 + 根体。
+     * 下面两个 `run_*_def` 是**子上下文入口**（递归分析一个函数体），不开新作用域链之外的东西。 */
     void run(const ModuleSource& src);
 
 private:
-    /* 名字绑定：本步只有「局部」与「编译期常量」两种（捕获 / 嵌套 def 是后续步骤的事）。 */
     struct Binding {
-        enum class Kind { Local, Const };
+        enum class Kind { Local, Capture, Const, Def };
         Kind kind = Kind::Local;
-        TyRef ty;
-        uint64_t bits = 0; /* Const：已按 ty 截断的位模式 */
-    };
-
-    struct GlobalRef {
-        int id = -1;
-        TyRef ty;
+        TyRef ty;                     /* Local / Capture */
+        uint64_t bits = 0;            /* Const：已按 ty 截断的位模式 */
+        int index = -1;               /* Capture：闭包环境里的槽位序号 */
+        const DefStmt* def = nullptr; /* Def */
+        std::string owner_lex;        /* Def：它声明在那一层的词法键（键里的归属段） */
     };
 
     /* ---- 模块级 */
@@ -344,6 +572,50 @@ private:
     std::optional<HNode> const_value(const Node& node);
     HNode cv(const Node& node);
 
+    /* ---- 调用与实例闭包
+     *
+     * 实例闭包是**深度优先、边算边登记**的：`instantiate_*` 先把实例键记进 `mod_->instance` 与
+     * `hir.funcs`，再递归分析它的体 —— 自引用与互调靠这条收敛（回头再调同一个键就复用下标）。
+     *
+     * 枚举顺序**不能随手改**：`$c<n>` 的 n 与 `hir.funcs` 的下标都取自「第一次遇到」的顺序，
+     * 而这个顺序就是下层语料产物的名字序列。现状（`lower.cc`）的顺序是「先 ensure 被调者
+     * （连它的体一起算完），再算实参」，所以 `call_user` / `call_nested` 也必须先
+     * `instantiate_*` 再求实参；语句/表达式按源码顺序遍历。改成先算实参、或改成广度优先，
+     * 产物里的 `$c0`/`$c1` 就会对调。 */
+    HNode e_call(const CallExpr& node);
+    HNode call_named(const std::string& name, const CallExpr& node);
+    HNode call_user(const FunctionDef& d, const CallExpr& node);
+    HNode call_nested(const DefStmt& st, const CallExpr& node, const std::string& owner_lex);    HNode call_load(const CallExpr& node);
+    HNode call_store(const CallExpr& node);
+    HNode call_raw_cast(const CallExpr& node);
+    HNode call_size(const CallExpr& node);
+    HNode builtin_node(HBuiltin id, TyRef ty, std::vector<HNode> kids, int line);
+    void def_stmt(HNode& parent, const DefStmt& st);
+
+    const FunctionDef* pick_def(const std::string& name, const CallExpr& node);
+    Inst resolve_inst(const std::vector<std::unique_ptr<Param>>& params, const CallExpr& node, int line);
+    std::optional<std::vector<TyRef>> decl_param_types(const FunctionDef& d);
+    std::string inst_sig(const FunctionDef& d, const Inst& inst);
+    TyRef inst_ret_type(const TypeRef* ret, const Inst& inst, int line);
+    TyRef defstmt_ret(const DefStmt& st);
+    std::vector<TyRef> defstmt_params(const DefStmt& st);
+    TyRef static_type(const Node& node);
+    TyRef type_value_of(const Expr& node, int line);
+    TyRef operand_type(const Expr& node, int line);
+
+    /* 登记一个实例并返回它在 `hir.funcs` 里的下标；体由子上下文（`run_*_def`）算。 */
+    int instantiate_top(const FunctionDef& d, const Inst& inst, const Closure& cl);
+    int instantiate_nested(const DefStmt& st, const std::vector<TyRef>& param_tys, const Closure& cl,
+                           const std::string& owner_lex);
+    void run_top_def(const FunctionDef& d, const Inst& inst, const std::vector<HCapture>& caps, int index);
+    void run_nested_def(const DefStmt& st, const std::vector<TyRef>& param_tys, const Closure& cl,
+                        const std::string& lex, int index);
+    Closure captures_of(const DefStmt& st, const std::string& owner_lex);
+    Closure def_captures(const FunctionDef& d);
+    void collect_captures(const Block& body, const std::vector<std::string>& params,
+                          bool into_own_defs, Closure& out, std::set<const DefStmt*>& visiting,
+                          const std::string& owner_lex);
+
     /* ---- 语句 */
     HNode block(const Block& b);
     void statement(HNode& parent, const Stmt& st);
@@ -371,50 +643,45 @@ private:
     void pop_scope() { scopes_.pop_back(); }
     void bind_local(const std::string& name, TyRef ty);
     void bind_const(const std::string& name, TyRef ty, uint64_t bits);
+    void bind_capture(const std::string& name, TyRef ty, int index);
+    void bind_def(const std::string& name, const DefStmt* def, const std::string& owner_lex);
     const Binding* lookup(const std::string& name) const;
 
-    Hir& hir_;
-    TyRef ret_; /* 当前函数的返回类型：本步只有程序根（`None`） */
+    Module* mod_;
+    TyRef ret_; /* 当前函数的返回类型（程序根是 `None`） */
     std::vector<std::map<std::string, Binding>> scopes_;
     /* `break` 的标签栈（与 `lower` 的 `breaks_` 同构）：空标签 = 最近的一层，带标签则向内找
      * 第一个同名的外层循环；找不到就 `Unsupported`（不许落到外层循环上去）。
      * `switch` 不进这个栈：`lower.cc` 的 `s_SwitchStmt` 把每个 case 拆成独立的 if，`break`
      * 一直是穿到外层循环的。 */
     std::vector<std::string> breaks_;
-    std::map<std::string, GlobalRef> globals_;
-    std::map<std::string, HirConst> consts_;                  /* 顶层 `const #` */
-    std::map<std::string, const VarDeclStmt*> root_consts_;   /* 程序根体里的 `const #` */
-    std::map<std::string, TyRef> enums_;                      /* 枚举类型名 → 类型 */
-    std::map<std::string, std::pair<std::string, int>> enum_member_; /* 成员 → (枚举, 序号) */
-    std::map<std::string, StructLayout> structs_;             /* struct 名 → 布局 */
-    std::map<std::pair<std::string, bool>, int> string_ids_;  /* (字节, cstring) → 串池下标 */
-    /* `in_scope` 的 ① 档：整单元预扫的名字表（`lower.cc` 的 `in_scope_names_`）。必须在任何剪枝
-     * 之前建好，而且只能看**未经裁剪的** AST（U-L14 的 F1/F2）。 */
-    std::set<std::string> in_scope_names_;
+    /* 当前实例的泛型绑定（`lower.cc` 的 `ty_binds_`）：类型实参不占运行期槽，所以「名字 → 具体
+     * 类型」只能从这里来（`operand_type`）。 */
+    std::map<std::string, TyRef> ty_binds_;
+    /* 当前实例的**词法**键：`main` / 顶层 def 名 / 嵌套 def 的 `owner|名字@行` 链。
+     * 它只由**声明位置**决定，不含实例序号与捕获面 —— 递归的嵌套 def 靠这一点收敛
+     * （拿实例键当 owner 时，自递归每绕一圈键就长一段，实例无界增长，实测栈溢出）。 */
+    std::string cur_key_;
 };
 
 /* ---------------------------------------------------------------- 模块级 */
 
 void Analyzer::run(const ModuleSource& src) {
-    hir_.main.key = "main";   /* 程序根的**逻辑名**；产物符号名 `tc_main` 由 codegen 派生 */
-    hir_.main.name = "main";
-    hir_.main.ret = ty_void();
+    mod_->hir.main.key = "main";   /* 程序根的**逻辑名**；产物符号名 `tc_main` 由 codegen 派生 */
+    mod_->hir.main.name = "main";
+    mod_->hir.main.ret = ty_void();
     ret_ = ty_void();
+    cur_key_ = "main"; /* 根体里的嵌套 def 拿它当 owner（现状同样用 `cur_name_ = "main"`） */
 
-    /* 顶层 def 需要实例闭包 + 捕获面，是 S2b-3 的事。这里显式报错，不静默丢。
-     * 这一句用旧分型 `Unsupported`（S2b-1 就是这个形状）：本步「明确不做」的那一类（调用 /
-     * def / 闭包 / 泛型）统一走它，新写的 sema 语义错误才用 `CompileError`。 */
-    if (!src.defs.empty()) {
-        throw Unsupported("顶层 def " + src.defs.front()->name + "（调用/def 是 S2b-3）",
-                          src.defs.front()->src_line);
-    }
     make_types(src);
-    scan_scope_names(src);
+    scan_scope_names(src); /* 里面把顶层 def（重载表）与根体嵌套 def 登记进 `Module` */
     make_top_level(src.top_vars);
     if (src.label == nullptr) throw CompileFail("没有顶层语句块（程序根）");
     scan_root_consts(*src.label->body);
-    hir_.main.body = block(*src.label->body);
+    HNode body = block(*src.label->body);
+    mod_->hir.main.body = std::move(body);
 }
+
 
 /* `type` 声明（`lower.cc` 的 `Program::scan_decls`）：枚举先建（struct 的字段可以引用枚举），
  * struct 的布局与位宽由 `layout_struct` 一处算。
@@ -422,9 +689,9 @@ void Analyzer::run(const ModuleSource& src) {
  * 这里直接抛 —— 判据要的是「能编过 / 编不过」，不是「编过一半」。 */
 void Analyzer::make_types(const ModuleSource& src) {
     for (const EnumSource& d : src.enums) {
-        enums_[d.name] = layout_enum(d.name, d.members.size());
+        mod_->enums[d.name] = layout_enum(d.name, d.members.size());
         for (std::size_t i = 0; i < d.members.size(); ++i) {
-            const auto ins = enum_member_.insert(
+            const auto ins = mod_->enum_member.insert(
                 std::make_pair(d.members[i], std::make_pair(d.name, static_cast<int>(i))));
             if (!ins.second) {
                 user_error("枚举成员 " + d.members[i] + " 重名（枚举 " + d.name + "）", 0);
@@ -436,8 +703,8 @@ void Analyzer::make_types(const ModuleSource& src) {
         fields.reserve(d.fields.size());
         for (const auto& f : d.fields) fields.emplace_back(f.first, ty_of_ref(*f.second, 0));
         StructLayout lay = layout_struct(d.name, fields);
-        hir_.structs.push_back(HirStruct{d.name, lay.ty->bits, lay.fields});
-        structs_[d.name] = std::move(lay);
+        mod_->hir.structs.push_back(HirStruct{d.name, lay.ty->bits, lay.fields});
+        mod_->structs[d.name] = std::move(lay);
     }
 }
 
@@ -448,23 +715,32 @@ void Analyzer::make_types(const ModuleSource& src) {
  * `def` / `type`（含 enum 类型名与成员）/ 顶层 `const #X` / 程序根整棵语句树里的嵌套 def 与
  * `const #`。`var` 不算（它的可见性跟声明顺序走）。 */
 void Analyzer::scan_scope_names(const ModuleSource& src) {
-    for (const FunctionDef* d : src.defs) in_scope_names_.insert(d->name);
-    for (const EnumSource& d : src.enums) {
-        in_scope_names_.insert(d.name);
-        for (const std::string& member : d.members) in_scope_names_.insert(member);
+    for (const FunctionDef* d : src.defs) {
+        mod_->in_scope_names.insert(d->name);
+        /* 同名多个 = 重载，按声明序（`pick_def` 的候选表）。 */
+        mod_->defs[d->name].push_back(d);
     }
-    for (const StructSource& d : src.structs) in_scope_names_.insert(d.name);
+    for (const EnumSource& d : src.enums) {
+        mod_->in_scope_names.insert(d.name);
+        for (const std::string& member : d.members) mod_->in_scope_names.insert(member);
+    }
+    for (const StructSource& d : src.structs) mod_->in_scope_names.insert(d.name);
     for (const VarDeclStmt* st : src.top_vars) {
         if (st->kw == "const" && !st->name.empty() && st->name[0] == '#') {
-            in_scope_names_.insert(st->name);
+            mod_->in_scope_names.insert(st->name);
         }
     }
     if (src.label == nullptr) return;
     std::vector<const DefStmt*> defs;
     std::vector<const VarDeclStmt*> consts;
     collect_root_decls(*src.label->body, defs, consts);
-    for (const DefStmt* d : defs) in_scope_names_.insert(d->name);
-    for (const VarDeclStmt* v : consts) in_scope_names_.insert(v->name);
+    for (const DefStmt* d : defs) {
+        mod_->in_scope_names.insert(d->name);
+        /* 根体里的嵌套 def：整单元可见 + 前向可见（`call_named` / `collect_captures` 两张表都查它）。
+         * 同名时后声明的赢（与 `lower.cc` 的 `root_defs_[d->name] = d` 同）。 */
+        mod_->root_defs[d->name] = d;
+    }
+    for (const VarDeclStmt* v : consts) mod_->in_scope_names.insert(v->name);
 }
 
 /* 顶层声明（`lower.cc` 的 `make_globals`）：`const #X` 进 `consts`（零条指令），别的都要有
@@ -483,8 +759,8 @@ void Analyzer::make_top_level(const std::vector<const VarDeclStmt*>& top_vars) {
             c.name = st->name;
             c.ty = v->ty;
             c.bits = v->const_bits;
-            hir_.consts.push_back(c);
-            consts_[c.name] = std::move(c);
+            mod_->hir.consts.push_back(c);
+            mod_->consts[c.name] = std::move(c);
             continue;
         }
         auto v = const_value(*st->init);
@@ -496,8 +772,8 @@ void Analyzer::make_top_level(const std::vector<const VarDeclStmt*>& top_vars) {
         g.name = st->name;
         g.ty = v->ty;
         g.init_bits = v->const_bits;
-        globals_[g.name] = GlobalRef{static_cast<int>(hir_.globals.size()), g.ty};
-        hir_.globals.push_back(std::move(g));
+        mod_->globals[g.name] = GlobalRef{static_cast<int>(mod_->hir.globals.size()), g.ty};
+        mod_->hir.globals.push_back(std::move(g));
     }
 }
 
@@ -509,23 +785,23 @@ void Analyzer::scan_root_consts(const Block& body) {
     std::vector<const DefStmt*> defs;
     std::vector<const VarDeclStmt*> consts;
     collect_root_decls(body, defs, consts);
-    for (const VarDeclStmt* v : consts) root_consts_[v->name] = v;   /* 同名：后声明的赢（`lower` 同） */
+    for (const VarDeclStmt* v : consts) mod_->root_consts[v->name] = v;   /* 同名：后声明的赢（`lower` 同） */
 }
 
 /* 前缀全局**按需建**（`lower.cc` 的 `prefix_global`）：第一次被引用才进 `Hir.globals`，所以它的
  * 下标跟在顶层全局后面 —— 与今天「`make_globals` 先建完、前缀用到时才加」的顺序一致。 */
-Analyzer::GlobalRef Analyzer::prefix_global(const std::string& name, int line) {
-    auto hit = globals_.find(name);
-    if (hit != globals_.end()) return hit->second;
+GlobalRef Analyzer::prefix_global(const std::string& name, int line) {
+    auto hit = mod_->globals.find(name);
+    if (hit != mod_->globals.end()) return hit->second;
     auto it = prefix_globals().find(name);
     if (it == prefix_globals().end()) unimplemented("前缀全局 " + name, line);
     HirGlobal g;
     g.name = name;
     g.ty = it->second.ty;
     g.init_bits = it->second.init;
-    GlobalRef ref{static_cast<int>(hir_.globals.size()), g.ty};
-    globals_[name] = ref;
-    hir_.globals.push_back(std::move(g));
+    GlobalRef ref{static_cast<int>(mod_->hir.globals.size()), g.ty};
+    mod_->globals[name] = ref;
+    mod_->hir.globals.push_back(std::move(g));
     return ref;
 }
 
@@ -533,11 +809,11 @@ Analyzer::GlobalRef Analyzer::prefix_global(const std::string& name, int line) {
  * `cstring` 也算键的一部分（两条字节相同但补零形态不同的串不是同一个）。 */
 int Analyzer::intern_string(const std::string& bytes) {
     const std::pair<std::string, bool> key{bytes, false};
-    auto hit = string_ids_.find(key);
-    if (hit != string_ids_.end()) return hit->second;
-    const int id = static_cast<int>(hir_.strings.size());
-    hir_.strings.push_back(HirString{bytes, false});
-    string_ids_[key] = id;
+    auto hit = mod_->string_ids.find(key);
+    if (hit != mod_->string_ids.end()) return hit->second;
+    const int id = static_cast<int>(mod_->hir.strings.size());
+    mod_->hir.strings.push_back(HirString{bytes, false});
+    mod_->string_ids[key] = id;
     return id;
 }
 
@@ -549,7 +825,7 @@ HNode Analyzer::root_const_value(const VarDeclStmt& decl) {
 
 /* ---------------------------------------------------------------- 类型 */
 
-/* `lower.cc` 的 `ty_of_name`。`enums_` / `structs_` 的查表位置与它一致（在 `U*`/`S*` 数字档
+/* `lower.cc` 的 `ty_of_name`。`mod_->enums` / `mod_->structs` 的查表位置与它一致（在 `U*`/`S*` 数字档
  * 之前）—— 枚举/struct 名与位宽拼写不能混。 */
 TyRef Analyzer::ty_of_name(const std::string& name, int line) {
     if (!name.empty() && name[0] == '@') throw Unsupported("编译期类型参数 " + name, line);
@@ -561,8 +837,8 @@ TyRef Analyzer::ty_of_name(const std::string& name, int line) {
     if (name == "Time") return ty_time();
     if (name == "Seed") return ty_seed();
     if (name == "None" || name == "Void") return ty_void();
-    if (enums_.count(name) != 0) return enums_.at(name);
-    if (structs_.count(name) != 0) return structs_.at(name).ty;
+    if (mod_->enums.count(name) != 0) return mod_->enums.at(name);
+    if (mod_->structs.count(name) != 0) return mod_->structs.at(name).ty;
     if ((name[0] == 'U' || name[0] == 'S') && name.size() > 1) {
         bool digits = true;
         for (std::size_t i = 1; i < name.size(); ++i) {
@@ -656,8 +932,7 @@ HNode Analyzer::e(const Expr& node) {
         case NK::CompositeLit:
             return composite_lit_node(static_cast<const CompositeLitExpr&>(node));
         case NK::Template: return template_expr(static_cast<const TemplateExpr&>(node));
-        case NK::Call:
-            throw Unsupported("调用（S2b-3 才做）", node.src_line);
+        case NK::Call: return e_call(static_cast<const CallExpr&>(node));
         default:
             throw Unsupported("表达式形态 " + std::string(ast_kind_name(node.kind)), node.src_line);
     }
@@ -674,17 +949,47 @@ HNode Analyzer::e_literal(const LiteralExpr& node) {
     throw Unsupported("字面量 " + node.lit_kind, node.src_line);
 }
 
-/* 字符串字面量 → 一个 `StrLit`（字节进串池，`Hir.strings`）。
- *   · 含反斜杠的字面量**不支持**：转义表里 `\t` → 0x08、`\b`/`\x42` 不认、`\\` 解析失败
- *     （U-L10），没有一条能直接当「标准 C 转义」用，所以照 `lower` 报错而不是猜。
- *   · 末尾补 0 与 `len << 16` 头是**串表布局**（`lower` 对所有字面量都补），属 codegen 细节，
- *     所以 `HirString.cstring` 在本步恒为 false（语料里 0 处 `c'…'` 形态）。 */
-HNode Analyzer::string_literal(const std::string& text, int line) {
-    if (text.find('\\') != std::string::npos) {
-        unimplemented("含转义的字符串字面量（U-L10 未定）", line);
+/* U-L10 的转义表（`docs/facts/semantics.md` 实测）：`\0 \a \f \v \e \n \r` 是标准含义，
+ * 但 **`\t` → 0x08**（不是 0x09，参考自己的表如此），`\b` / `\x42` / `\"` **不认**（原样保留
+ * 反斜杠），`\\` 参考自己解析失败。解码只在 sema 做一次：串池里放**解码后的字节**。 */
+std::string unescape(const std::string& text, int line) {
+    if (text.find('\\') == std::string::npos) return text;
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\\' || i + 1 == text.size()) {
+            out.push_back(text[i]);   /* 末尾单独的 '\' 只可能是源里的最后一位，原样留 */
+            continue;
+        }
+        switch (text[i + 1]) {
+            case '0': out.push_back('\0'); break;
+            case 'a': out.push_back('\a'); break;
+            case 'f': out.push_back('\f'); break;
+            case 'v': out.push_back('\v'); break;
+            case 'e': out.push_back('\x1b'); break;
+            case 'n': out.push_back('\n'); break;
+            case 'r': out.push_back('\r'); break;
+            case 't': out.push_back('\x08'); break;
+            case '\\': unimplemented("`\\\\` 转义（参考自己解析失败，U-L10）", line);
+            default:
+                out.push_back('\\');
+                out.push_back(text[i + 1]);
+                break;
+        }
+        ++i;
     }
+    return out;
+}
+
+/* 字符串字面量 → 一个 `StrLit`（字节进串池，`Hir.strings`）。
+ *   · 转义按 U-L10 的表解（`unescape`）；`\\` 那个形态报掉（参考也解析不过）。
+ *   · 末尾补 0 与 `len << 16` 头是**串表布局**（`lower` 对所有字面量都补），属 codegen 细节，
+ *     所以 `HirString.cstring` 在本步恒为 false（语料里 0 处 `c'…'` 形态）。
+ *   · 语料里两条字节相同的字面量只占一个槽（`lower` 的 `str_pool_` 就是按字节去重的）。参考那边
+ *     两个同样的字面量指针不同（U-L10 的旁证，未定论），但我们只保证产物等价，不去凑那个细节。 */
+HNode Analyzer::string_literal(const std::string& text, int line) {
     HNode n = expr_node(HKind::StrLit, ty_str(), line);
-    n.string_id = intern_string(text);
+    n.string_id = intern_string(unescape(text, line));
     return n;
 }
 
@@ -695,31 +1000,35 @@ HNode Analyzer::e_ident(const IdentExpr& node) {
     }
     if (const Binding* b = lookup(name)) {
         if (b->kind == Binding::Kind::Local) return local_node(name, b->ty, node.src_line);
-        return const_node(b->ty, b->bits, node.src_line);
+        if (b->kind == Binding::Kind::Capture) {
+            return capture_node(b->ty, b->index, node.src_line);
+        }
+        if (b->kind == Binding::Kind::Const) return const_node(b->ty, b->bits, node.src_line);
+        throw Unsupported("def 名 " + name + " 当值用", node.src_line);
     }
-    auto g = globals_.find(name);
-    if (g != globals_.end()) return global_node(g->second.id, g->second.ty, node.src_line);
+    auto g = mod_->globals.find(name);
+    if (g != mod_->globals.end()) return global_node(g->second.id, g->second.ty, node.src_line);
     if (prefix_globals().count(name) != 0) {
         const GlobalRef pg = prefix_global(name, node.src_line);
         return global_node(pg.id, pg.ty, node.src_line);
     }
     /* 枚举成员是整数常量（序号从 0 起），类型是枚举自己 —— 与 `lower.cc` 的 `e_IdentExpr`
-     * 同一个位置（在 `consts_` 之前）。 */
-    auto em = enum_member_.find(name);
-    if (em != enum_member_.end()) {
-        return const_node(enums_.at(em->second.first), static_cast<uint64_t>(em->second.second),
+     * 同一个位置（在 `mod_->consts` 之前）。 */
+    auto em = mod_->enum_member.find(name);
+    if (em != mod_->enum_member.end()) {
+        return const_node(mod_->enums.at(em->second.first), static_cast<uint64_t>(em->second.second),
                           node.src_line);
     }
-    auto c = consts_.find(name);
-    if (c != consts_.end()) {
+    auto c = mod_->consts.find(name);
+    if (c != mod_->consts.end()) {
         return const_node(c->second.ty, c->second.bits, node.src_line);
     }
     auto hc = hash_consts().find(name);
     if (hc != hash_consts().end()) {
         return const_node(hc->second.ty, hc->second.value, node.src_line);
     }
-    auto rc = root_consts_.find(name);
-    if (rc != root_consts_.end()) return root_const_value(*rc->second);
+    auto rc = mod_->root_consts.find(name);
+    if (rc != mod_->root_consts.end()) return root_const_value(*rc->second);
     throw Unsupported("未定义的名字 " + name, node.src_line);
 }
 
@@ -824,7 +1133,14 @@ HNode Analyzer::binop(const std::string& op, const HNode& a, const HNode& b, int
     const HNode bv = convert(b, ty, line);
     if (ty->kind == TyKind::Str) {
         if (op != "+") throw Unsupported("Str 的 " + op, line);
-        throw Unsupported("Str 拼接", line); /* `str_concat` 要串池与运行期辅助函数 */
+        /* `Str + Str` = `str_concat`（开栈缓冲 + `__simplexc_copy`，全在 codegen）：HIR 里就是
+         * 一条 `Binary{Add, ty=Str}`，两侧已经 `convert` 过（两边都是 Str ⇒ `Raw`，只换标签）。
+         * 不折常量：串的常量形态带着串池 id，而拼接结果的长度是运行期才知道的。 */
+        HNode n = expr_node(HKind::Binary, ty, line);
+        n.bin_op = HBinOp::Add;
+        n.kids.push_back(av);
+        n.kids.push_back(bv);
+        return n;
     }
     if (ty->kind == TyKind::Ptr) {
         if (op != "+" && op != "-") throw Unsupported("指针 " + op, line);
@@ -1000,6 +1316,708 @@ HNode Analyzer::convert(HNode v, const TyRef& target, int line) {
     return cast_node(HCastKind::Raw, std::move(v), target, line);
 }
 
+/* ---------------------------------------------------------------- 调用与实例闭包 */
+
+HNode Analyzer::e_call(const CallExpr& node) {
+    if (const auto* callee = as<IdentExpr>(node.callee.get())) return call_named(callee->name, node);
+    if (const auto* mem = as<MemberExpr>(node.callee.get())) {
+        /* `.len()` / `.ms()` 是「读串头 / 时间单位」的两种真成员调用，HIR 没有对应节点
+         * （§2b 的节点集里没有 Len/Ms）—— 要做就得先给规格加节点，不在这里猜。 */
+        unimplemented("方法调用 ." + mem->name + "()（HIR 没有对应节点）", node.src_line);
+    }
+    throw Unsupported("被调者形态 " + std::string(ast_kind_name(node.callee->kind)), node.src_line);
+}
+
+/* `lower.cc` 的 `call_named`，**顺序一样**（它决定「同名时变量优先还是 def 优先」）：
+ * 顶层 def（重载）→ 词法作用域里的嵌套 def → 程序根体里的嵌套 def（整单元可见、前向可见）→
+ * 内建 → 前缀函数 → 报错。 */
+HNode Analyzer::call_named(const std::string& name, const CallExpr& node) {
+    if (const FunctionDef* d = pick_def(name, node)) return call_user(*d, node);
+    if (const Binding* b = lookup(name)) {
+        if (b->kind == Binding::Kind::Def) return call_nested(*b->def, node, b->owner_lex);
+    }
+    auto rd = mod_->root_defs.find(name);
+    if (rd != mod_->root_defs.end()) return call_nested(*rd->second, node, "main");
+    if (name == "load") return call_load(node);
+    if (name == "store") return call_store(node);
+    if (name == "raw_cast") return call_raw_cast(node);
+    if (name == "size") return call_size(node);
+    if (name == "in_scope" || name == "type_of") {
+        throw Unsupported(name + "() 只支持编译期形态", node.src_line);
+    }
+    /* 其余内建与前缀函数**本步不接**（它们的体内是 codegen 的活：mask/select/ctlz/私有全局…）。
+     * 显式报「未实现」，不给一个猜出来的语义。 */
+    if (name == "asr" || name == "clz" || name == "ror" || name == "min" || name == "max" ||
+        name == "array" || name == "random") {
+        unimplemented("内建 " + name + "()（本步未接：内建体在 codegen 侧）", node.src_line);
+    }
+    if (is_prefix_func(name)) {
+        unimplemented("前缀函数 " + name + "()（本步未接：函数体在 codegen 侧）", node.src_line);
+    }
+    if (mod_->defs.count(name) != 0) {
+        throw Unsupported(name + "() 的重载解析拿不到参数类型", node.src_line);
+    }
+    throw Unsupported("未定义的函数 " + name, node.src_line);
+}
+
+/* `lower.cc` 的 `call_user`。**三步的顺序不能换**：定实例（含泛型绑定）→ 在**调用点**算捕获表 →
+ * 递归算被调者的体 → 最后才求实参。顺序一换，`$c<n>` 的编号与 `funcs[]` 的顺序就跟着换。 */
+HNode Analyzer::call_user(const FunctionDef& d, const CallExpr& node) {
+    const Inst inst = resolve_inst(d.params, node, d.lo);
+    const TyRef ret_ty = inst_ret_type(d.ret.get(), inst, d.lo);
+    /* 捕获**在调用点**算（原版编译器也是在调用点解析自由名），声明参数只是它的一部分。 */
+    const Closure cl = def_captures(d);
+    const int index = instantiate_top(d, inst, cl);
+    HNode n = expr_node(HKind::Call, ret_ty, node.src_line);
+    n.callee.kind = HCalleeKind::Func;
+    n.callee.index = index;
+    for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
+        n.kids.push_back(convert(e(*node.args[inst.rt_arg[i]]), inst.rt_types[i], node.src_line));
+    }
+    return n;
+}
+
+/* `lower.cc` 的 `call_nested`（顺序同上）。`owner_lex` = 被调 def 的**词法**归属：它声明在哪一层
+ * 的体里就写哪一层的词法键 —— 自递归（经 `root_defs` 拿到自己）算 `main`，声在别的函数体里
+ * （经作用域里的 `Def` 绑定拿到）算那一层的键。 */
+HNode Analyzer::call_nested(const DefStmt& st, const CallExpr& node, const std::string& owner_lex) {
+    const Closure cl = captures_of(st, owner_lex);
+    const TyRef ret_ty = defstmt_ret(st);
+    const std::vector<TyRef> param_tys = defstmt_params(st);
+    if (param_tys.size() != node.args.size()) {
+        throw Unsupported(st.name + "() 的参数个数对不上", node.src_line);
+    }
+    const int index = instantiate_nested(st, param_tys, cl, owner_lex);
+    HNode n = expr_node(HKind::Call, ret_ty, node.src_line);
+    n.callee.kind = HCalleeKind::Func;
+    n.callee.index = index;
+    for (std::size_t i = 0; i < node.args.size(); ++i) {
+        n.kids.push_back(convert(e(*node.args[i]), param_tys[i], node.src_line));
+    }
+    return n;
+}
+
+HNode Analyzer::builtin_node(HBuiltin id, TyRef ty, std::vector<HNode> kids, int line) {
+    HNode n = expr_node(HKind::Call, std::move(ty), line);
+    n.callee.kind = HCalleeKind::Builtin;
+    n.callee.index = static_cast<int>(id);
+    n.kids = std::move(kids);
+    return n;
+}
+
+/* `lower.cc` 的 `builtin_load`：两种形态 —— `load(<T>, p)`（一个实参，类型实参在 `type_args`）
+ * 与 `load(type_of(x), p)`（两个实参，类型实参写成类型值表达式）。 */
+HNode Analyzer::call_load(const CallExpr& node) {
+    if (!node.type_args.empty() && node.args.size() == 1) {
+        const TyRef ty = ty_of_ref(*node.type_args[0], node.src_line);
+        return builtin_node(HBuiltin::Load, ty, {e(*node.args[0])}, node.src_line);
+    }
+    if (node.type_args.empty() && node.args.size() == 2) {
+        const TyRef ty = type_value_of(*node.args[0], node.src_line);
+        return builtin_node(HBuiltin::Load, ty, {e(*node.args[1])}, node.src_line);
+    }
+    throw Unsupported("load(<T>, p) 的形态", node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_store`：结果类型是 `None`（当作 `ExprStmt` 用）。 */
+HNode Analyzer::call_store(const CallExpr& node) {
+    if (node.args.size() != 2) throw Unsupported("store(p, v) 的形态", node.src_line);
+    std::vector<HNode> kids;
+    kids.push_back(e(*node.args[0]));
+    HNode val = e(*node.args[1]);
+    if (val.ty->kind == TyKind::Void) throw Unsupported("store 的值是 None", node.src_line);
+    kids.push_back(std::move(val));
+    return builtin_node(HBuiltin::Store, ty_void(), std::move(kids), node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_raw_cast`：`V::instr(llv(v), ty)` 就是**只换类型标签**，所以 HIR 里
+ * 它就是 `Cast{Raw}`（不是内建调用：没有指令要发）。常量直接折成 `Const`。 */
+HNode Analyzer::call_raw_cast(const CallExpr& node) {
+    if (node.type_args.empty() || node.args.size() != 1) {
+        throw Unsupported("raw_cast(<T>, v) 的形态", node.src_line);
+    }
+    const TyRef ty = ty_of_ref(*node.type_args[0], node.src_line);
+    HNode v = e(*node.args[0]);
+    auto c = pat_const(v);
+    if (c) return const_node(ty, *c & kMask64, node.src_line);
+    return cast_node(HCastKind::Raw, std::move(v), ty, node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_size`：`size(x)` = 操作数**声明类型**的位宽，编译期常数（单位位）。 */
+HNode Analyzer::call_size(const CallExpr& node) {
+    if (node.args.size() != 1) throw Unsupported("size(x) 的形态", node.src_line);
+    const TyRef ty = operand_type(*node.args[0], node.src_line);
+    return const_node(ty_i64(), static_cast<uint64_t>(size_bits(*ty)), node.src_line);
+}
+
+/* 体内的嵌套 `def` 只**登记**，不生成：真被调用时才发（`lower.cc` 的 `s_DefStmt`）。
+ * HIR 里没有节点（§2b：`def` 声明属于语法糖，已投影掉）。 */
+void Analyzer::def_stmt(HNode& /*parent*/, const DefStmt& st) {
+    bind_def(st.name, &st, cur_key_);
+}
+
+/* `lower.cc` 的 `pick_def`：同名重载按「参数类型对得上」挑本文件 def，按声明序取第一个。 */
+const FunctionDef* Analyzer::pick_def(const std::string& name, const CallExpr& node) {
+    auto it = mod_->defs.find(name);
+    if (it == mod_->defs.end()) return nullptr;
+    for (const FunctionDef* d : it->second) {
+        if (has_type_params(d->params)) {
+            /* 泛型候选：先定实例化（类型实参 / 推型），再只比**运行期**形参。定不下来就跳过
+             * 这个候选 —— 不能把异常泄出去，否则同一名字的其它重载都再也选不到。 */
+            Inst inst;
+            try {
+                inst = resolve_inst(d->params, node, d->lo);
+            } catch (const Unsupported&) {
+                continue;
+            } catch (const CompileError& e) {
+                if (e.resp == Responsibility::OurBug) throw;
+                continue;
+            }
+            bool ok = true;
+            for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
+                if (!compatible(static_type(*node.args[inst.rt_arg[i]]), inst.rt_types[i])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) return d;
+            continue;
+        }
+        auto types = decl_param_types(*d);
+        if (!types || types->size() != node.args.size()) continue;
+        bool ok = true;
+        for (std::size_t i = 0; i < types->size(); ++i) {
+            if (!compatible(static_type(*node.args[i]), (*types)[i])) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) return d;
+    }
+    return nullptr;
+}
+
+/* `lower.cc` 的 `resolve_inst`，逐句照搬（含「`<U8>` 不占运行期槽」与 `#v` 后缀）。
+ * 区别只有一处：签名那段要读 `params[i]->typ`，缺类型时先报错而不是解引用空指针。 */
+Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, const CallExpr& node,
+                            int line) {
+    Inst out;
+    std::vector<std::size_t> tp; /* 类型参数的声明位置（按声明序） */
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        if (params[i]->typ != nullptr && is_type_param(*params[i]->typ)) tp.push_back(i);
+    }
+    if (tp.empty()) {
+        if (node.args.size() != params.size() || !node.type_args.empty()) {
+            throw Unsupported("实参个数对不上", line);
+        }
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            if (params[i]->typ == nullptr) {
+                throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+            }
+            out.rt_params.push_back(params[i].get());
+            out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
+            out.rt_arg.push_back(i);
+        }
+        return out;
+    }
+
+    /* 写法一（类型实参，不占运行期槽）：`g(a, <U8>)` —— 实参个数 = 声明参数 - 类型参数个数。
+     * 写法二（值实参，推型）：`g(load(<U8>, p))` —— 实参个数 = 声明参数个数。 */
+    const bool by_value = node.args.size() == params.size();
+    if (!by_value && node.args.size() + tp.size() != params.size()) {
+        throw Unsupported("泛型实参个数对不上", line);
+    }
+    if (node.type_args.size() > tp.size()) throw Unsupported("类型实参个数超过类型参数", line);
+    if (tp.size() > 1 && !node.type_args.empty() && node.type_args.size() != tp.size()) {
+        throw Unsupported("类型实参个数少于类型参数", line);
+    }
+
+    std::size_t ti = 0; /* 下一个待定类型的类型参数（声明序） */
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        const bool is_tp = params[i]->typ != nullptr && is_type_param(*params[i]->typ);
+        if (!is_tp) {
+            if (params[i]->typ == nullptr) {
+                throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+            }
+            out.rt_params.push_back(params[i].get());
+            out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
+            out.rt_arg.push_back(by_value ? i : i - (ti > tp.size() ? tp.size() : ti));
+            continue;
+        }
+        TyRef bound = nullptr;
+        if (ti < node.type_args.size()) {
+            bound = ty_of_ref(*node.type_args[ti], line);
+        } else if (by_value) {
+            bound = static_type(*node.args[i]);
+            if (!bound) throw Unsupported("推不出类型 " + params[i]->name, line);
+        } else {
+            throw Unsupported("类型实参没给 " + params[i]->name, line);
+        }
+        out.bind_order.push_back(bound);
+        out.binds[params[i]->name] = bound;
+        ++ti;
+        if (by_value) {
+            out.rt_params.push_back(params[i].get());
+            out.rt_types.push_back(bound);
+            out.rt_arg.push_back(i);
+        }
+    }
+    /* 同一 (函数, 实参) 只实例化一次的判据就是这个串（接口 §1）：缓存键与函数名的 `$` 后缀共用。 */
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        if (i != 0) out.sig += ",";
+        if (params[i]->typ == nullptr) {
+            throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+        }
+        if (is_type_param(*params[i]->typ)) {
+            out.sig += "@" + ty_key(*out.binds.at(params[i]->name));
+        } else {
+            out.sig += ty_key(*ty_of_ref(*params[i]->typ, line));
+        }
+    }
+    if (by_value) out.sig += "#v";
+    return out;
+}
+
+std::optional<std::vector<TyRef>> Analyzer::decl_param_types(const FunctionDef& d) {
+    std::vector<TyRef> out;
+    for (const auto& p : d.params) {
+        if (p->typ == nullptr) return std::nullopt;         /* 重载解析里这会跳过这个候选 */
+        if (is_type_param(*p->typ)) return std::nullopt;    /* 泛型走 `resolve_inst` */
+        out.push_back(ty_of_ref(*p->typ, d.lo));
+    }
+    return out;
+}
+
+/* 返回类型写成类型参数（`@Size` / `@Type`）时取**第一个**类型参数的绑定（`lower.cc` 同）。 */
+TyRef Analyzer::inst_ret_type(const TypeRef* ret, const Inst& inst, int line) {
+    if (ret == nullptr) return ty_void();
+    if (!is_type_param(*ret)) return ty_of_ref(*ret, line);
+    if (inst.bind_order.empty()) throw Unsupported("返回类型 " + ret->name + " 没有绑定", line);
+    return inst.bind_order.front();
+}
+
+TyRef Analyzer::defstmt_ret(const DefStmt& st) {
+    return st.ret != nullptr ? ty_of_ref(*st.ret, st.src_line) : ty_void();
+}
+
+std::vector<TyRef> Analyzer::defstmt_params(const DefStmt& st) {
+    std::vector<TyRef> out;
+    for (const auto& p : st.params) {
+        if (p->typ == nullptr) throw Unsupported("参数 " + p->name + " 缺类型", p->src_line);
+        out.push_back(ty_of_ref(*p->typ, p->src_line));
+    }
+    return out;
+}
+
+/* `lower.cc` 的 `static_type`：只用于**重载粗判**与推型，拿不到就返回 `nullptr`（不猜）。
+ * `CompileError` 也当「拿不到」（`OurBug` 不吞：内部不自洽不能伪装成「推不出类型」）。 */
+TyRef Analyzer::static_type(const Node& node) {
+    try {
+        switch (node.kind) {
+            case NK::Literal: {
+                const auto& n = static_cast<const LiteralExpr&>(node);
+                if (n.lit_kind == "int") return ty_i64();
+                if (n.lit_kind == "str" || n.lit_kind == "template") return ty_str();
+                return nullptr;
+            }
+            case NK::Ident: {
+                const auto& n = static_cast<const IdentExpr&>(node);
+                /* `true`/`false` 不是绑定（只在 `e_ident` 里特判）：少了这两行，
+                 * `ui_set_hidden("x", false)` 这种实参的重载粗判拿不到 Bool → 无候选。 */
+                if (n.name == "true" || n.name == "false") return ty_bool();
+                if (const Binding* b = lookup(n.name)) {
+                    if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
+                        return b->ty;
+                    }
+                    if (b->kind == Binding::Kind::Const) return b->ty;
+                    return nullptr;
+                }
+                auto g = mod_->globals.find(n.name);
+                if (g != mod_->globals.end()) return g->second.ty;
+                auto pg = prefix_globals().find(n.name);
+                if (pg != prefix_globals().end()) return pg->second.ty;
+                auto em = mod_->enum_member.find(n.name);
+                if (em != mod_->enum_member.end()) return mod_->enums.at(em->second.first);
+                auto cst = mod_->consts.find(n.name);
+                if (cst != mod_->consts.end()) return cst->second.ty;
+                auto hc = hash_consts().find(n.name);
+                if (hc != hash_consts().end()) return hc->second.ty;
+                return nullptr;
+            }
+            case NK::Cast: {
+                const auto& n = static_cast<const CastExpr&>(node);
+                return ty_of_ref(*n.target, n.src_line);
+            }
+            case NK::Unary: {
+                const auto& n = static_cast<const UnaryExpr&>(node);
+                return n.op == "!" ? ty_bool() : static_type(*n.expr);
+            }
+            case NK::Binary: {
+                const auto& n = static_cast<const BinaryExpr&>(node);
+                if (is_cmp(n.op) || n.op == "&&" || n.op == "||") return ty_bool();
+                const TyRef a = static_type(*n.left);
+                const TyRef b = static_type(*n.right);
+                if (a && b) return unify(a, b, n.src_line);
+                return nullptr;
+            }
+            case NK::Call: {
+                const auto& n = static_cast<const CallExpr&>(node);
+                if (const auto* mem = as<MemberExpr>(n.callee.get())) {
+                    if (mem->name == "len") return ty_i64();
+                    if (mem->name == "ms") return ty_time();
+                    return nullptr;
+                }
+                const auto* id = as<IdentExpr>(n.callee.get());
+                if (id == nullptr) return nullptr;
+                const std::string& name = id->name;
+                if ((name == "load" || name == "raw_cast") && !n.type_args.empty()) {
+                    return ty_of_ref(*n.type_args[0], n.src_line);
+                }
+                /* `load(type_of(x), p)`：类型实参写成类型值表达式时 `type_args` 是空的。 */
+                if (name == "load" && n.type_args.empty() && n.args.size() == 2) {
+                    try {
+                        return type_value_of(*n.args[0], n.src_line);
+                    } catch (const Unsupported&) {
+                        return nullptr;
+                    }
+                }
+                if ((name == "min" || name == "max" || name == "asr" || name == "clz") &&
+                    !n.args.empty()) {
+                    return static_type(*n.args[0]);
+                }
+                if (name == "sleep" || name == "memory_clear" || name == "memory_copy" ||
+                    name == "thread_exit") {
+                    return ty_void();
+                }
+                if (name == "get_time") return ty_time();
+                if (name == "size") return ty_i64();
+                if (const FunctionDef* d = pick_def(name, n)) {
+                    const Inst inst = resolve_inst(d->params, n, d->lo);
+                    return inst_ret_type(d->ret.get(), inst, d->lo);
+                }
+                if (const Binding* b = lookup(name)) {
+                    if (b->kind == Binding::Kind::Def) return defstmt_ret(*b->def);
+                }
+                auto rd = mod_->root_defs.find(name);
+                if (rd != mod_->root_defs.end()) return defstmt_ret(*rd->second);
+                return nullptr;
+            }
+            case NK::Member: {
+                const auto& n = static_cast<const MemberExpr&>(node);
+                const TyRef obj = static_type(*n.obj);
+                if (obj && obj->kind == TyKind::Struct) {
+                    auto st = mod_->structs.find(obj->name);
+                    if (st != mod_->structs.end()) {
+                        for (const HirField& f : st->second.fields) {
+                            if (f.name == n.name) return f.ty;
+                        }
+                    }
+                }
+                return nullptr;
+            }
+            case NK::Index: {
+                const auto& n = static_cast<const IndexExpr&>(node);
+                const TyRef obj = static_type(*n.obj);
+                if (obj && (obj->kind == TyKind::Array || obj->kind == TyKind::Str)) return obj->elem;
+                return nullptr;
+            }
+            case NK::CompositeLit: {
+                const auto& n = static_cast<const CompositeLitExpr&>(node);
+                return ty_of_ref(*n.typ, n.src_line);
+            }
+            case NK::Template: return ty_str();
+            default: return nullptr;
+        }
+    } catch (const Unsupported&) {
+        return nullptr;
+    } catch (const CompileError& e) {
+        if (e.resp == Responsibility::OurBug) throw;
+        return nullptr;
+    }
+}
+
+/* 类型值只出现在类型实参位置，语料里唯一形态是 `load(type_of(x), p)`。 */
+TyRef Analyzer::type_value_of(const Expr& node, int line) {
+    const auto* call = as<CallExpr>(&node);
+    if (call == nullptr) throw Unsupported("类型值形态", line);
+    const auto* id = as<IdentExpr>(call->callee.get());
+    if (id == nullptr || id->name != "type_of" || call->args.size() != 1) {
+        throw Unsupported("类型值形态", line);
+    }
+    return operand_type(*call->args[0], line);
+}
+
+/* 类型参数不占运行期槽（`g(a, <U8>)` 那种写法），所以它在作用域里**没有**变量绑定 ——
+ * 名字 → 具体类型只能从本实例的类型环境（`ty_binds_`）拿。 */
+TyRef Analyzer::operand_type(const Expr& node, int line) {
+    const auto* id = as<IdentExpr>(&node);
+    if (id != nullptr) {
+        auto it = ty_binds_.find(id->name);
+        if (it != ty_binds_.end()) return it->second;
+    }
+    const TyRef ty = static_type(node);
+    if (!ty) throw Unsupported("拿不到类型", line);
+    return ty;
+}
+
+/* 实例键里 `$` 后面那一段。泛型 def 用 `resolve_inst` 算好的签名；**非泛型 def 的 `inst.sig`
+ * 恒为空串**（`resolve_inst` 在无类型参数时提前返回），只按名字做键会把同名重载折成一个实例
+ * —— 语料里 `get_component_count()` 与 `get_component_count(t)` 就是这种名字。所以重载集里补上
+ * 声明参数类型：键的格式不变（仍是 `<名字>$<实参串>`），挑中的那一个重载的形参类型就是实参类型。
+ * 声明参数类型完全相同的两个同名 def 仍会折成一个 —— 静态解析也只会挑到第一个（`pick_def`）。 */
+std::string Analyzer::inst_sig(const FunctionDef& d, const Inst& inst) {
+    if (!inst.sig.empty()) return inst.sig;
+    const auto set = mod_->defs.find(d.name);
+    if (set == mod_->defs.end() || set->second.size() < 2) return std::string();
+    std::string out;
+    for (std::size_t i = 0; i < d.params.size(); ++i) {
+        if (i != 0) out += ",";
+        if (d.params[i]->typ == nullptr) {
+            throw Unsupported("参数 " + d.params[i]->name + " 缺类型", d.lo);
+        }
+        out += ty_key(*ty_of_ref(*d.params[i]->typ, d.lo));
+    }
+    return out;
+}
+
+int Analyzer::instantiate_top(const FunctionDef& d, const Inst& inst, const Closure& cl) {
+    const std::string cap_sig = capture_sig(cl.caps);
+    const std::string sig = inst_sig(d, inst);
+    std::string key = d.name;
+    if (!sig.empty()) key += "$" + sig;
+    if (!cap_sig.empty()) key += "|" + cap_sig;
+    auto hit = mod_->instance.find(key);
+    if (hit != mod_->instance.end()) return hit->second;
+
+    int cap_index = -1;
+    if (!cap_sig.empty()) {
+        int& seen = mod_->cap_instances[{d.name, d.lo}];
+        /* 上限照搬现状（`lower.cc` 的 64）：互调时按捕获签名各发一份实例，理论上有限、代价可能
+         * 很长。报错回退到参考产物，比在这里无界发函数安全。
+         * 注：它拦的不只是真发散 —— 捕获签名按 (名字, 类型) 区分，所以同一个 def 在 65 个不同
+         * 类型的同名局部上被调用也会到这里。 */
+        if (seen >= 64) {
+            throw CompileError(Responsibility::Unimplemented, Stage::Sema, span_at(d.lo),
+                               d.name + " 的闭包实例数不收敛（" + cap_sig + "）");
+        }
+        cap_index = seen++;
+    }
+
+    HirFunc fn;
+    fn.key = key;
+    /* 逻辑名照 §2b：`main` / `f$u64`。`$c<n>` / `#L<lo>` / `tc_main` 是 codegen 派生的符号名，
+     * sema 不拼（拼了等于把产物细节钉进 HIR）；`cap_index` 只给编号。 */
+    fn.name = d.name;
+    if (!inst.sig.empty()) fn.name += "$" + inst.sig;
+    fn.cap_index = cap_index;
+    fn.ret = inst_ret_type(d.ret.get(), inst, d.lo);
+    for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
+        fn.params.push_back(HParam{inst.rt_params[i]->name, inst.rt_types[i]});
+    }
+    fn.caps = cl.caps;
+    const int index = static_cast<int>(mod_->hir.funcs.size());
+    mod_->hir.funcs.push_back(std::move(fn));
+    /* **登记之后**才分析它的体：自引用/互调回头再调这个键时直接复用下标（不收敛的只有
+     * 捕获签名一直在变的链路，那条由上面 64 上限收住）。 */
+    mod_->instance[key] = index;
+    Analyzer child(*mod_);
+    child.run_top_def(d, inst, cl.caps, index);
+    return index;
+}
+
+int Analyzer::instantiate_nested(const DefStmt& st, const std::vector<TyRef>& param_tys,
+                                 const Closure& cl, const std::string& owner_lex) {
+    /* 嵌套 def 的键 = **词法**归属 + def 名 + 源码行 + 捕获签名。前三样只由声明位置决定：
+     * 换成「调用它的那个实例的键」时，自递归每绕一圈键就长一段、实例无界增长（实测栈溢出），
+     * 而词法键让递归与互调都收敛到同一个实例。
+     * 抓获签名跟着键走：同一个嵌套 def 在两个捕获面不同的调用点发两份实例（现状的键里没有捕获面，
+     * 会复用第一个实例 —— 第二次调用传进去的指针个数对不上，那是待爆的形态，不复现）。 */
+    const std::string lex = lex_of(owner_lex, st);
+    const std::string cap_sig = capture_sig(cl.caps);
+    std::string key = lex;
+    if (!cap_sig.empty()) key += "|" + cap_sig;
+    auto hit = mod_->instance.find(key);
+    if (hit != mod_->instance.end()) return hit->second;
+    /* 与顶层实例同一道上限：词法键已经让正当的递归收敛，能撞上这条的只有捕获签名一直在变的
+     * 链路 —— 报错（回退到参考产物）比在这里无界发函数安全。 */
+    if (!cap_sig.empty() && mod_->cap_instances[{st.name, st.src_line}] >= 64) {
+        throw CompileError(Responsibility::Unimplemented, Stage::Sema, span_at(st.src_line),
+                           st.name + " 的闭包实例数不收敛（" + cap_sig + "）");
+    }
+
+    HirFunc fn;
+    fn.key = key;
+    /* 逻辑名只给 def 自己的名字：`owner + "$" + name + "#L<line>"` 是 codegen 按 §2b 补漏 1
+     * 派的符号名，这里再拼一遍就把 owner 前缀叠两次了。 */
+    fn.name = st.name;
+    fn.ret = defstmt_ret(st);
+    for (std::size_t i = 0; i < st.params.size() && i < param_tys.size(); ++i) {
+        fn.params.push_back(HParam{st.params[i]->name, param_tys[i]});
+    }
+    fn.caps = cl.caps;
+    const int index = static_cast<int>(mod_->hir.funcs.size());
+    mod_->hir.funcs.push_back(std::move(fn));
+    mod_->instance[key] = index;
+    if (!cap_sig.empty()) ++mod_->cap_instances[{st.name, st.src_line}];
+    Analyzer child(*mod_);
+    child.run_nested_def(st, param_tys, cl, lex, index);
+    return index;
+}
+
+/* 子上下文：一个顶层 def 实例的体。作用域 = 形参 → 捕获（形参同名的不再捕），类型环境 = 本实例
+ * 的泛型绑定。`lower.cc` 的 `ensure_def_fn` 逐句对应。 */
+void Analyzer::run_top_def(const FunctionDef& d, const Inst& inst,
+                           const std::vector<HCapture>& caps, int index) {
+    ret_ = inst_ret_type(d.ret.get(), inst, d.lo);
+    /* 词法键只取 def 名（不含重载区分、也不含实例序号）：体里嵌套 def 的键靠它 + 名字@行 定位，
+     * 同一个 def 的不同实例必须给出同一个前缀。 */
+    cur_key_ = d.name;
+    ty_binds_ = inst.binds;
+    push_scope();
+    for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
+        bind_local(inst.rt_params[i]->name, inst.rt_types[i]);
+    }
+    for (const HCapture& c : caps) {
+        bool is_param = false;
+        for (const auto& p : d.params) is_param = is_param || p->name == c.name;
+        if (is_param) continue;
+        bind_capture(c.name, c.ty, c.index);
+    }
+    HNode body = block(*d.body);
+    pop_scope();
+    mod_->hir.funcs[static_cast<std::size_t>(index)].body = std::move(body);
+}
+
+/* 子上下文：一个嵌套 def 实例的体。先绑被摊平进来的兄弟 def，再绑形参与捕获 —— 同名时变量优先
+ * （调用仍能按名查到 def，`call_named` 会往 `root_defs` 再找一遍）。 */
+void Analyzer::run_nested_def(const DefStmt& st, const std::vector<TyRef>& param_tys,
+                              const Closure& cl, const std::string& lex, int index) {
+    ret_ = defstmt_ret(st);
+    cur_key_ = lex;
+    push_scope();
+    for (const auto& d : cl.defs) bind_def(d.first->name, d.first, d.second);
+    for (std::size_t i = 0; i < st.params.size() && i < param_tys.size(); ++i) {
+        bind_local(st.params[i]->name, param_tys[i]);
+    }
+    for (const HCapture& c : cl.caps) {
+        bool is_param = false;
+        for (const auto& p : st.params) is_param = is_param || p->name == c.name;
+        if (is_param) continue;
+        bind_capture(c.name, c.ty, c.index);
+    }
+    HNode body = block(*st.body);
+    pop_scope();
+    mod_->hir.funcs[static_cast<std::size_t>(index)].body = std::move(body);
+}
+
+Closure Analyzer::captures_of(const DefStmt& st, const std::string& owner_lex) {
+    Closure out;
+    std::set<const DefStmt*> visiting;
+    visiting.insert(&st); /* 兄弟 def 互调会绕回来，先把自己放进环里 */
+    std::vector<std::string> params;
+    for (const auto& p : st.params) params.push_back(p->name);
+    collect_captures(*st.body, params, false, out, visiting, lex_of(owner_lex, st));
+    return out;
+}
+
+/* 顶层 def 的捕获面：算的是「它（连同它体里按名调用的兄弟 def）真正用到、而调用点绑在栈槽/捕获
+ * 上的名字」。一个 def 的自由名全落在模块级（全局 / const / 枚举 / 前缀 / 其它 def）时结果是空的
+ * ⇒ 签名与应用面都不变。`into_own_defs`：体里**自己声明**的嵌套 def 也要往下摊平（110：
+ * root → `mode_run` → `handle_test_result` → `get_input_switched` 的 `seen`）。 */
+Closure Analyzer::def_captures(const FunctionDef& d) {
+    Closure out;
+    std::set<const DefStmt*> visiting;
+    std::vector<std::string> params;
+    for (const auto& p : d.params) params.push_back(p->name);
+    /* 归属段用 def 名，`run_top_def` 的 `cur_key_` 必须是同一个串。 */
+    collect_captures(*d.body, params, true, out, visiting, d.name);
+    return out;
+}
+
+/* `lower.cc` 的 `collect_captures` 逐句照搬（连两遍遍历的形状一起）。
+ *
+ * 嵌套 def 体里引用了哪些**外层局部**（按引用捕获）：自己的参数、`var`/`let`/内层 `def` 都算
+ * 「自己的」，同名遮蔽外层 —— 不往内层 `DefStmt` 的体里钻：内层 def 真被调用时再算它自己的捕获，
+ * 那时本函数的参数/局部/捕获都已经在作用域里。
+ * 但**兄弟 def**（本函数体里按名调用、定义在外面的嵌套 def）必须在这里就摊平：原版编译器按
+ * **最外层调用点**解析 free variable，而我们把它生成成一个真函数，它的捕获只能由**调用它的
+ * 那一层**带进来（006：`handle_test_result` 调 `halt`，`halt` 用 `run_sim` 体的
+ * `burst_target_cycle` —— 后者得先被 `handle_test_result` 捕获、再原样传给 `halt`）。
+ *
+ * 为什么用的是**本 analyzer 的** `lookup`：`lookup` 看到的是调用点的作用域 —— 这正是原版
+ * 「自由名在调用点解析」的那条实测（`docs/facts/semantics.md` 的「嵌套 def 的自由变量按调用点
+ * 解析」）。所以在调用点的 analyzer 上调它，不要挪到被调者的上下文里。 */
+void Analyzer::collect_captures(const Block& body, const std::vector<std::string>& params,
+                                bool into_own_defs, Closure& out,
+                                std::set<const DefStmt*>& visiting, const std::string& owner_lex) {
+    std::set<std::string> own(params.begin(), params.end());
+    std::map<std::string, const DefStmt*> own_defs;
+
+    std::function<void(const Node&)> collect = [&](const Node& n) {
+        if (n.kind == NK::VarDecl) own.insert(static_cast<const VarDeclStmt&>(n).name);
+        if (n.kind == NK::Def) {
+            const auto& d = static_cast<const DefStmt&>(n);
+            own.insert(d.name);
+            if (into_own_defs) own_defs.emplace(d.name, &d);
+        }
+        for_each_child(n, collect);
+    };
+    collect(body);
+
+    std::function<void(const Node&)> rec = [&](const Node& n) {
+        if (n.kind == NK::Def) return; /* 内层 def 有自己的作用域 */
+        if (n.kind == NK::Ident) {
+            const auto& id = static_cast<const IdentExpr&>(n);
+            const DefStmt* target = nullptr;
+            std::string target_owner;
+            if (own.count(id.name) == 0) {
+                if (const Binding* b = lookup(id.name)) {
+                    if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
+                        bool known = false;
+                        for (const auto& c : out.caps) known = known || c.name == id.name;
+                        if (!known) {
+                            out.caps.push_back(HCapture{id.name, b->ty,
+                                                        static_cast<int>(out.caps.size())});
+                        }
+                        return;
+                    }
+                    if (b->kind == Binding::Kind::Def) {
+                        target = b->def;
+                        target_owner = b->owner_lex;
+                    }
+                } else {
+                    /* 程序根语句树里的嵌套 def 不在词法作用域里（`call_named` 走 `root_defs`
+                     * 那条路），这里用同一张表认名字，否则它捕获的外层变量传不进去。 */
+                    auto rd = mod_->root_defs.find(id.name);
+                    if (rd != mod_->root_defs.end()) {
+                        target = rd->second;
+                        target_owner = "main";
+                    }
+                }
+            }
+            if (target == nullptr && into_own_defs) {
+                /* 本函数体里自己声明的嵌套 def：归属就是本层。 */
+                auto od = own_defs.find(id.name);
+                if (od != own_defs.end()) {
+                    target = od->second;
+                    target_owner = owner_lex;
+                }
+            }
+            if (target != nullptr && visiting.insert(target).second) {
+                bool known = false;
+                for (const auto& d : out.defs) known = known || d.first == target;
+                if (!known) out.defs.emplace_back(target, target_owner);
+                std::vector<std::string> inner_params;
+                for (const auto& p : target->params) inner_params.push_back(p->name);
+                collect_captures(*target->body, inner_params, into_own_defs, out, visiting,
+                                 lex_of(target_owner, *target));
+            }
+        }
+        for_each_child(n, rec);
+    };
+    rec(body);
+}
+
 /* ---------------------------------------------------------------- 常量求值 */
 
 /* `lower.cc` 的 `const_value`：常量求值失败 = 「这个初始化式不是常量」，不是错误本身。
@@ -1042,19 +2060,19 @@ HNode Analyzer::cv(const Node& node) {
             if (const Binding* b = lookup(n.name)) {
                 if (b->kind == Binding::Kind::Const) return const_node(b->ty, b->bits, n.src_line);
             }
-            auto c = consts_.find(n.name);
-            if (c != consts_.end()) return const_node(c->second.ty, c->second.bits, n.src_line);
-            auto em = enum_member_.find(n.name);
-            if (em != enum_member_.end()) {
-                return const_node(enums_.at(em->second.first),
+            auto c = mod_->consts.find(n.name);
+            if (c != mod_->consts.end()) return const_node(c->second.ty, c->second.bits, n.src_line);
+            auto em = mod_->enum_member.find(n.name);
+            if (em != mod_->enum_member.end()) {
+                return const_node(mod_->enums.at(em->second.first),
                                   static_cast<uint64_t>(em->second.second), n.src_line);
             }
             auto hc = hash_consts().find(n.name);
             if (hc != hash_consts().end()) {
                 return const_node(hc->second.ty, hc->second.value, n.src_line);
             }
-            auto rc = root_consts_.find(n.name);
-            if (rc != root_consts_.end()) return root_const_value(*rc->second);
+            auto rc = mod_->root_consts.find(n.name);
+            if (rc != mod_->root_consts.end()) return root_const_value(*rc->second);
             throw Unsupported("名字 " + n.name, n.src_line);
         }
         case NK::Cast: {
@@ -1157,6 +2175,9 @@ void Analyzer::statement(HNode& parent, const Stmt& st) {
         case NK::Break:
             break_stmt(parent, static_cast<const BreakStmt&>(st));
             return;
+        case NK::Def:
+            def_stmt(parent, static_cast<const DefStmt&>(st));
+            return;
         default:
             throw Unsupported("语句形态 " + std::string(ast_kind_name(st.kind)), st.src_line);
     }
@@ -1224,7 +2245,7 @@ void Analyzer::assign_stmt(HNode& parent, const AssignStmt& st) {
  */
 
 /* `lower.cc` 的 `in_scope_const`。判定三档（U-L14 §0）：
- *   ① 整单元预扫的名字表（`in_scope_names_`，与引用点位置无关、也与自己裁剪掉的块无关）
+ *   ① 整单元预扫的名字表（`mod_->in_scope_names`，与引用点位置无关、也与自己裁剪掉的块无关）
  *   ② 词法作用域（参数 / 局部 / 同体嵌套 def）—— 本步只有 `lookup`，没有 def
  *   ③ 前缀（stdlib）的名字 —— `def` 与全局都算；**内建不算**（P4/P5）
  * 编译期常量的查询串带不带 `#` 都算（V2/V2b），所以两个方向都查一遍。 */
@@ -1238,10 +2259,10 @@ std::optional<bool> Analyzer::in_scope_const(const Expr& cond) {
         user_error("in_scope() 的参数不是字符串字面量", cond.src_line);
     }
     const std::string& t = arg->text;
-    if (in_scope_names_.count(t) != 0) return true;
+    if (mod_->in_scope_names.count(t) != 0) return true;
     if (t.empty() || t[0] != '#') {
-        if (in_scope_names_.count('#' + t) != 0) return true;
-    } else if (in_scope_names_.count(t.substr(1)) != 0) {
+        if (mod_->in_scope_names.count('#' + t) != 0) return true;
+    } else if (mod_->in_scope_names.count(t.substr(1)) != 0) {
         return true;
     }
     if (lookup(t) != nullptr) return true;
@@ -1394,10 +2415,12 @@ HNode Analyzer::lvalue_ident(const IdentExpr& id) {
     const std::string& name = id.name;
     if (const Binding* b = lookup(name)) {
         if (b->kind == Binding::Kind::Const) throw Unsupported("给常量 " + name + " 赋值", id.src_line);
+        if (b->kind == Binding::Kind::Def) throw Unsupported("给 def 名 " + name + " 赋值", id.src_line);
+        if (b->kind == Binding::Kind::Capture) return capture_node(b->ty, b->index, id.src_line);
         return local_node(name, b->ty, id.src_line);
     }
-    auto g = globals_.find(name);
-    if (g != globals_.end()) return global_node(g->second.id, g->second.ty, id.src_line);
+    auto g = mod_->globals.find(name);
+    if (g != mod_->globals.end()) return global_node(g->second.id, g->second.ty, id.src_line);
     if (prefix_globals().count(name) != 0) {
         const GlobalRef pg = prefix_global(name, id.src_line);
         return global_node(pg.id, pg.ty, id.src_line);
@@ -1428,8 +2451,8 @@ HNode Analyzer::member_place(const MemberExpr& mem) {
         unimplemented("字段访问用在 " + std::string(ty_kind_name(base.ty->kind)) + " 上",
                       mem.src_line);
     }
-    auto st = structs_.find(base.ty->name);
-    if (st == structs_.end()) our_bug("struct " + base.ty->name + " 没有布局", mem.src_line);
+    auto st = mod_->structs.find(base.ty->name);
+    if (st == mod_->structs.end()) our_bug("struct " + base.ty->name + " 没有布局", mem.src_line);
     for (std::size_t i = 0; i < st->second.fields.size(); ++i) {
         const HirField& f = st->second.fields[i];
         if (f.name != mem.name) continue;
@@ -1459,6 +2482,22 @@ void Analyzer::bind_const(const std::string& name, TyRef ty, uint64_t bits) {
     scopes_.back()[name] = std::move(b);
 }
 
+void Analyzer::bind_capture(const std::string& name, TyRef ty, int index) {
+    Binding b;
+    b.kind = Binding::Kind::Capture;
+    b.ty = std::move(ty);
+    b.index = index;
+    scopes_.back()[name] = std::move(b);
+}
+
+void Analyzer::bind_def(const std::string& name, const DefStmt* def, const std::string& owner_lex) {
+    Binding b;
+    b.kind = Binding::Kind::Def;
+    b.def = def;
+    b.owner_lex = owner_lex;
+    scopes_.back()[name] = std::move(b);
+}
+
 const Analyzer::Binding* Analyzer::lookup(const std::string& name) const {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         auto f = it->find(name);
@@ -1471,7 +2510,8 @@ const Analyzer::Binding* Analyzer::lookup(const std::string& name) const {
 
 Hir analyze(const ModuleSource& src) {
     Hir hir;
-    Analyzer a(hir);
+    Module mod(hir, src);
+    Analyzer a(mod);
     a.run(src);
     return hir;
 }

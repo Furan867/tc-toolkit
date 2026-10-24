@@ -139,3 +139,9 @@
   实测：切 HIR 入口那次改了 `cli/` 与 `shell/simplexc_core.cc`，漏了 `shell/core_selftest.cc`；
   而它的头注释写着「用与 `simplexc_core.cc` 相同的链」，于是「两条路逐字节相同」那条断言**静默**变成了
   跨新旧路径比较 —— 98/98 照样过，所以没有任何信号暴露这个错位。
+- 别把 `host.py` 的 `detours.records` 为 0 读成「程序没调用系统 API」—— `Sleep`/`GetSystemTimePreciseAsFileTime` 归
+  `PACING` 集合，只进 `pacing` 计数、永不进 `records`。实测据此误判「一次 Sleep 都没调」，实际 35 万次，
+  顺着错误结论去查「程序卡在哪个非 Sleep 自旋」白花一轮。
+- 别在同一个 `uc_engine` 里换 blob 或改写已翻译过的地址 —— `uc_mem_write` **不清翻译缓存**，下一趟
+  `uc_emu_start` 会跑旧 TB。实测：写 sleep 段后换成 VirtualAlloc 段，结果 `clock` 又 +100 ms、`prec`
+  落在旧代码边界，最后 `UC_ERR_READ_UNMAPPED`。要么 `uc_ctl_flush_tb`，要么换新地址/新引擎。

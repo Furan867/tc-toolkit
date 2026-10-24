@@ -40,7 +40,7 @@ struct EnumSource {
 };
 
 struct ModuleSource {
-    const FunctionDef* label = nullptr;  /* 程序根（`run_sim:`，`form == "label"`）；空 → CompileFail */
+    const FunctionDef* label = nullptr;  /* 程序根（`run_sim:`，`form == "label"`）；空 → `CompileError{OurBug,…}` */
     std::vector<const FunctionDef*> defs;
     std::vector<const VarDeclStmt*> top_vars;  /* 顶层 var / const，按源码顺序 */
     std::vector<EnumSource> enums;
@@ -48,8 +48,8 @@ struct ModuleSource {
     std::string source_name;                   /* 只进报错文本 */
 };
 
-/* 失败抛 `sema::CompileError`（新代码；三轴：责任 / 阶段 / span，见 `errors.hh` 与方案 §2d）。
- * `CompileFail` 仍用于「内部失败 / 调用方把模块拼错了」这一类（旧分型，S3 再迁）。
+/* 失败抛 `sema::CompileError`（三轴：责任 / 阶段 / span，见 `errors.hh` 与方案 §2d）。
+ * `sema/` 已无旧分型（S3-B）—— 本模块的每一个抛点都是 `CompileError`。
  *
  * 本步收：程序根（`while`/`if`/`#if`/`switch`/`break`）+ 顶层 var/const + `type` 声明（enum /
  * struct）+ 整数/布尔/字符串/模板/标识符/一元/二元/比较/三目/`cast`/数组字面量/复合字面量/

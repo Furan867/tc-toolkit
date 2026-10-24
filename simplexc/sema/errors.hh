@@ -1,9 +1,8 @@
 /* sema/errors.hh —— 编译期错误的分型与诊断条目。
  *
- * 两代模型并存，`Unsupported`/`CompileFail` 那一代是①b 从旧 `lower.hh` 原样搬来的
- * （当时用 using 引入 `simplexc::lower` 让调用点一行不用改；旧 lowering 删掉后，改由
- * `codegen/module_build.hh` 引回 `simplexc::lower`，因为 `build_module` 的抛点在那里）；
- * `CompileError` 是方案 §2d 定的新模型，**新写的代码只用它**，旧路径 S3 再迁。 */
+ * `Unsupported`/`CompileFail` 是①b 从旧 `lower.hh` 原样搬来的旧分型，现在**只剩壳/CLI 的 catch
+ * 还在用**（`shell/simplexc_core.cc`、`cli/simplexc_cli.cc` 的 `lw::Unsupported`）；`sema/` 与
+ * `codegen/` 的抛点在 S3 已全部迁到 `CompileError`（方案 §2d 的三轴模型），新写的代码只用它。 */
 #pragma once
 
 #include <stdexcept>

@@ -161,7 +161,9 @@ LLVMTypeRef Codegen::ll_type(const Ty& ty) {
 }
 
 LLVMTypeRef Codegen::storage_ll(const Ty& ty) {
-    const unsigned n = static_cast<unsigned>(std::max(8, storage_bytes(ty) * 8));
+    /* `storage_ll` 只按类型算宽度，手上没有任何源码位置 —— 这一层的 `Void`/`Struct` 被 `storage_bytes`
+     * 拒绝时只能是 `Span{}`（26 个调用点里绝大多数是 `make_int(8,false)` 这类不会抛的构造）。 */
+    const unsigned n = static_cast<unsigned>(std::max(8, storage_bytes(ty, Span{}) * 8));
     auto it = int_types_.find(n);
     if (it != int_types_.end()) return it->second;
     LLVMTypeRef t = LLVMIntTypeInContext(ctx(), n);
@@ -307,6 +309,9 @@ const Binding* Codegen::lookup(const std::string& name) const {
 
 /* ================================================================ 值工具 */
 
+/* `llv()` 的「常量与指令都为空」只能是内部不变式失败（`V` 两个域同时空），而内部失败**本来
+ * 就没有「哪一行」可言** —— 所以这里是 `Span{}`，不是漏了。别给它补形参：58 个调用点都改
+ * 一遍也造不出位置来，S4 会把这条断言化（HIR 不变量一拦，它就不该可达）。 */
 LLVMValueRef Codegen::llv(const V& v) {
     if (v.ll != nullptr) return v.ll;
     if (!v.c) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "（内部）常量与指令都为空"};
@@ -436,7 +441,7 @@ std::pair<LLVMValueRef, TyRef> Codegen::lvalue(const sema::HNode& node) {
                 throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{line}, "下标用在 " + std::string(ty_kind_name(base.ty->kind)) + " 上"};
             }
             V idx = convert(e(node.kids[1]), ty_i64(), line);
-            const int step = storage_bytes(*base.ty->elem); /* 地址是字节地址（U-L1） */
+            const int step = storage_bytes(*base.ty->elem, Span{line}); /* 地址是字节地址（U-L1） */
             LLVMValueRef off =
                 LLVMBuildMul(cur_fn().bd, llv(idx), const_int(uint64_t(step)), "io");
             std::vector<LLVMValueRef> gi{off};
@@ -1379,7 +1384,7 @@ V Codegen::builtin_array(const sema::HNode& node) {
     if (count > (uint64_t{1} << 32)) {
         throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度 " + std::to_string(count) + " 太大"};
     }
-    const uint64_t payload = count * static_cast<uint64_t>(storage_bytes(*elem));
+    const uint64_t payload = count * static_cast<uint64_t>(storage_bytes(*elem, node.span));
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     const uint64_t header = count << 16;
     std::vector<LLVMValueRef> elems;
@@ -2070,7 +2075,7 @@ V Codegen::composite_literal(const sema::HNode& node) {
         return V::instr(agg, ty);
     }
     if (cur_fn().bd == nullptr || cur_fn().block == nullptr) {
-        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "复合字面量里的字段值不是编译期常量"};
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "复合字面量里的字段值不是编译期常量"};
     }
     LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().block);
     LLVMValueRef agg = LLVMConstNull(it->second);

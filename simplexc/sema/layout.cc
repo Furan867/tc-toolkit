@@ -52,11 +52,11 @@ StructLayout layout_struct(const std::string& name,
                                 "（U-L4 嵌套布局未验）");
         }
         int bytes = 0;
-        /* `storage_bytes` 是字节宽度的唯一实现，但它抛的是旧分型（`Unsupported`）——
-         * 这里是新旧模型的边界，就地翻成 `CompileError`，不让旧分型穿过 sema 的新代码。 */
+        /* 字段类型没有字节宽度（`None`）时 `storage_bytes` 抛 `CompileError`：这里就地换成
+         * 「哪个 struct 的哪个字段」，把位置从类型层抬回声明层（`layout_*` 本身没有 span）。 */
         try {
-            bytes = storage_bytes(*f.second);
-        } catch (const Unsupported&) {
+            bytes = storage_bytes(*f.second, Span{});
+        } catch (const CompileError&) {
             layout_error(0, "struct " + name + " 的字段 " + f.first + " 是 " +
                                 ty_kind_name(f.second->kind) + "（没有字节宽度）");
         }

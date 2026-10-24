@@ -68,7 +68,7 @@ void scan_type(const std::vector<std::string>& code_lines, const Decl& d, OwnedM
     const size_t l = lb == std::string::npos ? std::string::npos : text.find('[', lb);
     const size_t r = text.rfind(']');
     if (l == std::string::npos || r == std::string::npos || r < l) {
-      throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{d.lo}, "枚举声明看不懂：" + text};
+      throw CompileError{Responsibility::UserSource, Stage::Parse, Span{d.lo}, "枚举声明看不懂：" + text};
     }
     EnumDecl e;
     e.name = d.name;
@@ -86,7 +86,7 @@ void scan_type(const std::vector<std::string>& code_lines, const Decl& d, OwnedM
     const size_t l = text.find('{');
     const size_t r = text.rfind('}');
     if (l == std::string::npos || r == std::string::npos || r < l) {
-      throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{d.lo}, "结构声明看不懂：" + text};
+      throw CompileError{Responsibility::UserSource, Stage::Parse, Span{d.lo}, "结构声明看不懂：" + text};
     }
     StructDecl s;
     s.name = d.name;
@@ -117,7 +117,7 @@ void scan_type(const std::vector<std::string>& code_lines, const Decl& d, OwnedM
     out.ast.structs.push_back(std::move(s));
     return;
   }
-  throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{d.lo}, "type 声明形态（" + d.note + "）"};
+  throw CompileError{Responsibility::Unimplemented, Stage::Parse, Span{d.lo}, "type 声明形态（" + d.note + "）"};
 }
 
 /* 顶层 `var`/`const`：切出这个声明占的行上的 token，交给 parser 当一条语句解析
@@ -137,7 +137,7 @@ std::unique_ptr<VarDeclStmt> parse_top_var(const Frontend& fe, const Decl& d) {
   std::unique_ptr<Stmt> st = p.parse_statement();
   auto* vd = as<VarDeclStmt>(st.get());
   if (vd == nullptr) {
-    throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{d.lo}, "顶层 " + d.kind + " 不是 var/const 声明"};
+    throw CompileError{Responsibility::UserSource, Stage::Parse, Span{d.lo}, "顶层 " + d.kind + " 不是 var/const 声明"};
   }
   return std::unique_ptr<VarDeclStmt>(static_cast<VarDeclStmt*>(st.release()));
 }
@@ -167,7 +167,7 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
       out.ast.defs.push_back(out.keep(std::move(pd.fn)));
     } else if (d.kind == "label") {
       if (out.ast.label != nullptr) {
-        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{}, "一个文件里有两个顶层语句块（程序根只能有一个）"};
+        throw CompileError{Responsibility::UserSource, Stage::Parse, Span{}, "一个文件里有两个顶层语句块（程序根只能有一个）"};
       }
       ParsedDef pd = fe.parse_def(idx);
       out.ast.label = out.keep(std::move(pd.fn));

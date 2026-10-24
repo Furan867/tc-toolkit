@@ -120,7 +120,7 @@ const char* ty_kind_name(TyKind k) {
     return "?";
 }
 
-int storage_bytes(const Ty& ty) {
+int storage_bytes(const Ty& ty, Span span) {
     switch (ty.kind) {
         case TyKind::Ptr:
         case TyKind::Str:
@@ -130,7 +130,8 @@ int storage_bytes(const Ty& ty) {
         case TyKind::Int:
             return (ty.bits + 7) / 8;   /* U-L7 指示 4：写宽度 = 值类型的字节宽度 */
         default:
-            throw Unsupported("类型 " + std::string(ty_kind_name(ty.kind)) + " 没有字节宽度", 0);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, span,
+                               "类型 " + std::string(ty_kind_name(ty.kind)) + " 没有字节宽度"};
     }
 }
 /* 实例键 / 捕获签名用的类型拼写（方案 §2 决策 7 的**唯一**一处；旧 `lower.cc` 里还有一份
@@ -155,9 +156,11 @@ std::string ty_key(const Ty& ty) {
 /* `size(x)` 的单位是**位**（`docs/facts/semantics.md` 的泛型一条），宽度来源与 `storage_bytes`
  * 同一处。Enum 是唯一例外（U-L5：只有 1/2 字节两档，而它的存储宽度是 1 个机器字），所以它在
  * 这里报掉，不静默给一个错的 64。 */
-int size_bits(const Ty& ty) {
-    if (ty.kind == TyKind::Enum) throw Unsupported("size() 用在枚举上", 0);
-    return storage_bytes(ty) * 8;
+int size_bits(const Ty& ty, Span span) {
+    if (ty.kind == TyKind::Enum) {
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, span, "size() 用在枚举上"};
+    }
+    return storage_bytes(ty, span) * 8;
 }
 
 /* ================================================================ 常量折叠 */
@@ -170,7 +173,7 @@ int64_t as_signed(uint64_t x, int bits) {
     return static_cast<int64_t>(x);
 }
 
-uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty) {
+uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty, Span span) {
     const int bits = ty.kind == TyKind::Int ? ty.bits : 64;
     a &= mask_of(bits);
     b &= mask_of(bits);
@@ -204,19 +207,19 @@ uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty)
         }
         return (op == "/" ? q : r) & mask_of(bits);
     }
-    throw Unsupported("运算符 " + op, 0);
+    throw CompileError{Responsibility::OurBug, Stage::Sema, span, "运算符 " + op};
 }
 
-uint64_t fold_unary(const std::string& op, uint64_t a, const Ty& ty) {
+uint64_t fold_unary(const std::string& op, uint64_t a, const Ty& ty, Span span) {
     const int bits = ty.kind == TyKind::Int ? ty.bits : 64;
     a &= mask_of(bits);
     if (op == "-") return neg64(a) & mask_of(bits);
     if (op == "~") return (~a) & mask_of(bits);
     if (op == "+") return a;
-    throw Unsupported("一元运算符 " + op, 0);
+    throw CompileError{Responsibility::OurBug, Stage::Sema, span, "一元运算符 " + op};
 }
 
-uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty) {
+uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty, Span span) {
     const int bits = ty.kind == TyKind::Int ? ty.bits : 64;
     uint64_t x = a & mask_of(bits);
     uint64_t y = b & mask_of(bits);
@@ -230,7 +233,7 @@ uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty) {
         else if (op == "<=") r = sx <= sy;
         else if (op == ">") r = sx > sy;
         else if (op == ">=") r = sx >= sy;
-        else throw Unsupported("比较运算符 " + op, 0);
+        else throw CompileError{Responsibility::OurBug, Stage::Sema, span, "比较运算符 " + op};
     } else {
         if (op == "==") r = x == y;
         else if (op == "!=") r = x != y;
@@ -238,7 +241,7 @@ uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty) {
         else if (op == "<=") r = x <= y;
         else if (op == ">") r = x > y;
         else if (op == ">=") r = x >= y;
-        else throw Unsupported("比较运算符 " + op, 0);
+        else throw CompileError{Responsibility::OurBug, Stage::Sema, span, "比较运算符 " + op};
     }
     return r ? 1 : 0;
 }

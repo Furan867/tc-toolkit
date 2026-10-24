@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "span.hh"
+
 namespace simplexc {
 namespace sema {
 
@@ -52,11 +54,11 @@ TyRef make_array(TyRef elem);
 
 inline constexpr uint64_t kMask64 = ~uint64_t{0};
 uint64_t mask_of(int bits);
-int storage_bytes(const Ty& ty);   /* 内存字节宽度；Void / 未知抛 Unsupported */
+int storage_bytes(const Ty& ty, Span span);   /* 内存字节宽度；Void / 未知识 → 抛 `CompileError` */
 /* 实例键 / 捕获签名的类型拼写（决策 7 的唯一一处；②c 之前旧 `lower.hh` 里还有一份拷贝，已删）。 */
 std::string ty_key(const Ty& ty);
 /* `size(x)` 的返回值，单位 = 位（`docs/facts/semantics.md` 的泛型一条）。 */
-int size_bits(const Ty& ty);
+int size_bits(const Ty& ty, Span span);
 const char* ty_kind_name(TyKind k);
 inline bool is_int(const Ty& ty) { return ty.kind == TyKind::Int; }
 
@@ -64,9 +66,10 @@ inline bool is_int(const Ty& ty) { return ty.kind == TyKind::Int; }
  * 结果是**该类型的位模式**（`0 <= v < 2^bits`）。三条参考行为（见 `docs/facts/semantics.md`）：截断发生在运算
  * 结果上（U-L7）、`>>` 是 lshr 语义、除法的符号性看被除数且除数为 0 时商 0 余数为被除数。 */
 int64_t as_signed(uint64_t x, int bits);
-uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty);
-uint64_t fold_unary(const std::string& op, uint64_t a, const Ty& ty);
-uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty);   /* 0 / 1 */
+/* `span` 是抛点唯一的位置来源（这三条都是「运算符填错了」的内部守卫，调用点自己都有行号）。 */
+uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty, Span span);
+uint64_t fold_unary(const std::string& op, uint64_t a, const Ty& ty, Span span);
+uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty, Span span);   /* 0 / 1 */
 
 }  // namespace sema
 }  // namespace simplexc

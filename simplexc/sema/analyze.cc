@@ -28,7 +28,7 @@
  *      新对象，只有 `ty_i64()` 那几个单例是同一个指针）。
  *
  * **本步仍有东西明确不做**：调用 / `def` / 嵌套 def / 闭包 / 泛型实例化（S2b-3）。遇到就走
- * `Unsupported`（带行号），不猜语义、不静默丢。
+ * `CompileError{Unimplemented, Sema, …}`（带行号），不猜语义、不静默丢。
  *
  * 为什么 `While`/`Break` 在更早那一步就已经进来了：语料里程序根的**唯一**形态就是
  * `run_sim: while true { … }`（`decls.cc` 的 `match_label` 要求同一行跟 while/for/loop），
@@ -414,7 +414,7 @@ bool same_val_ty(const TyRef& a, const TyRef& b) {
 /* `cv` 里「必须是常量」的断言：与 `lower.cc` 的 `need_const` 同名同义（内部失败，不是用户错）。 */
 uint64_t need_const(const HNode& n, int line) {
     if (n.kind != HKind::Const || n.const_id >= 0) {
-        throw Unsupported("（内部）常量求值拿到非常量", line);
+        throw CompileError{Responsibility::OurBug, Stage::Sema, Span{line}, "（内部）常量求值拿到非常量"};
     }
     return n.const_bits;
 }
@@ -430,7 +430,7 @@ uint64_t global_init_bits(const HNode& v, int line) {
     if (v.kind == HKind::CompositeLit) {
         for (const HNode& field : v.kids) {
             if (field.kind != HKind::Const || field.const_bits != 0) {
-                throw Unsupported("顶层 var 的复合字面量初值不是全零", line);
+                throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "顶层 var 的复合字面量初值不是全零"};
             }
         }
         return 0;
@@ -438,14 +438,14 @@ uint64_t global_init_bits(const HNode& v, int line) {
     /* 串/数组初始化式折出来的是 `StrLit` / `ArrayLit` 节点（串池 id / 载荷），而 `init_bits` 只能放
      * 位模式 —— 所以这里显式报，不拿 0 充数（那就是静默的空指针/空数组）。语料里没有这种顶层
      * 初始化式（98/98 份只有整型、指针、`raw_cast` 与空聚合）。 */
-    throw Unsupported("顶层 var 的初值不是位模式（字符串/数组初值未接）", line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "顶层 var 的初值不是位模式（字符串/数组初值未接）"};
 }
 
 /* ---------------------------------------------------------------- 新代码的报错（方案 §2d）
  *
  * 两个薄封装：调用点写出来就是「哪一轴轴」而不是一个裸构造。三个责任档的判定见 `errors.hh`：
  * 认不出的源码构造 = `Unimplemented`，语法/类型错 = `UserSource`，内部不自洽 = `OurBug`。
- * 只在**本文件新写的那几个函数**里用；旧函数继续抛 `Unsupported`（一个函数只用一种）。 */
+ * 本文件的抛点已经全部是 `CompileError`（S3-B）；新加一处就按这三档挑一个，不再引入旧分型。 */
 [[noreturn]] void unimplemented(const std::string& detail, int line) {
     throw CompileError(Responsibility::Unimplemented, Stage::Sema, span_at(line), detail);
 }
@@ -699,7 +699,7 @@ private:
     TyRef ret_; /* 当前函数的返回类型（程序根是 `None`） */
     std::vector<std::map<std::string, Binding>> scopes_;
     /* `break` 的标签栈（与 `lower` 的 `breaks_` 同构）：空标签 = 最近的一层，带标签则向内找
-     * 第一个同名的外层循环；找不到就 `Unsupported`（不许落到外层循环上去）。
+     * 第一个同名的外层循环；找不到就报错（不许落到外层循环上去）。
      * `switch` 不进这个栈：`lower.cc` 的 `s_SwitchStmt` 把每个 case 拆成独立的 if，`break`
      * 一直是穿到外层循环的。 */
     std::vector<std::string> breaks_;
@@ -724,7 +724,7 @@ void Analyzer::run(const ModuleSource& src) {
     make_types(src);
     scan_scope_names(src); /* 里面把顶层 def（重载表）与根体嵌套 def 登记进 `Module` */
     make_top_level(src.top_vars);
-    if (src.label == nullptr) throw CompileFail("没有顶层语句块（程序根）");
+    if (src.label == nullptr) throw CompileError{Responsibility::OurBug, Stage::Sema, Span{}, "没有顶层语句块（程序根）"};
     scan_root_consts(*src.label->body);
     HNode body = block(*src.label->body);
     mod_->hir.main.body = std::move(body);
@@ -812,8 +812,7 @@ void Analyzer::make_top_level(const std::vector<const VarDeclStmt*>& top_vars) {
         }
         auto v = const_value(*st->init);
         if (!v) {
-            throw Unsupported("顶层 var " + st->name + " 的初始化式不是编译期常量（运行期初始化未做）",
-                              st->src_line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{st->src_line}, "顶层 var " + st->name + " 的初始化式不是编译期常量（运行期初始化未做）"};
         }
         HirGlobal g;
         g.name = st->name;
@@ -868,7 +867,7 @@ HNode Analyzer::const_decl_value(const VarDeclStmt& decl) {
     auto hit = mod_->const_by_decl.find(&decl);
     if (hit != mod_->const_by_decl.end()) return hit->second;
     auto v = const_value(*decl.init);
-    if (!v) throw Unsupported("编译期常量 " + decl.name + " 的初始化式不是常量", decl.src_line);
+    if (!v) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{decl.src_line}, "编译期常量 " + decl.name + " 的初始化式不是常量"};
     HNode ref = *v;
     if (v->kind != HKind::Const) {
         HirConst c;
@@ -888,7 +887,7 @@ HNode Analyzer::const_decl_value(const VarDeclStmt& decl) {
 /* `lower.cc` 的 `ty_of_name`。`mod_->enums` / `mod_->structs` 的查表位置与它一致（在 `U*`/`S*` 数字档
  * 之前）—— 枚举/struct 名与位宽拼写不能混。 */
 TyRef Analyzer::ty_of_name(const std::string& name, int line) {
-    if (!name.empty() && name[0] == '@') throw Unsupported("编译期类型参数 " + name, line);
+    if (!name.empty() && name[0] == '@') throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "编译期类型参数 " + name};
     if (name == "Int") return ty_i64();
     if (name == "Uint" || name == "Sint") return ty_i64(); /* 重载族约束（接口 §1） */
     if (name == "Bool") return ty_bool();
@@ -906,47 +905,46 @@ TyRef Analyzer::ty_of_name(const std::string& name, int line) {
         }
         if (digits) {
             const int bits = std::stoi(name.substr(1));
-            if (bits < 1 || bits > 64) throw Unsupported("位宽 " + name, line);
+            if (bits < 1 || bits > 64) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "位宽 " + name};
             return make_int(bits, name[0] == 'S');
         }
     }
-    throw Unsupported("类型 " + name, line);
+    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型 " + name};
 }
 
 TyRef Analyzer::ty_of_ref(const TypeRef& ref, int line) {
-    if (ref.at) throw Unsupported("编译期类型参数 " + ref.name, line);
+    if (ref.at) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "编译期类型参数 " + ref.name};
     if (ref.elem != nullptr) {
-        if (ref.name != "Arr") throw Unsupported("泛型类型 " + ref.name + "[…]", line);
+        if (ref.name != "Arr") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "泛型类型 " + ref.name + "[…]"};
         return make_array(ty_of_ref(*ref.elem, line));
     }
     return ty_of_name(ref.name, line);
 }
 
-/* `lower.cc` 的 `unify` 逐行照搬（含每一条 `Unsupported` 的文本）。 */
+/* `lower.cc` 的 `unify` 逐行照搬（含每一条错误文本）。 */
 TyRef Analyzer::unify(const TyRef& a, const TyRef& b, int line) {
     if (a->kind == TyKind::Ptr || b->kind == TyKind::Ptr) {
         if ((a->kind == TyKind::Ptr || a->kind == TyKind::Int) &&
             (b->kind == TyKind::Ptr || b->kind == TyKind::Int)) {
             return ty_ptr();
         }
-        throw Unsupported("指针与 " +
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "指针与 " +
                               std::string(ty_kind_name(a->kind == TyKind::Ptr ? b->kind : a->kind)) +
-                              " 混用",
-                          line);
+                              " 混用"};
     }
     if (a->kind == TyKind::Struct || b->kind == TyKind::Struct) {
-        throw Unsupported("struct 参与运算", line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "struct 参与运算"};
     }
     if (a->kind == TyKind::Array || b->kind == TyKind::Array) {
-        throw Unsupported("Arr 参与运算", line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "Arr 参与运算"};
     }
     if (a->kind == TyKind::Str || b->kind == TyKind::Str) {
         if (a->kind == TyKind::Str && b->kind == TyKind::Str) return ty_str();
-        throw Unsupported("Str 与整数混用", line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "Str 与整数混用"};
     }
     if (a->kind == TyKind::Enum && b->kind == TyKind::Enum) {
         if (a->name != b->name) {
-            throw Unsupported("枚举 " + a->name + " 与 " + b->name + " 混用", line);
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "枚举 " + a->name + " 与 " + b->name + " 混用"};
         }
         return a;
     }
@@ -956,9 +954,8 @@ TyRef Analyzer::unify(const TyRef& a, const TyRef& b, int line) {
         if (a->bits == b->bits) return a; /* 同宽不同符号性：以左操作数为准 */
         return a->bits > b->bits ? a : b;
     }
-    throw Unsupported("类型 " + std::string(ty_kind_name(a->kind)) + " 与 " +
-                          ty_kind_name(b->kind) + " 混用",
-                      line);
+    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型 " + std::string(ty_kind_name(a->kind)) + " 与 " +
+                          ty_kind_name(b->kind) + " 混用"};
 }
 
 /* `lower.cc` 的 `arith_ty`：整型**字面量**取窄的那一侧的位宽（字面量多态），只铺给 `+`。 */
@@ -994,7 +991,7 @@ HNode Analyzer::e(const Expr& node) {
         case NK::Template: return template_expr(static_cast<const TemplateExpr&>(node));
         case NK::Call: return e_call(static_cast<const CallExpr&>(node));
         default:
-            throw Unsupported("表达式形态 " + std::string(ast_kind_name(node.kind)), node.src_line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "表达式形态 " + std::string(ast_kind_name(node.kind))};
     }
 }
 
@@ -1006,7 +1003,7 @@ HNode Analyzer::e_literal(const LiteralExpr& node) {
     if (node.lit_kind == "str" || node.lit_kind == "template") {
         return string_literal(node.text, node.src_line);
     }
-    throw Unsupported("字面量 " + node.lit_kind, node.src_line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "字面量 " + node.lit_kind};
 }
 
 /* U-L10 的转义表（`docs/facts/semantics.md` 实测）：`\0 \a \f \v \e \n \r` 是标准含义，
@@ -1064,7 +1061,7 @@ HNode Analyzer::e_ident(const IdentExpr& node) {
             return capture_node(b->ty, b->index, node.src_line);
         }
         if (b->kind == Binding::Kind::Const) return const_ref(b->ty, b->bits, b->const_id, node.src_line);
-        throw Unsupported("def 名 " + name + " 当值用", node.src_line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "def 名 " + name + " 当值用"};
     }
     auto g = mod_->globals.find(name);
     if (g != mod_->globals.end()) return global_node(g->second.id, g->second.ty, node.src_line);
@@ -1089,7 +1086,7 @@ HNode Analyzer::e_ident(const IdentExpr& node) {
     }
     auto rc = mod_->root_consts.find(name);
     if (rc != mod_->root_consts.end()) return const_decl_value(*rc->second);
-    throw Unsupported("未定义的名字 " + name, node.src_line);
+    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "未定义的名字 " + name};
 }
 
 HNode Analyzer::e_cast(const CastExpr& node) {
@@ -1129,17 +1126,17 @@ HNode Analyzer::e_unary(const UnaryExpr& node) {
     }
     const HNode v = e(*node.expr);
     if (!is_int(*v.ty)) {
-        throw Unsupported("一元 " + node.op + " 用在 " + ty_kind_name(v.ty->kind), node.src_line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "一元 " + node.op + " 用在 " + ty_kind_name(v.ty->kind)};
     }
     auto c = pat_const(v);
-    if (c) return const_node(v.ty, fold_unary(node.op, *c, *v.ty), node.src_line);
+    if (c) return const_node(v.ty, fold_unary(node.op, *c, *v.ty, span_at(node.src_line)), node.src_line);
     HNode n = expr_node(HKind::Unary, v.ty, node.src_line);
     if (node.op == "-") {
         n.un_op = HUnOp::Neg;
     } else if (node.op == "~") {
         n.un_op = HUnOp::BitNot;
     } else {
-        throw Unsupported("一元运算符 " + node.op, node.src_line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "一元运算符 " + node.op};
     }
     n.kids.push_back(v);
     return n;
@@ -1173,7 +1170,7 @@ HNode Analyzer::compare(const std::string& op, const HNode& a, const HNode& b, i
     const HNode bv = convert(b, ty, line);
     auto ca = pat_const(av);
     auto cb = pat_const(bv);
-    if (ca && cb) return const_node(ty_bool(), fold_cmp(op, *ca, *cb, *ty), line);
+    if (ca && cb) return const_node(ty_bool(), fold_cmp(op, *ca, *cb, *ty, span_at(line)), line);
     HNode n = expr_node(HKind::Binary, ty_bool(), line);
     n.bin_op = cmp_bin_op(op);
     n.kids.push_back(av);
@@ -1196,12 +1193,12 @@ HNode Analyzer::str_compare(const std::string& op, const HNode& a, const HNode& 
 
 /* `lower.cc` 的 `binop`：`arith_ty` → 两侧 `convert` → 常量则 `fold_arith`（截断在运算结果上）。 */
 HNode Analyzer::binop(const std::string& op, const HNode& a, const HNode& b, int line) {
-    if (!is_arith(op)) throw Unsupported("运算符 " + op, line);
+    if (!is_arith(op)) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "运算符 " + op};
     const TyRef ty = arith_ty(a, b, op, line);
     const HNode av = convert(a, ty, line);
     const HNode bv = convert(b, ty, line);
     if (ty->kind == TyKind::Str) {
-        if (op != "+") throw Unsupported("Str 的 " + op, line);
+        if (op != "+") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "Str 的 " + op};
         /* `Str + Str` = `str_concat`（开栈缓冲 + `__simplexc_copy`，全在 codegen）：HIR 里就是
          * 一条 `Binary{Add, ty=Str}`，两侧已经 `convert` 过（两边都是 Str ⇒ `Raw`，只换标签）。
          * 不折常量：串的常量形态带着串池 id，而拼接结果的长度是运行期才知道的。 */
@@ -1212,7 +1209,7 @@ HNode Analyzer::binop(const std::string& op, const HNode& a, const HNode& b, int
         return n;
     }
     if (ty->kind == TyKind::Ptr) {
-        if (op != "+" && op != "-") throw Unsupported("指针 " + op, line);
+        if (op != "+" && op != "-") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "指针 " + op};
         auto ca = pat_const(av);
         auto cb = pat_const(bv);
         if (ca && cb) {
@@ -1227,7 +1224,7 @@ HNode Analyzer::binop(const std::string& op, const HNode& a, const HNode& b, int
     }
     auto ca = pat_const(av);
     auto cb = pat_const(bv);
-    if (ca && cb) return const_node(ty, fold_arith(op, *ca, *cb, *ty), line);
+    if (ca && cb) return const_node(ty, fold_arith(op, *ca, *cb, *ty, span_at(line)), line);
     HNode n = expr_node(HKind::Binary, ty, line);
     n.bin_op = arith_bin_op(op);
     n.kids.push_back(av);
@@ -1242,7 +1239,7 @@ HNode Analyzer::e_cond(const CondExpr& node) {
     const HNode t = e(*node.then_);
     const HNode f = e(*node.else_);
     if (t.ty->kind == TyKind::Void || f.ty->kind == TyKind::Void) {
-        throw Unsupported("三目的一支没有值", node.src_line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "三目的一支没有值"};
     }
     const TyRef ty = unify(t.ty, f.ty, node.src_line);
     HNode n = expr_node(HKind::Cond, ty, node.src_line);
@@ -1253,7 +1250,7 @@ HNode Analyzer::e_cond(const CondExpr& node) {
 }
 
 HNode Analyzer::as_cond(const HNode& v, int line) {
-    if (v.ty->kind == TyKind::Void) throw Unsupported("None 值当条件", line);
+    if (v.ty->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "None 值当条件"};
     return v;
 }
 
@@ -1390,15 +1387,14 @@ HNode Analyzer::template_expr(const TemplateExpr& node) {
  * 加宽只出 `Zext`：运行期窄值本来就是 `zext(trunc_W)` 的 64 位位模式，`convert` 在这条路上只
  * 补一层掩码；按符号性扩的那一路只属于编译期常量（`pat_const`），而常量在上面已经折完了。 */
 HNode Analyzer::convert(HNode v, const TyRef& target, int line) {
-    if (target->kind == TyKind::Void) throw Unsupported("转换成 None", line);
+    if (target->kind == TyKind::Void) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "转换成 None"};
     if (v.ty->kind == TyKind::Struct || target->kind == TyKind::Struct) {
         if (v.ty->kind == TyKind::Struct && target->kind == TyKind::Struct &&
             v.ty->name == target->name) {
             return v;
         }
-        throw Unsupported("转换 " + std::string(ty_kind_name(v.ty->kind)) + " → " +
-                              ty_kind_name(target->kind),
-                          line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "转换 " + std::string(ty_kind_name(v.ty->kind)) + " → " +
+                              ty_kind_name(target->kind)};
     }
     auto c = pat_const(v);
     if (target->kind == TyKind::Int) {
@@ -1430,7 +1426,7 @@ HNode Analyzer::convert(HNode v, const TyRef& target, int line) {
 HNode Analyzer::e_call(const CallExpr& node) {
     if (const auto* callee = as<IdentExpr>(node.callee.get())) return call_named(callee->name, node);
     if (const auto* mem = as<MemberExpr>(node.callee.get())) return call_method(*mem, node);
-    throw Unsupported("被调者形态 " + std::string(ast_kind_name(node.callee->kind)), node.src_line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "被调者形态 " + std::string(ast_kind_name(node.callee->kind))};
 }
 
 /* `lower.cc` 的 `call_named`，**顺序一样**（它决定「同名时变量优先还是 def 优先」）：
@@ -1455,13 +1451,13 @@ HNode Analyzer::call_named(const std::string& name, const CallExpr& node) {
     if (name == "random") return call_random(node);
     if (name == "size") return call_size(node);
     if (name == "in_scope" || name == "type_of") {
-        throw Unsupported(name + "() 只支持编译期形态", node.src_line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, name + "() 只支持编译期形态"};
     }
     if (is_prefix_func(name)) return call_prefix(name, node);
     if (mod_->defs.count(name) != 0) {
-        throw Unsupported(name + "() 的重载解析拿不到参数类型", node.src_line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, name + "() 的重载解析拿不到参数类型"};
     }
-    throw Unsupported("未定义的函数 " + name, node.src_line);
+    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "未定义的函数 " + name};
 }
 
 /* `lower.cc` 的 `call_user`。**三步的顺序不能换**：定实例（含泛型绑定）→ 在**调用点**算捕获表 →
@@ -1489,7 +1485,7 @@ HNode Analyzer::call_nested(const DefStmt& st, const CallExpr& node, const std::
     const TyRef ret_ty = defstmt_ret(st);
     const std::vector<TyRef> param_tys = defstmt_params(st);
     if (param_tys.size() != node.args.size()) {
-        throw Unsupported(st.name + "() 的参数个数对不上", node.src_line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, st.name + "() 的参数个数对不上"};
     }
     const int index = instantiate_nested(st, param_tys, cl, owner_lex);
     HNode n = expr_node(HKind::Call, ret_ty, node.src_line);
@@ -1520,16 +1516,16 @@ HNode Analyzer::call_load(const CallExpr& node) {
         const TyRef ty = type_value_of(*node.args[0], node.src_line);
         return builtin_node(HBuiltin::Load, ty, {e(*node.args[1])}, node.src_line);
     }
-    throw Unsupported("load(<T>, p) 的形态", node.src_line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "load(<T>, p) 的形态"};
 }
 
 /* `lower.cc` 的 `builtin_store`：结果类型是 `None`（当作 `ExprStmt` 用）。 */
 HNode Analyzer::call_store(const CallExpr& node) {
-    if (node.args.size() != 2) throw Unsupported("store(p, v) 的形态", node.src_line);
+    if (node.args.size() != 2) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "store(p, v) 的形态"};
     std::vector<HNode> kids;
     kids.push_back(e(*node.args[0]));
     HNode val = e(*node.args[1]);
-    if (val.ty->kind == TyKind::Void) throw Unsupported("store 的值是 None", node.src_line);
+    if (val.ty->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "store 的值是 None"};
     kids.push_back(std::move(val));
     return builtin_node(HBuiltin::Store, ty_void(), std::move(kids), node.src_line);
 }
@@ -1538,7 +1534,7 @@ HNode Analyzer::call_store(const CallExpr& node) {
  * 它就是 `Cast{Raw}`（不是内建调用：没有指令要发）。常量直接折成 `Const`。 */
 HNode Analyzer::call_raw_cast(const CallExpr& node) {
     if (node.type_args.empty() || node.args.size() != 1) {
-        throw Unsupported("raw_cast(<T>, v) 的形态", node.src_line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "raw_cast(<T>, v) 的形态"};
     }
     const TyRef ty = ty_of_ref(*node.type_args[0], node.src_line);
     HNode v = e(*node.args[0]);
@@ -1766,9 +1762,10 @@ HNode Analyzer::call_prefix(const std::string& name, const CallExpr& node) {
 
 /* `lower.cc` 的 `builtin_size`：`size(x)` = 操作数**声明类型**的位宽，编译期常数（单位位）。 */
 HNode Analyzer::call_size(const CallExpr& node) {
-    if (node.args.size() != 1) throw Unsupported("size(x) 的形态", node.src_line);
+    if (node.args.size() != 1) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "size(x) 的形态"};
     const TyRef ty = operand_type(*node.args[0], node.src_line);
-    return const_node(ty_i64(), static_cast<uint64_t>(size_bits(*ty)), node.src_line);
+    return const_node(ty_i64(), static_cast<uint64_t>(size_bits(*ty, span_at(node.src_line))),
+                      node.src_line);
 }
 
 /* 体内的嵌套 `def` 只**登记**，不生成：真被调用时才发（`lower.cc` 的 `s_DefStmt`）。
@@ -1788,8 +1785,6 @@ const FunctionDef* Analyzer::pick_def(const std::string& name, const CallExpr& n
             Inst inst;
             try {
                 inst = resolve_inst(d->params, node, d->lo);
-            } catch (const Unsupported&) {
-                continue;
             } catch (const CompileError& e) {
                 if (e.resp == Responsibility::OurBug) throw;
                 continue;
@@ -1829,11 +1824,11 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
     }
     if (tp.empty()) {
         if (node.args.size() != params.size() || !node.type_args.empty()) {
-            throw Unsupported("实参个数对不上", line);
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "实参个数对不上"};
         }
         for (std::size_t i = 0; i < params.size(); ++i) {
             if (params[i]->typ == nullptr) {
-                throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+                throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "参数 " + params[i]->name + " 缺类型"};
             }
             out.rt_params.push_back(params[i].get());
             out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
@@ -1846,11 +1841,11 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
      * 写法二（值实参，推型）：`g(load(<U8>, p))` —— 实参个数 = 声明参数个数。 */
     const bool by_value = node.args.size() == params.size();
     if (!by_value && node.args.size() + tp.size() != params.size()) {
-        throw Unsupported("泛型实参个数对不上", line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "泛型实参个数对不上"};
     }
-    if (node.type_args.size() > tp.size()) throw Unsupported("类型实参个数超过类型参数", line);
+    if (node.type_args.size() > tp.size()) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型实参个数超过类型参数"};
     if (tp.size() > 1 && !node.type_args.empty() && node.type_args.size() != tp.size()) {
-        throw Unsupported("类型实参个数少于类型参数", line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型实参个数少于类型参数"};
     }
 
     std::size_t ti = 0; /* 下一个待定类型的类型参数（声明序） */
@@ -1858,7 +1853,7 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
         const bool is_tp = params[i]->typ != nullptr && is_type_param(*params[i]->typ);
         if (!is_tp) {
             if (params[i]->typ == nullptr) {
-                throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+                throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "参数 " + params[i]->name + " 缺类型"};
             }
             out.rt_params.push_back(params[i].get());
             out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
@@ -1870,9 +1865,9 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
             bound = ty_of_ref(*node.type_args[ti], line);
         } else if (by_value) {
             bound = static_type(*node.args[i]);
-            if (!bound) throw Unsupported("推不出类型 " + params[i]->name, line);
+            if (!bound) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "推不出类型 " + params[i]->name};
         } else {
-            throw Unsupported("类型实参没给 " + params[i]->name, line);
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型实参没给 " + params[i]->name};
         }
         out.bind_order.push_back(bound);
         out.binds[params[i]->name] = bound;
@@ -1887,7 +1882,7 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
     for (std::size_t i = 0; i < params.size(); ++i) {
         if (i != 0) out.sig += ",";
         if (params[i]->typ == nullptr) {
-            throw Unsupported("参数 " + params[i]->name + " 缺类型", line);
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "参数 " + params[i]->name + " 缺类型"};
         }
         if (is_type_param(*params[i]->typ)) {
             out.sig += "@" + ty_key(*out.binds.at(params[i]->name));
@@ -1913,7 +1908,7 @@ std::optional<std::vector<TyRef>> Analyzer::decl_param_types(const FunctionDef& 
 TyRef Analyzer::inst_ret_type(const TypeRef* ret, const Inst& inst, int line) {
     if (ret == nullptr) return ty_void();
     if (!is_type_param(*ret)) return ty_of_ref(*ret, line);
-    if (inst.bind_order.empty()) throw Unsupported("返回类型 " + ret->name + " 没有绑定", line);
+    if (inst.bind_order.empty()) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "返回类型 " + ret->name + " 没有绑定"};
     return inst.bind_order.front();
 }
 
@@ -1924,7 +1919,7 @@ TyRef Analyzer::defstmt_ret(const DefStmt& st) {
 std::vector<TyRef> Analyzer::defstmt_params(const DefStmt& st) {
     std::vector<TyRef> out;
     for (const auto& p : st.params) {
-        if (p->typ == nullptr) throw Unsupported("参数 " + p->name + " 缺类型", p->src_line);
+        if (p->typ == nullptr) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{p->src_line}, "参数 " + p->name + " 缺类型"};
         out.push_back(ty_of_ref(*p->typ, p->src_line));
     }
     return out;
@@ -1998,7 +1993,8 @@ TyRef Analyzer::static_type(const Node& node) {
                 if (name == "load" && n.type_args.empty() && n.args.size() == 2) {
                     try {
                         return type_value_of(*n.args[0], n.src_line);
-                    } catch (const Unsupported&) {
+                    } catch (const CompileError& e) {
+                        if (e.resp == Responsibility::OurBug) throw;
                         return nullptr;
                     }
                 }
@@ -2053,8 +2049,6 @@ TyRef Analyzer::static_type(const Node& node) {
             case NK::Template: return ty_str();
             default: return nullptr;
         }
-    } catch (const Unsupported&) {
-        return nullptr;
     } catch (const CompileError& e) {
         if (e.resp == Responsibility::OurBug) throw;
         return nullptr;
@@ -2064,10 +2058,10 @@ TyRef Analyzer::static_type(const Node& node) {
 /* 类型值只出现在类型实参位置，语料里唯一形态是 `load(type_of(x), p)`。 */
 TyRef Analyzer::type_value_of(const Expr& node, int line) {
     const auto* call = as<CallExpr>(&node);
-    if (call == nullptr) throw Unsupported("类型值形态", line);
+    if (call == nullptr) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型值形态"};
     const auto* id = as<IdentExpr>(call->callee.get());
     if (id == nullptr || id->name != "type_of" || call->args.size() != 1) {
-        throw Unsupported("类型值形态", line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型值形态"};
     }
     return operand_type(*call->args[0], line);
 }
@@ -2081,7 +2075,7 @@ TyRef Analyzer::operand_type(const Expr& node, int line) {
         if (it != ty_binds_.end()) return it->second;
     }
     const TyRef ty = static_type(node);
-    if (!ty) throw Unsupported("拿不到类型", line);
+    if (!ty) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "拿不到类型"};
     return ty;
 }
 
@@ -2098,7 +2092,7 @@ std::string Analyzer::inst_sig(const FunctionDef& d, const Inst& inst) {
     for (std::size_t i = 0; i < d.params.size(); ++i) {
         if (i != 0) out += ",";
         if (d.params[i]->typ == nullptr) {
-            throw Unsupported("参数 " + d.params[i]->name + " 缺类型", d.lo);
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{d.lo}, "参数 " + d.params[i]->name + " 缺类型"};
         }
         out += ty_key(*ty_of_ref(*d.params[i]->typ, d.lo));
     }
@@ -2352,13 +2346,10 @@ void Analyzer::collect_captures(const Block& body, const std::vector<std::string
 /* ---------------------------------------------------------------- 常量求值 */
 
 /* `lower.cc` 的 `const_value`：常量求值失败 = 「这个初始化式不是常量」，不是错误本身。
- * `CompileError` 也收（新写的子函数抛它，比如带反斜杠的串字面量）；`OurBug` 不吞 —— 内部不
- * 自洽不能伪装成「不是常量」。 */
+ * `CompileError` 全收，但 `OurBug` 不吞 —— 内部不自洽不能伪装成「不是常量」。 */
 std::optional<HNode> Analyzer::const_value(const Node& node) {
     try {
         return cv(node);
-    } catch (const Unsupported&) {
-        return std::nullopt;
     } catch (const CompileError& e) {
         if (e.resp == Responsibility::OurBug) throw;
         return std::nullopt;
@@ -2379,7 +2370,7 @@ HNode Analyzer::cv(const Node& node) {
             if (n.lit_kind == "str" || n.lit_kind == "template") {
                 return string_literal(n.text, n.src_line);
             }
-            throw Unsupported("字面量 " + n.lit_kind, n.src_line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{n.src_line}, "字面量 " + n.lit_kind};
         }
         case NK::Ident: {
             const auto& n = static_cast<const IdentExpr&>(node);
@@ -2408,7 +2399,7 @@ HNode Analyzer::cv(const Node& node) {
             }
             auto rc = mod_->root_consts.find(n.name);
             if (rc != mod_->root_consts.end()) return const_decl_value(*rc->second);
-            throw Unsupported("名字 " + n.name, n.src_line);
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{n.src_line}, "名字 " + n.name};
         }
         case NK::Cast: {
             const auto& n = static_cast<const CastExpr&>(node);
@@ -2426,10 +2417,11 @@ HNode Analyzer::cv(const Node& node) {
             const HNode inner = cv(*n.expr);
             if (n.op == "+") return inner;
             if (!is_int(*inner.ty)) {
-                throw Unsupported(std::string("一元 ") + n.op + " 用在 " + ty_kind_name(inner.ty->kind),
-                                  n.src_line);
+                throw CompileError{Responsibility::UserSource, Stage::Sema, Span{n.src_line}, std::string("一元 ") + n.op + " 用在 " + ty_kind_name(inner.ty->kind)};
             }
-            return const_node(inner.ty, fold_unary(n.op, need_const(inner, n.src_line), *inner.ty),
+            return const_node(inner.ty,
+                              fold_unary(n.op, need_const(inner, n.src_line), *inner.ty,
+                                         span_at(n.src_line)),
                               n.src_line);
         }
         case NK::ArrayLit: return array_lit_node(static_cast<const ArrayLitExpr&>(node));
@@ -2448,11 +2440,11 @@ HNode Analyzer::cv(const Node& node) {
                 const TyRef ty = ty_of_ref(*n.type_args[0], n.src_line);
                 return const_node(ty, pat_const(cv(*n.args[0])).value_or(0) & kMask64, n.src_line);
             }
-            throw Unsupported("常量求值遇到函数调用", n.src_line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{n.src_line}, "常量求值遇到函数调用"};
         }
         case NK::Binary: {
             const auto& n = static_cast<const BinaryExpr&>(node);
-            if (n.op == "&&" || n.op == "||") throw Unsupported("常量逻辑运算", n.src_line);
+            if (n.op == "&&" || n.op == "||") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{n.src_line}, "常量逻辑运算"};
             const HNode l = cv(*n.left);
             const HNode r = cv(*n.right);
             const TyRef ty = unify(l.ty, r.ty, n.src_line);
@@ -2461,24 +2453,24 @@ HNode Analyzer::cv(const Node& node) {
             if (is_cmp(n.op)) {
                 return const_node(ty_bool(),
                                   fold_cmp(n.op, need_const(a, n.src_line), need_const(b, n.src_line),
-                                           *ty),
+                                           *ty, span_at(n.src_line)),
                                   n.src_line);
             }
-            if (!is_arith(n.op)) throw Unsupported("运算符 " + n.op, n.src_line);
+            if (!is_arith(n.op)) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{n.src_line}, "运算符 " + n.op};
             if (ty->kind == TyKind::Ptr) {
-                if (n.op != "+" && n.op != "-") throw Unsupported("指针 " + n.op, n.src_line);
+                if (n.op != "+" && n.op != "-") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{n.src_line}, "指针 " + n.op};
                 auto ca = pat_const(a);
                 auto cb = pat_const(b);
-                if (!ca || !cb) throw Unsupported("指针算术的操作数不是常量", n.src_line);
+                if (!ca || !cb) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{n.src_line}, "指针算术的操作数不是常量"};
                 const uint64_t sum = n.op == "+" ? *ca + *cb : *ca - *cb;
                 return const_node(ty_ptr(), sum & kMask64, n.src_line);
             }
             return const_node(ty, fold_arith(n.op, need_const(a, n.src_line),
-                                             need_const(b, n.src_line), *ty),
+                                             need_const(b, n.src_line), *ty, span_at(n.src_line)),
                               n.src_line);
         }
         default:
-            throw Unsupported("常量求值遇到 " + std::string(ast_kind_name(node.kind)), node.src_line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "常量求值遇到 " + std::string(ast_kind_name(node.kind))};
     }
 }
 
@@ -2532,7 +2524,7 @@ void Analyzer::statement(HNode& parent, const Stmt& st) {
             def_stmt(parent, static_cast<const DefStmt&>(st));
             return;
         default:
-            throw Unsupported("语句形态 " + std::string(ast_kind_name(st.kind)), st.src_line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{st.src_line}, "语句形态 " + std::string(ast_kind_name(st.kind))};
     }
 }
 
@@ -2559,7 +2551,7 @@ void Analyzer::var_decl_stmt(HNode& parent, const VarDeclStmt& st) {
     }
     HNode init = e(*st.init);
     if (init.ty->kind == TyKind::Void) {
-        throw Unsupported(st.name + " 的初始化式没有值", st.src_line);
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{st.src_line}, st.name + " 的初始化式没有值"};
     }
     if ((st.kw == "let" || st.kw == "const") && init.kind == HKind::Const) {
         bind_const(st.name, init);
@@ -2585,7 +2577,7 @@ void Analyzer::assign_stmt(HNode& parent, const AssignStmt& st) {
         val = e(*st.value);
     } else {
         auto it = assign_binop().find(st.op);
-        if (it == assign_binop().end()) throw Unsupported("复合赋值运算符 " + st.op, st.src_line);
+        if (it == assign_binop().end()) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{st.src_line}, "复合赋值运算符 " + st.op};
         const HNode cur = target; /* HIR 里 `Local`/`Global` 节点就是「读一次」 */
         val = binop(it->second, cur, e(*st.value), st.src_line);
     }
@@ -2737,13 +2729,13 @@ void Analyzer::while_stmt(HNode& parent, const WhileStmt& st) {
 }
 
 /* `lower.cc` 的 `s_BreakStmt`：向内找第一个标签匹配的循环（空标签 = 最近的一层）。
- * 找不到就是 `Unsupported` —— 不能落到外层循环上（那是静默改控制流）。 */
+ * 找不到就报错 —— 不能落到外层循环上（那是静默改控制流）。 */
 void Analyzer::break_stmt(HNode& parent, const BreakStmt& st) {
     bool found = false;
     for (auto it = breaks_.rbegin(); it != breaks_.rend() && !found; ++it) {
         found = st.label.empty() || st.label == *it;
     }
-    if (!found) throw Unsupported("break " + st.label, st.src_line);
+    if (!found) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{st.src_line}, "break " + st.label};
     HNode n = stmt_node(HKind::Break, st.src_line);
     n.label = st.label;
     parent.kids.push_back(std::move(n));
@@ -2752,30 +2744,29 @@ void Analyzer::break_stmt(HNode& parent, const BreakStmt& st) {
 HNode Analyzer::return_stmt(const ReturnStmt& st) {
     HNode n = stmt_node(HKind::Return, st.src_line);
     if (st.value == nullptr) {
-        if (ret_->kind != TyKind::Void) throw Unsupported("非 None 函数里裸 return", st.src_line);
+        if (ret_->kind != TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{st.src_line}, "非 None 函数里裸 return"};
         return n;
     }
-    if (ret_->kind == TyKind::Void) throw Unsupported("None 函数里 return 值", st.src_line);
+    if (ret_->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{st.src_line}, "None 函数里 return 值"};
     n.kids.push_back(convert(e(*st.value), ret_, st.src_line));
     return n;
 }
 
 /* 左值 = 「位置表达式」，`lower.cc` 的 `lvalue` 的四种形态：标识符 / 下标 / 字段（本步）。
  * 后两种在 `e()` 里也被当作「取一份值」用（读与写在 HIR 里是**同一个节点**，见 `e` 的注释）。
- * 每个形态一个函数：错误模型不混 —— 标识符那支是旧路径（`Unsupported`），下标/字段是本步新写的
- * （只抛 `CompileError`）。 */
+ * 每个形态一个函数：错误模型不混。 */
 HNode Analyzer::lvalue(const Expr& node) {
     if (const auto* id = as<IdentExpr>(&node)) return lvalue_ident(*id);
     if (const auto* ix = as<IndexExpr>(&node)) return index_place(*ix);
     if (const auto* mem = as<MemberExpr>(&node)) return member_place(*mem);
-    throw Unsupported("左值形态 " + std::string(ast_kind_name(node.kind)), node.src_line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "左值形态 " + std::string(ast_kind_name(node.kind))};
 }
 
 HNode Analyzer::lvalue_ident(const IdentExpr& id) {
     const std::string& name = id.name;
     if (const Binding* b = lookup(name)) {
-        if (b->kind == Binding::Kind::Const) throw Unsupported("给常量 " + name + " 赋值", id.src_line);
-        if (b->kind == Binding::Kind::Def) throw Unsupported("给 def 名 " + name + " 赋值", id.src_line);
+        if (b->kind == Binding::Kind::Const) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{id.src_line}, "给常量 " + name + " 赋值"};
+        if (b->kind == Binding::Kind::Def) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{id.src_line}, "给 def 名 " + name + " 赋值"};
         if (b->kind == Binding::Kind::Capture) return capture_node(b->ty, b->index, id.src_line);
         return local_node(name, b->ty, id.src_line);
     }
@@ -2785,7 +2776,7 @@ HNode Analyzer::lvalue_ident(const IdentExpr& id) {
         const GlobalRef pg = prefix_global(name, id.src_line);
         return global_node(pg.id, pg.ty, id.src_line);
     }
-    throw Unsupported("未定义的名字 " + name, id.src_line);
+    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{id.src_line}, "未定义的名字 " + name};
 }
 
 /* `lower.cc` 的 `lvalue(Index)`：基址必须是 `Arr`/`Str`，下标 `convert` 到 `I64`（无符号零扩展），

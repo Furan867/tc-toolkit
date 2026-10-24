@@ -29,9 +29,15 @@
 
 ## 下一步（按串行依赖）
 
-1. **S3 错误三轴**：`CompileError{resp,stage,span,detail}` 过 C 边界，消除 P1..P6 六条静默降级
-   （底数：252 抛点 / 50 捕获点 / 23 处必须全覆盖，工单在 `work/tmp/errors-cut/`）。
-   **不与 1–3 混做**：分层重构的判据是「产物不变」，错误三轴必然改失败输出，混做无法归因。
+1. **S3 错误三轴（进行中）**：`sema/` 与 `codegen/` 的 **168 个抛点**已全部迁到
+   `CompileError{resp,stage,span,detail}`（Unimplemented 74 / UserSource 56 / OurBug 38 量级），
+   `Unsupported`/`CompileFail` 在产品代码里清零，10 处传 `0` 的行号已补真实 span。
+   正在做的是**边界**：`shell` 只有两档映射（`Unimplemented → UnsupportedConstruct`，其余含
+   `UserSource` → `InternalError`），而 `InternalError` 会触发整单转交参考 —— 用户写错会白跑一次
+   参考编译，还会污染回退率的分母。要加 `UserError` 档（不转交），并让三轴流出 C 边界
+   （现在 `detail` 只进 `std::cerr`，游戏是 GUI 进程看不到）。
+   之后是 P1..P6 六条静默降级的处置（底数：252 抛点 / 50 捕获点 / 23 处必须全覆盖，
+   工单在 `work/tmp/errors-cut/`）。
 5. **S4**：codegen 侧最小用例；之后重跑 M5 判据、重记数字。
 
 ## 待定 / 未解

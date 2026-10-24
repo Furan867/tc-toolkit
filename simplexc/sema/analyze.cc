@@ -2544,7 +2544,17 @@ void Analyzer::var_decl_stmt(HNode& parent, const VarDeclStmt& st) {
     if (st.kw == "const" && !st.name.empty() && st.name[0] == '#') {
         /* 值只折一次（`const_decl_value` 按声明节点备忘）；非整数常量进 `Hir.consts` 池，
          * 引用点拿到的 `Const` 带 `const_id` —— 引用 N 次仍是同一个常量。 */
-        bind_const(st.name, const_decl_value(st));
+        const HNode ref = const_decl_value(st);
+        bind_const(st.name, ref);
+        /* 非整数常量在 codegen 那边是**一枚私有全局**，它的发射时机是产物的一部分：旧路径在
+         * 声明语句处就地折值，全局就排在这里（而不是第一个引用它的语句处）。HIR 里 `const #`
+         * 本来没有节点，补一条**零指令**的占位语句把它钉回这个位置 —— `s_ExprStmt` 只是 `e()`
+         * 一次，`Const` 不发指令，副作用就只有「把私有全局发出去」。整数常量没有全局，不补。 */
+        if (ref.const_id >= 0) {
+            HNode n = stmt_node(HKind::ExprStmt, st.src_line);
+            n.kids.push_back(ref);
+            parent.kids.push_back(std::move(n));
+        }
         return;
     }
     HNode init = e(*st.init);

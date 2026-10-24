@@ -19,6 +19,10 @@ Hir funcs=1 globals=0 externs=0 consts=3 strings=1 structs=1
       While label="run_sim" span=16:0
         Const ty=Bool const=0x1 span=16:0
         Block span=16:0
+          ExprStmt span=17:0
+            Const ty=Arr[U1] const_id=1 span=17:0
+          ExprStmt span=18:0
+            Const ty=Struct.Pair const_id=2 span=18:0
           VarDecl ty=U8 name="a" span=19:0
             Call ty=U8 callee=func:0 span=19:0
               Const ty=S64 const=0x1 span=19:0

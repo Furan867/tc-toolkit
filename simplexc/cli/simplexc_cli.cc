@@ -1,9 +1,10 @@
 /* simplexc-cli：`.si` → blob —— M4.5 的 C++ 产品路径入口（不碰游戏，也不经 Python）。
  *
- * 目录分工（接口冻结版 §0）：`frontend/` 出 AST、`lower/` 出 COFF、`assemble/` 出 blob；
- * 本文件只做**接线**：源 → `ModuleAst` → `Program` → `assemble()`。
+ * 目录分工（接口冻结版 §0）：`frontend/` 出 AST、`sema/` 出 HIR、`codegen/` 出 COFF、
+ * `assemble/` 出 blob；本文件只做**接线**：源 → 前端产物 → `sema::analyze` → `codegen::Program`
+ * → `assemble()`。
  *
- * 为什么源 → `ModuleAst` 的那段不在这里：壳（`shell/simplexc_core.cc`）要的是同一段，
+ * 为什么源 → 前端产物的那段不在这里：壳（`shell/simplexc_core.cc`）要的是同一段，
  * 两个调用方共用 `lower/module_build.{hh,cc}`（接口冻结版 §0「一处定义」）。
  *
  * 用法：
@@ -25,11 +26,15 @@
 #include "assemble/assemble.hh"
 #include "frontend/frontend.hh"
 #include "frontend/parser.hh"
-#include "lower/lower.hh"
+#include "lower/hir/codegen.hh"
+#include "lower/hir/module_source.hh"
 #include "lower/module_build.hh"
+#include "sema/analyze.hh"
 
 namespace sx = simplexc;
+namespace cg = simplexc::codegen;
 namespace lw = simplexc::lower;
+namespace sm = simplexc::sema;
 
 namespace {
 
@@ -54,8 +59,8 @@ class Kernel32Resolver : public tc::ExternResolver {
   }
 };
 
-// ---------------------------------------------------------------- 源 → ModuleAst
-/* 源 → `ModuleAst` 的那一段粘合（`OwnedModule` + `build_module`）住在
+// ---------------------------------------------------------------- 源 → 前端产物
+/* 源 → 前端产物的那一段粘合（`OwnedModule` + `build_module`）住在
    `lower/module_build.{hh,cc}` —— 壳（`shell/simplexc_core.cc`）与这里**共用同一份**，
    不许各留一份实现（接口冻结版 §0）。本文件只负责把它接起来。 */
 
@@ -156,6 +161,12 @@ int main(int argc, char** argv) {
     usage();
     return 2;
   }
+  /* `--list-unsupported` 还在命令行里（调用点与文档都还在用它），但它列不出清单了：
+     sema 遇到第一个未支持构造就抛 `CompileError`，没有「把全部缺口收齐再报」这一档。
+     保留参数是为了让旧调用方不至于撞上「不认识的参数」的 rc=2。 */
+  if (list_unsupported) {
+    std::fprintf(stderr, "[cli] --list-unsupported：sema 遇首个未支持构造即失败，不再收集清单\n");
+  }
 
   try {
     using Clock = std::chrono::steady_clock;
@@ -179,15 +190,10 @@ int main(int argc, char** argv) {
                    owned.ast.label ? owned.ast.label->name.c_str() : "(无)");
     }
 
-    lw::Program prog(owned.ast, list_unsupported);
+    const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
+    cg::Program prog(hir);
     prog.build();
     auto t2 = Clock::now();
-    if (list_unsupported && !prog.diagnostics().empty()) {
-      for (const lw::Diagnostic& d : prog.diagnostics()) {
-        std::cout << "UNSUPPORTED: " << d.msg << " @ 第 " << d.line << " 行\n";
-      }
-      return 3;
-    }
 
     const std::string ir = prog.ir_text();
     if (!ir_path.empty()) {
@@ -278,6 +284,9 @@ int main(int argc, char** argv) {
     return 0;
   } catch (const lw::Unsupported& e) {
     std::fprintf(stderr, "UNSUPPORTED: %s @ 第 %d 行\n", e.what(), e.line());
+    return 1;
+  } catch (const sm::CompileError& e) {
+    std::fprintf(stderr, "编译失败：%s\n", e.what());
     return 1;
   } catch (const lw::CompileFail& e) {
     std::fprintf(stderr, "编译失败：%s\n", e.what());

@@ -85,7 +85,10 @@ CORE_SOURCES = [
     "simplexc/frontend/json.cc",
     "simplexc/lower/module_build.cc",
     "simplexc/lower/lower.cc",
+    "simplexc/lower/hir/codegen.cc",
     "simplexc/lower/llvm_ffi.cc",
+    "simplexc/sema/analyze.cc",
+    "simplexc/sema/layout.cc",
     "simplexc/sema/types.cc",
     "build/objs/assemble.o",
 ]

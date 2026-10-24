@@ -5,7 +5,7 @@
  * 异常一律在**这里**折成返回码 —— 穿过 Nim 帧的展开没有保证（接口冻结版 §5）。
  *
  * 与 CLI（`cli/simplexc_cli.cc`）共用同一套核心：`frontend` → `lower::build_module` →
- * `lower::Program` → `assemble()`。差别只有两处，都是「在游戏进程里」逼出来的：
+ * `sema::analyze` → `codegen::Program` → `assemble()`。差别只有两处，都是「在游戏进程里」逼出来的：
  *   · 源码在内存里（没有临时文件可写）→ `Frontend(SrcText{...})`；
  *   · 装配的 `entry_shim.o` / `rt_min.o` 在构建期嵌进了 DLL → `embedded_objs.hh`。
  *
@@ -27,13 +27,18 @@
 
 #include "assemble/assemble.hh"
 #include "frontend/frontend.hh"
+#include "lower/hir/codegen.hh"
+#include "lower/hir/module_source.hh"
 #include "lower/lower.hh"
 #include "lower/module_build.hh"
+#include "sema/analyze.hh"
 #include "shell/embedded_objs.hh"
 
 namespace sx = simplexc;
+namespace cg = simplexc::codegen;
 namespace lw = simplexc::lower;
 namespace sh = simplexc::shell;
+namespace sm = simplexc::sema;
 
 namespace {
 
@@ -150,7 +155,8 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
     }
 
     lw::OwnedModule owned = lw::build_module(fe, fe.src_path);
-    lw::Program prog(owned.ast, false);
+    const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
+    cg::Program prog(hir);
     prog.build();
     std::vector<uint8_t> module_obj = prog.emit_object();
 
@@ -176,6 +182,12 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
   } catch (const lw::Unsupported& e) {
     std::cerr << "[simplexc] 未支持构造：第 " << e.line() << " 行 " << e.what() << std::endl;
     return kUnsupportedConstruct;
+  } catch (const sm::CompileError& e) {
+    /* 三轴在 `e.what()` 里（`sema/errors.hh`）。分类照旧分两档：认不出的源码构造 = 不挑回退，
+       其余（断言失败、同一输入两次不一致）= 我们的 bug。这一档是壳决定回不回的判据（接口 §8），
+       所以过 C 边界时不能全部折成 `InternalError`。 */
+    std::cerr << "[simplexc] 编译失败：" << e.what() << std::endl;
+    return e.resp == sm::Responsibility::Unimplemented ? kUnsupportedConstruct : kInternalError;
   } catch (const lw::CompileFail& e) {
     std::cerr << "[simplexc] 编译失败：" << e.what() << std::endl;
     return kInternalError;

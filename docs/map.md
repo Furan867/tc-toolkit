@@ -15,7 +15,7 @@
 tools/        分析脚本与工具（已固化的）
 docs/         本套文档 + 专题记录（specs/ 下是设计文档；facts/ 是分类事实账本，分流入口 facts.md；notes.md 是笔记状态约定）
 simplexc/     自研编译器（**接口权威 = docs/specs/2026-10-15-simplexc-interfaces.md**，冻结版 1.4）
-  frontend/ sema/ codegen/ runtime/ assemble/ shell/ cli/   代码（sema/ 与 codegen/ 为 2026-10-18 分层目标，现为 frontend/ + lower/）
+  frontend/ sema/ codegen/ runtime/ assemble/ shell/ cli/   代码（四层已分开：frontend → sema → codegen → assemble）
   tools/     语料重编译、地址分类、判据入口、差分宿主等脚本    corpus/ 98 份语料 + manifest（ref/ 不进 git）
              M3 的靶子固定为 corpus/rv32im/（RV32IM 电路的源码 + 参考产物快照，见该目录 README）
   dossier/   语义档案（已有访存宽度实测 `ul_access_width.md`；其余未开始）

@@ -29,8 +29,7 @@
 
 ## 下一步（按串行依赖）
 
-1. **删旧 AST 路径 + 目录改名** `lower/` → `codegen/`（两批，各自可回滚；改名用 `git mv` 保住历史）。
-2. **S3 错误三轴**：`CompileError{resp,stage,span,detail}` 过 C 边界，消除 P1..P6 六条静默降级
+1. **S3 错误三轴**：`CompileError{resp,stage,span,detail}` 过 C 边界，消除 P1..P6 六条静默降级
    （底数：252 抛点 / 50 捕获点 / 23 处必须全覆盖，工单在 `work/tmp/errors-cut/`）。
    **不与 1–3 混做**：分层重构的判据是「产物不变」，错误三轴必然改失败输出，混做无法归因。
 5. **S4**：codegen 侧最小用例；之后重跑 M5 判据、重记数字。

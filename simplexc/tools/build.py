@@ -21,6 +21,8 @@
     simplexc_dll  同上（与其它 simplexc 目标对齐的名字；部署入口转调它）
     core_selftest build/core_selftest.exe  判据入口：源码字节 → `simplexc_compile` → 产物 +
                `.entry` / `.stubs`（不进 DLL）
+    hir_selftest build/hir_selftest.exe  sema 的判据入口：HIR dump 与 `sema/testdata/` 里的
+               golden 逐字节比 + 六条不变量（不进产品路径，不依赖 LLVM）
     ast_dump   build/ast_dump.exe     前端的判据入口（frontend/ 的 C++17 实现，不进产品 DLL）
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
@@ -226,6 +228,22 @@ def step_core_selftest() -> None:
         hint="链接失败 → 先跑 `build.py objs`（embedded_objs.cc 要它）与取 LLVM（build/llvm）。")
 
 
+def step_hir_selftest() -> None:
+    print("== hir_selftest ==")
+    out = os.path.join(BUILD, "hir_selftest.exe")
+    # sema 的自检入口（不进产品路径）：只要 sema 自己的三个文件，不链前端、不链 LLVM ——
+    # 它的 golden 是 `simplexc/sema/testdata/hir_sample.dump.txt`，路径由 `__FILE__` 推出，
+    # 所以 `-I simplexc/sema` 与相对源文件路径都不能省（见 sema/hir_selftest.cc 的 golden_path）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "-I", "simplexc/sema",
+         "simplexc/sema/hir_selftest.cc",
+         "simplexc/sema/hir_dump.cc",
+         "simplexc/sema/types.cc",
+         "-o", REL(out)], out=out,
+        hint="编译失败 → 看 simplexc/sema/*.{cc,hh} 的报错；这个目标只用 C++17 标准库"
+             "（不需要 LLVM，也不需要前端）。")
+
+
 def step_ast_dump() -> None:
     print("== ast_dump ==")
     out = os.path.join(BUILD, "ast_dump.exe")
@@ -289,10 +307,11 @@ STEPS = {
     "hook": step_hook,
     "simplexc_dll": step_hook,        # 同一个目标的两个名字（见 step_hook 的注释）
     "core_selftest": step_core_selftest,
+    "hir_selftest": step_hir_selftest,
     "ast_dump": step_ast_dump,
     "spike": step_spike,
 }
-ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump"]
+ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest"]
 DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"],
            "hook": ["objs"], "simplexc_dll": ["objs"], "core_selftest": ["objs"]}
 

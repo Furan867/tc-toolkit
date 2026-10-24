@@ -14,15 +14,17 @@
 #include <string>
 #include <vector>
 
+#include "../sema/span.hh"
+
 namespace simplexc {
+
+// `Span` 的归属在 sema（HIR 的每个节点都要带它，而 `sema/` 不许 include `frontend/`）；
+// 这里用 using 把名字留在 `simplexc::`，前端与 lowering 的写法一行没变。
+using sema::Span;
 
 // ---------------------------------------------------------------------------
 // 错误（接口冻结版 §1 / §8）
 // ---------------------------------------------------------------------------
-struct Span {
-  int line = 0;
-  int col = 0;
-};
 
 enum class ErrKind {
   UnsupportedConstruct,

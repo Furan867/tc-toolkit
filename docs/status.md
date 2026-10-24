@@ -2,7 +2,7 @@
      一次性结论 → notes/；被复用过的结论 → facts/。具体事实不在这里复制。 -->
 # 状态
 
-在追：**Simplex → LLVM 编译器的 M5.5 分层重构**，已进入收口（2026-10-24）。
+在追：**M5 收尾**（分层重构 M5.5 已于 2026-10-24 完成）。
 
 目标：把 `compile.dll` 换成自研实现（Simplex → LLVM IR → 装配成游戏可 JIT 的 blob）。
 正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
@@ -10,69 +10,54 @@
 
 - 接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.4）；主设计 = `…-simplex-llvm-compiler-design.md`；
   主频层 = `…-freq-measurement-design.md`。代码在 `reversing/simplexc/`；LLVM 固定 **23.1.3**。
-- 重构方案、HIR 规格、内建编号、错误三轴、S2c 切割底数：**`docs/notes/2026-10-24-refactor-plan.md`（唯一入口）**。
+- 重构全过程、每个决策与踩过的坑：**`docs/notes/2026-10-24-refactor-plan.md`（唯一入口）**。
 
-## 已完成（有判据）
+## M5.5 分层重构：完成
 
-- M0 观测设施 · M1 spike · M2 差分宿主 · 装配器 · M4.5 游戏内 40.375 vs 5.364 MHz。
-- **判据链**：`blob_baseline --verify`（98 份全量 8.6s，比掩掉 stub/slot 槽位的 `norm_sha256`）已进
-  `check.py`（6 步，46s 全绿）。核心判据是 `python simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline`。
-- **`sema/` 完成**：类型系统、HIR 六条不变量（每条一个不满足的样例，报对编号）、生成器、内建 3..11、
-  前缀函数标记、方法糖、聚合常量、实例闭包。**语料 80/98，基线里出产物的 75 份全过**；24 个最小用例
-  `analyze_selftest` 全绿；零 LLVM 依赖、不反向 include `frontend/`。
-- **`codegen` 结构改造完成**（`a791b83`）：`FnState`/`save_state`/`restore_state` 归零，每函数一个 `FnCtx`，
-  产物 98/98 逐字节不变。
-- **`codegen` 吃 HIR**（`49568d8` 已切产品路径）：双跑对照 `work/tmp/s2c/dual.py`
-  —— 同一份 `.si` 走「旧 AST 路径」与「sema→HIR→新 codegen」，比 blob 逐字节 + IR 逐函数 ——
-  **same 75/75**（跳过的 23 份是旧路径本来就编不过的 `hex`/`bin`/`str` 那批）。
-  **切换后 `blob_baseline` 仍 98/0**：这是整个重构的最终验收，双跑等价 + 切换后产物不变，两者都过了。
+目录就是设计 §8 的形状：`frontend/ sema/ codegen/ runtime/ assemble/ shell/ cli/`。四条硬要求逐条兑现：
 
-## 下一步（按串行依赖）
-
-1. **S3 错误三轴（进行中）**：`sema/` 与 `codegen/` 的 **168 个抛点**已全部迁到
-   `CompileError{resp,stage,span,detail}`（Unimplemented 74 / UserSource 56 / OurBug 38 量级），
-   `Unsupported`/`CompileFail` 在产品代码里清零，10 处传 `0` 的行号已补真实 span。
-   正在做的是**边界**：`shell` 只有两档映射（`Unimplemented → UnsupportedConstruct`，其余含
-   `UserSource` → `InternalError`），而 `InternalError` 会触发整单转交参考 —— 用户写错会白跑一次
-   参考编译，还会污染回退率的分母。要加 `UserError` 档（不转交），并让三轴流出 C 边界
-   （现在 `detail` 只进 `std::cerr`，游戏是 GUI 进程看不到）。
-   之后是 P1..P6 六条静默降级的处置（底数：252 抛点 / 50 捕获点 / 23 处必须全覆盖，
-   工单在 `work/tmp/errors-cut/`）。
-5. **S4**：codegen 侧最小用例；之后重跑 M5 判据、重记数字。
-
-## 重记账（2026-10-24，重构后实测，`docs/notes/2026-10-24-m5-recount.md`）
-
-98 份 · 10 tick · 非平凡图案（块内 `byte[i]=i&0xFF`）：
-
-| 项 | 数 |
+| 要求（设计 §3.2–§3.4） | 判据 |
 | --- | --- |
-| 可装配 | 75 |
-| 逐 tick 全等 | 30 |
-| 只差 extern | 31 |
-| 装配成功但 tick 不等（diff） | 14 |
-| 装不出来 | 23（sema 18 + 装配期 5） |
+| sema 不发任何 LLVM 指令 | `grep -c LLVM simplexc/sema/` = 0 |
+| codegen 不查 AST/源码、不做类型推导、不决定实例化 | `grep -rn 'frontend/' simplexc/codegen/` 为空；`convert` 从 16 处删到 4 处且都有理由 |
+| 无 save/restore 可变状态 | `grep -c 'save_state\|restore_state\|FnState' simplexc/codegen/` = 0 |
+| 错误三轴从第一层带出 | `sema/`+`codegen/`+`frontend/` 共 168+ 个抛点全是 `CompileError{resp,stage,span,detail}`；`Unsupported`/`CompileFail` 在产品代码里清零 |
 
-**与重构前那组逐 id 98/98 一致，变了 0 份** —— 这比重构只比 blob 更强，它包含宿主里逐 tick 跑。
-复现：`python simplexc/tools/m5/coverage.py --out-dir work/tmp/recount --ticks 10 --seed seq && python work/tmp/recount/recount.py`。
+**判据（全绿，可逐条复跑）**：
 
-三轴分布（23 份装不出来）：stage `sema` 18 / `assemble` 5；resp 用户源码错 17 / 未实现 1 / 未实现(推断) 5。
-那 5 份是 `kernel32!memcpy` 缺符号（装配期），18 份的归属：`hex` 13 + `str` 3 + `bin` 1 + `ui_set_instruction` 1。
+- `python simplexc/tools/check.py` → 6 步全 PASS（含 `blob_baseline` 与 `hook_offline` 11 个 case）。
+- `python simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline` → **98 份产物逐字节相同**（掩掉 stub/slot 槽位）。
+- `python work/tmp/s2c/dual.py --all-corpus` → 旧 AST 路径与新 HIR 路径 **75/75 相同**（blob + IR 逐函数）。
+- `build/analyze_selftest.exe` 24/24、`build/hir_selftest.exe` 全过、`build/codegen_selftest.exe` 5/5。
 
-⚠️ 重记账揪出一条真回归（已修 `4c147ef`）：`hex`/`bin`/`str` 那 17 份从「转交参考、游戏里能跑」
-退化成「`UserError` 不转交、直接报错」——**数字看不出来**，因为数字只量「我们能不能编」，
-不量「游戏里能不能跑」。根因是责任轴判错：我们分不清「用户拼错名字」与「前缀里有、我们没接」。
+**重记账（2026-10-24，`docs/notes/2026-10-24-m5-recount.md`）**：98 份 · 10 tick · 非平凡图案 ——
+可装配 **75** · 逐 tick 全等 **30** · 只差 extern **31** · 装配成功但不等 **14** · 装不出来 **23**。
+**与重构前逐 id 98/98 一致，变了 0 份** —— 这比重构只比 blob 更强，它包含宿主里逐 tick 跑。
+
+## 下一步
+
+1. **M5 收尾**：18 份卡在 sema 的语料全是**刻意不做**的三类——`hex` 13 + `str` 3 + `bin` 1 +
+   `ui_set_instruction` 1（它们在基线里本来就不出产物，补了等于新增能力，会污染「产物逐字节相同」判据）；
+   另有 5 份卡在装配期 `kernel32!memcpy` 缺符号（它在 msvcrt/ntdll，属符号解析问题，不是编译问题）；
+   以及 14 份 `diff`（A′/C′/D′ 残部）。这些决定「能不能关掉回退」（M6）。
+2. **回退率按三轴统计**：shell 现在能拿到 `kind`，先跑一轮得到基线（分 `UserError`/`UnsupportedConstruct`/`InternalError`），
+   那是关回退的量化依据。
+3. 语义未验项（`U-L4` 偏移/padding、`$` 写回时机、`U-L5` 显式宽度语法、`Str == Str` 编译期折叠、
+   `@Type` 值形实参）—— 判据与缺口见 `docs/facts/semantics.md`。
 
 ## 待定 / 未解
 
-- 壳在 `compile_real.dll` 加载失败时仍不写 `out[3]`（保留 0xCC 哨兵）。那是部署错误、不是源码错误，
-  原版无法转交，要不要自造失败 Result 待定（见 `work/tmp/s3/notes-p236.md`）。
-- 刻意不做（等重构收口）：`hex`/`bin`/`str` 前缀格式化、`ui_set_instruction()` 重载 —— 那 16 份语料基线
-  本来就不出产物，现在补等于新增能力，会污染「产物逐字节相同」这条判据。
-- 未验语义：`U-L4` 偏移/padding · `$` 写回时机 · `U-L5` 显式宽度语法 · `Str == Str` 编译期折叠 · `@Type` 值形实参。
+- 壳在 `compile_real.dll` 加载失败时不写 `out[3]`（保留 0xCC 哨兵）。那是部署错误、原版无法转交，
+  要不要自造失败 Result 待定。
+- `simplexc_core.cc` 的 `catch(...)`（非 `std::exception` 的前端值）仍折成 `InternalError` → 会转交。
+  今天的前端都抛 `CompileError`，所以这条不可达；但留着就是一处静默降级。
+- `codegen_selftest` 的 `.irkeys` 只能断言「必须出现」，否定断言（`llvm.trap` 不该出现）写不出来。
+- `facts/semantics.md` 的 U-L1 说 `N>32` 是 8 字节访存，但 IR 上是 `i40` ——
+  「事实 → IR 宽度」这层映射只写在 `codegen.cc` 的注释里，facts 没有。
 - 已知未修差异：顶层非声明语句被整体丢掉 · 参考对 `return a) + 1` 静默吃掉后面的一切 · 空数组的指针值未对照。
 - `entry`（`Result[2]`）用途仍只知「相对机器码起点的偏移」；参考产物的热环没定位到（要 RIP 采样）。
 
 ## 环境
 
-- 只有一条硬纪律要记：**`build/` 是共享的**，两个写者同时跑 `build.py`/`check.py` 会互相覆盖产物；
-  多写者时按目录切分，且同一时刻只让一个写者跑判据入口。
+- **`build/` 是共享的**：两个写者同时跑 `build.py`/`check.py` 会互相覆盖产物；多写者按目录切分，
+  且同一时刻只让一个写者跑判据入口。

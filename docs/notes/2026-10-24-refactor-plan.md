@@ -242,3 +242,18 @@ S2b-3 完成：19 个 case 全过（`analyze_selftest`），`sema` 侧不再有�
 **方法糖**（`.len/.push/.pop/.contains/.next/.min/.size/.write/.array/.cstring` 与时间单位
 `.ms/.ns/.us/.sec/.day/.hour/.min`）：糖消解归 sema，照 `lower.cc` 的 `call_method` 逐条对应；
 HIR 里只留消解后的结果，不留方法名。
+
+## 2g. sema 语料覆盖率实测（2026-10-24，`work/tmp/sema-survey/`）
+
+**98 份语料：OK 0 / FAIL 98 / 崩溃 0。** 基线里出产物的那 75 份：sema 走通 **0 份**（等式 75 = 0 + 75）。
+- FAIL 分类：98 份全部倒在第一道墙 —— 顶层 `var` 的 `raw_cast(<Arr[U64]>, <常量地址>)`（常量求值不认 `raw_cast`）。
+- 剥掉第一道墙后（`peel1.tsv`）暴露的后续缺口：内建 7 个、前缀函数 5 个（各有 98 份命中）、方法糖、运行期全局初值。
+- 复现：`work/tmp/sema-survey/run_survey.sh`；判据是自己编到 `work/tmp/`，不碰 `build/`。
+
+后果（记下来免得再犯同样的判断错）：
+
+1. **「语言形态覆盖率」不是「语料覆盖率」**。19 个最小用例全过，等于 0 份语料能过。
+2. **S2c 不能靠 98/98 自证**。它的中期判据换成「双跑对照」（同一份 `.si` 走 AST 路径与走 HIR 路径，blob 逐字节相同），
+   样本是那 19 个能产出 HIR 的 case。
+3. **产品入口不跟着切**。HIR 入口先只由 `work/tmp/s2c/` 的双跑工具调用，产品路径仍是 `ModuleAst`
+   —— 于是 `check.py` 与 98/98 在整个 S2c 期间保持绿，护栏不丢。入口切换等 sema 覆盖达标后单独做，那时是个位数行的改动。

@@ -22,18 +22,15 @@
   `analyze_selftest` 全绿；零 LLVM 依赖、不反向 include `frontend/`。
 - **`codegen` 结构改造完成**（`a791b83`）：`FnState`/`save_state`/`restore_state` 归零，每函数一个 `FnCtx`，
   产物 98/98 逐字节不变。
-- **`codegen` 吃 HIR 的新路径**（`65d1db6`，`simplexc/lower/hir/` 2525 行，**未接产品**）：
-  双跑对照 `work/tmp/s2c/dual.py` = 同一份 `.si` 走「旧 AST 路径」与「sema→HIR→新 codegen」，
-  比 blob 逐字节 + IR 逐函数。**当前 same 45/75**（从 0 涨上来；`diff-bytes` 已清零）。
+- **`codegen` 吃 HIR**（`49568d8` 已切产品路径）：双跑对照 `work/tmp/s2c/dual.py`
+  —— 同一份 `.si` 走「旧 AST 路径」与「sema→HIR→新 codegen」，比 blob 逐字节 + IR 逐函数 ——
+  **same 75/75**（跳过的 23 份是旧路径本来就编不过的 `hex`/`bin`/`str` 那批）。
+  **切换后 `blob_baseline` 仍 98/0**：这是整个重构的最终验收，双跑等价 + 切换后产物不变，两者都过了。
 
 ## 下一步（按串行依赖）
 
-1. **收敛双跑剩余 30 份**（2 份 `diff-len` + 28 份 `diff-ir`，性质是掩码条数多/少混杂 + 少量全局摆放顺序）。
-   目标 `same 75/75`。判据：`python work/tmp/s2c/dual.py --all-corpus`。
-2. **切产品入口**：`cli/` 与 `shell/simplexc_core.cc` 从 `ModuleAst` 换到 `Hir`（个位数行）。切换后
-   `blob_baseline` 仍是 98/98 才算过——那是整个重构的最终验收。
-3. **删旧 AST 路径** + 目录改名 `lower/` → `codegen/`（改名单独一个提交，否则 diff 不可读）。
-4. **S3 错误三轴**：`CompileError{resp,stage,span,detail}` 过 C 边界，消除 P1..P6 六条静默降级
+1. **删旧 AST 路径 + 目录改名** `lower/` → `codegen/`（两批，各自可回滚；改名用 `git mv` 保住历史）。
+2. **S3 错误三轴**：`CompileError{resp,stage,span,detail}` 过 C 边界，消除 P1..P6 六条静默降级
    （底数：252 抛点 / 50 捕获点 / 23 处必须全覆盖，工单在 `work/tmp/errors-cut/`）。
    **不与 1–3 混做**：分层重构的判据是「产物不变」，错误三轴必然改失败输出，混做无法归因。
 5. **S4**：codegen 侧最小用例；之后重跑 M5 判据、重记数字。

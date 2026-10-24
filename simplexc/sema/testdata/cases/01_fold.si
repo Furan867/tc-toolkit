@@ -1,0 +1,7 @@
+// 常量折叠：算术结果类型取**窄**的那一侧（`arith_ty` 只铺给 `+`）、截断在运算结果上、
+// `>>` 是 lshr（不是 ashr）。三个声明各自的期望见 `01_fold.dump` 的 `const=`。
+run_sim: while true {
+  var a = U8 250 + 10
+  var b = -4 >> 1
+  var c = 7 - 10
+}

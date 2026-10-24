@@ -1,0 +1,17 @@
+// 引 `docs/facts/semantics.md` §U-L8：`x >> n` = `trunc_W(lshr(ext64(x), n & (W-1)))` ——
+// **永远 lshr**、移位量按 W 取模（64 位 `& 63`、32 位 `& 31`）；`asr` 是 `ashr` + 先 `icmp ult`
+// 把移位量夹到 W-1（n ≥ W 时饱和）。
+// 期望见 `04-ul8-shift-wrap.irkeys`。
+run_sim: while true {
+  // W = 64：lshr，移位量 & 63
+  var x = U64 3
+  var n = U64 1
+  var y = x >> n
+  // W = 32：lshr，移位量 & 31（不是「≥ 32 就归零」）
+  var a = S32 8
+  var k = S32 2
+  var z = a >> k
+  // asr：ashr + `icmp ult` 夹到 31（n ≥ 32 时饱和成符号填充）
+  var s = asr(S32 3000, k)
+  break
+}

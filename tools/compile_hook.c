@@ -138,13 +138,30 @@ static const char* resolve_compiler(void) {
 
 /* ---- 失败分类（接口冻结版 1 §8）-----------------------------------------
  * 这里的三个串是**壳自己**会产生的失败：内部错误（没有源码 / 核心给的形状不合法）、
- * 超预算、熔断。源码侧的五个分类（`UnsupportedConstruct` / `BlobTooLarge` /
+ * 超预算、熔断。源码侧的六个分类（`UserError` / `UnsupportedConstruct` / `BlobTooLarge` /
  * `RelocUnsupported` / `SymbolUndefined` / `InternalError`）由核心返回，
  * 它们的唯一一处定义在 `simplexc/shell/simplexc_core.h`（那边是 C++，与本文件无法共享宏）。
- */
+ * `UserError` 只在这里多一个用法：回退决策要认出它（用户错不转交），但仍没在这里定义。 */
 #define KIND_INTERNAL   "InternalError"
 #define KIND_TIMEOUT    "Timeout"
 #define KIND_FAULT      "OursFault"
+#define KIND_USER_ERROR "UserError"
+
+/* 核心给的失败还带着三轴诊断串（`sema/用户源码错 第 12 行：…`，`simplexc_last_error()`）。
+ * 为什么存到文件级静态缓冲：`ours_compile_ours` 拿到 kind 的地方与 `ours_fail_result` /
+ * `kind=` 日志行用到它的地方隔着一个段（`ours_segment`），而诊断串只在**同一次调用**里有效
+ * —— 壳在 `ours_compile_ours` 入口清它，不存在跨调用串值。
+ * 壳自己判的失败（没源码 / 形状不合法）没有诊断，那时它是空串。 */
+static char g_kind_detail[512];
+
+/* 把 `s` 接到 `buf` 尾（显式截断，绝不越界）；返回新的已用长度。
+ * 为什么不用 `sprintf`/`strcat`：拼进去的是用户源码里的名字，长度不受我们控制；
+ * 而 `strcat` 还要先手算 `strlen`，那正是最容易算错的地方。 */
+static size_t append_str(char* buf, size_t cap, size_t used, const char* s) {
+    while (*s && used + 1 < cap) buf[used++] = *s++;
+    buf[used] = 0;
+    return used;
+}
 
 /* ours 段的超时预算（毫秒）：`TC_OURS_TIMEOUT_MS` 环境变量 > `opt.ini` 的
  * `[opt] ours_timeout_ms` > 默认 5 秒；调试期调大到 60000。
@@ -190,12 +207,16 @@ static unsigned long long ours_budget_ms(void) {
  */
 static const char* ours_compile_ours(void* out, const char* src, long long slen) {
     if (g_ours_prev) { simplexc_free(g_ours_prev); g_ours_prev = NULL; }
+    g_kind_detail[0] = 0;                           /* 诊断串只跟**本次**失败走 */
     if (!src || slen <= 0) return KIND_INTERNAL;     /* 没有源码可编（src 缺失或空）*/
 
     void* blob = NULL;
     long long len = 0, entry = 0;
     const char* kind = simplexc_compile(src, slen, &blob, &len, &entry);
-    if (kind) return kind;                          /* 失败：三个出参一个都没动 */
+    if (kind) {                                     /* 失败：三个出参一个都没动 */
+        append_str(g_kind_detail, sizeof g_kind_detail, 0, simplexc_last_error());
+        return kind;
+    }
 
     /* 核心的返回值已经过自己的校验，这里再守一道：形状不合法就不能交给游戏。
        长度必须装得下 8 字节头、且不超转发层自己的上限（dump() 也是 64 MB）。 */
@@ -309,28 +330,39 @@ static const char* ours_segment(void* out, const char* src, long long slen, int*
     return NULL;
 }
 
-/* `ours` 模式的失败 Result：**必须给非 0 的 out[3]**，否则游戏会走成功路径、
- * 在 jit 里因 len<=0 抛 index error（见 docs/facts.md）。返回值的形状由游戏自己拼，
- * 这里返回 NULL 即可（真正决定走向的是 out[3]）。
+/* `ours` 模式的失败 Result（以及回退模式下**故意不转交**的那一类）：**必须给非 0 的 out[3]**，
+ * 否则游戏会走成功路径、在 jit 里因 len<=0 抛 index error（见 docs/facts.md）。返回值的形状由
+ * 游戏自己拼，这里返回 NULL 即可（真正决定走向的是 out[3]）。
  *
- * 内容 = `ours: ` + §8 分类串（接口冻结版 1 §5）—— 回退率报告按这个前缀分类。 */
+ * 内容 = `ours: ` + §8 分类串（接口冻结版 1 §5）+ ` @ ` + 三轴诊断（有的话）—— 回退率报告按
+ * 前缀分类；诊断串是给**人**看的（游戏是 GUI 进程，看不到我们的 stderr，只有这条路能出去）。 */
 static void ours_fail_result(void* out, long long seq, const char* kind) {
-    char why[96];
-    sprintf(why, "ours: %s", kind ? kind : KIND_INTERNAL);
-    long long n = (long long)strlen(why);
-    unsigned long long* desc = (unsigned long long*)malloc((size_t)n + 9);
+    char why[768];
+    size_t n = append_str(why, sizeof why, 0, "ours: ");
+    n = append_str(why, sizeof why, n, kind ? kind : KIND_INTERNAL);
+    if (g_kind_detail[0]) {
+        n = append_str(why, sizeof why, n, " @ ");
+        n = append_str(why, sizeof why, n, g_kind_detail);
+    }
+    unsigned long long* desc = (unsigned long long*)malloc(n + 9);
     if (!desc) return;
     desc[0] = ((unsigned long long)n) | (1ULL << 62);   /* bit62 → 游戏不 free */
-    memcpy((char*)desc + 8, why, (size_t)n + 1);
+    memcpy((char*)desc + 8, why, n + 1);
     *(long long*)((char*)out + 0) = 0;
     *(void**)((char*)out + 8) = NULL;
     *(long long*)((char*)out + 16) = 0;
-    *(long long*)((char*)out + 24) = n;
+    *(long long*)((char*)out + 24) = (long long)n;
     *(void**)((char*)out + 32) = (char*)desc + 8;
     (void)seq;
 }
 
+/* `hook_log` 在下面定义（中间隔着 dump/manifest 一段）：先声明，因为「加载失败」
+   是必须留痕的事件，而痕迹只能写在 ensure_real 里 —— 只有那里拿得到 GetLastError
+   （126 = 找不到文件 / 193 = 位数不对 / 127 = 没有 compile 导出）。 */
+static void hook_log(LONG seq, const char* event, const char* kv);
+
 static void ensure_real(void) {
+    static int fail_logged = 0;
     /* 延迟加载：绝不能在 DllMain 里 LoadLibrary（loader lock 会死锁）。
        多线程首次并发时可能重复 LoadLibrary —— 无害，只是引用计数 +1。
 
@@ -356,6 +388,18 @@ static void ensure_real(void) {
     }
     if (!g_real) g_real = LoadLibraryA(REAL_DLL);      /* 兜底：当前目录 */
     if (g_real) g_compile = (compile_fn)GetProcAddress(g_real, "compile");
+    /* 加载失败以前**零记录**：`compile()` 里 `if (!g_compile) return NULL` 不给 out 写任何字段，
+       hook.log 也没有行 —— 游戏按 out[3]==0 判成功，于是「我们的部署错了」被记成「什么都没发生」
+       （P3）。这里补一行，带 Win32 错误码；只记一次 —— NimMain / NimDestroyGlobals 也会走到本函数，
+       否则每次调用都添一行。 */
+    if (!g_compile && !fail_logged) {
+        DWORD err = GetLastError();
+        char kv[160];
+        fail_logged = 1;
+        snprintf(kv, sizeof kv, "stage=ensure_real\tkind=%s\tdetail=%s err=%lu",
+                 KIND_INTERNAL, REAL_DLL, (unsigned long)err);
+        hook_log(0, "error", kv);
+    }
 }
 
 /* 返回是否真的写出了文件 —— manifest 要按它决定写文件名还是 "-"，
@@ -803,7 +847,26 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         }
         if (ours_ok) { impl = "ours"; result = "ok"; }
         else if (lstrcmpA(mode, "ours") == 0) { impl = "ours_failed"; result = "fail"; }
+        /* 回退模式下还有一类**故意不转交**的失败：`UserError` = 用户能自己改对的源码错。
+           为什么：转交只会白跑一次参考编译，而且往回退率的分母里偷一个「我们的 bug」——
+           回退率是关掉回退的唯一量化依据。其余分类（未实现 / `OurBug` / 超时 / 熔断）照旧转交：
+           那几档确实是「我们不行」，让原版顶上是对的。 */
+        else if (lstrcmpA(kind, KIND_USER_ERROR) == 0) { impl = "ours_failed"; result = "fail"; }
         else { impl = "fallback"; result = "reference"; need_reference = 1; }
+    }
+
+    /* 编译期的**非致命观察**（解析期 notes、「不可达 def 被跳过」）以前在编译路径上没有任何
+       消费者：C++ 侧只往一个没人读的 `stats.warnings` 里写，而游戏是 GUI 进程、看不到我们的
+       stderr —— 于是「这里被略过了什么」查不到（P2/P6）。这里落一行：事件名用 `warn`（不是
+       `error`），回退率按 `error` 行统计，不会被这些条目污染。`detail=` 与 `error` 行同形，
+       消费者忽略不认识的事件名。 */
+    if (ours_attempted) {
+        const char* warns = simplexc_last_warnings();
+        if (warns && warns[0]) {
+            char kvw[260]; /* `hook_log` 行缓冲 320 减固定前缀后的额度；超了由 snprintf 截断 */
+            snprintf(kvw, sizeof kvw, "detail=%s", warns);
+            hook_log(seq, "warn", kvw);
+        }
     }
 
     /* 失败先记账。为什么放在这里而不是各自的 return 点上：早先版本 ours 失败直接
@@ -814,8 +877,18 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         const char* stage = "ours";
         if (lstrcmpA(kind, KIND_TIMEOUT) == 0)      stage = "ours_timeout";
         else if (lstrcmpA(kind, KIND_FAULT) == 0)   stage = "ours_fault";
-        char kve[96];
-        sprintf(kve, "stage=%s\tkind=%s", stage, kind);
+        /* `detail=` 是三轴诊断（`sema/用户源码错 第 12 行：…`）：stderr 只有开发机看得到，
+           游戏在别人的机器上跑，而「哪一行、哪个阶段」全在这一串里。缓冲 200 是 `hook_log`
+           行缓冲（320）的上限减去固定前缀后剩下的额度，超了就在这里截断，不让它冲爆那边。 */
+        char kve[200];
+        size_t used = append_str(kve, sizeof kve, 0, "stage=");
+        used = append_str(kve, sizeof kve, used, stage);
+        used = append_str(kve, sizeof kve, used, "\tkind=");
+        used = append_str(kve, sizeof kve, used, kind);
+        if (g_kind_detail[0]) {
+            used = append_str(kve, sizeof kve, used, "\tdetail=");
+            used = append_str(kve, sizeof kve, used, g_kind_detail);
+        }
         hook_log(seq, "error", kve);
     }
 
@@ -829,10 +902,10 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         hook_log(seq, "impl", kvi);
     }
 
-    /* ours 模式失败时不给游戏跑新代码的机会：写一个形状合法的失败 Result（out[3] ≠ 0），
-       Bit62 头让游戏不去 free 我们的描述串。 */
+    /* 失败的两种走向：`ours` 模式、以及回退模式下**故意不转交**的（`UserError`）——
+       两者都要给游戏一个形状合法的失败 Result，差別只在 impl 行里的 mode。 */
     void* ret = NULL;
-    if (!is_ref && !ours_ok && lstrcmpA(mode, "ours") == 0) {
+    if (!is_ref && !ours_ok && !need_reference) {
         if (out) ours_fail_result(out, seq, kind);
         ret = NULL;
     } else if (need_reference) {

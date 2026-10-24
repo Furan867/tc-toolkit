@@ -2,11 +2,26 @@
 
 #include <array>
 #include <cstddef>
+#include <utility>
+
+#include "../sema/errors.hh"
 
 namespace simplexc {
+
+using sema::CompileError;
+using sema::Responsibility;
+using sema::Span;
+using sema::Stage;
+
 namespace {
 
 constexpr std::size_t kNone = std::string::npos;
+
+/* 词法错的唯一一处构造：责任恒为 `UserSource`（源码里的字面量/字符不对），阶段恒为 `Lex`，
+ * 位置恒有行列（词法器逐码点走，这两个数手上就有）。 */
+CompileError lex_error(int line, int col, std::string msg) {
+  return CompileError{Responsibility::UserSource, Stage::Lex, Span{line, col}, std::move(msg)};
+}
 
 bool is_word(char c) {
   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
@@ -126,9 +141,8 @@ std::vector<Tok> tokenize(std::string_view text) {
     if (c == '#' || c == '@' || c == '$') {
       const std::size_t e = ident_at(text, i + 1);
       if (e == kNone) {
-        throw LexError{start_line, start_col,
-                       "第 " + std::to_string(start_line) + " 行：'" + std::string(1, c) +
-                           "' 后面不是名字"};
+        throw lex_error(start_line, start_col, "第 " + std::to_string(start_line) + " 行：'" +
+                                                   std::string(1, c) + "' 后面不是名字");
       }
       Tok t;
       t.kind = (c == '#') ? "hash" : (c == '@' ? "at" : "dollar");
@@ -155,8 +169,8 @@ std::vector<Tok> tokenize(std::string_view text) {
         while (j < n && (is_digit(text[j]) || text[j] == '_')) ++j;
       }
       if (j < n && text[j] == '.' && j + 1 < n && is_digit(text[j + 1])) {
-        throw LexError{start_line, start_col,
-                       "第 " + std::to_string(start_line) + " 行：浮点字面量未支持"};
+        throw lex_error(start_line, start_col,
+                        "第 " + std::to_string(start_line) + " 行：浮点字面量未支持");
       }
       Tok t;
       t.kind = "number";
@@ -174,9 +188,8 @@ std::vector<Tok> tokenize(std::string_view text) {
     if (is_delim(c)) {
       const std::size_t end = scan_quoted_at(text, i);
       if (end == kNone) {
-        throw LexError{start_line, start_col,
-                       "第 " + std::to_string(start_line) + " 行：" + std::string(1, c) +
-                           " 字面量没有闭合"};
+        throw lex_error(start_line, start_col, "第 " + std::to_string(start_line) + " 行：" +
+                                                   std::string(1, c) + " 字面量没有闭合");
       }
       const std::string inner(text.substr(i + 1, end - 1 - (i + 1)));
       Tok t;
@@ -240,8 +253,8 @@ std::vector<Tok> tokenize(std::string_view text) {
       } else {
         shown = std::string(1, c);
       }
-      throw LexError{start_line, start_col, "第 " + std::to_string(start_line) +
-                                                " 行：不认识的字符 '" + shown + "'"};
+      throw lex_error(start_line, start_col,
+                      "第 " + std::to_string(start_line) + " 行：不认识的字符 '" + shown + "'");
     }
     Tok t;
     t.kind = "op";

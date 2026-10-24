@@ -12,9 +12,13 @@
  * 没有它就只看到 movabs 的立即数是本进程里已映射的 kernel32 真实地址，于是按 spec §6 拒绝运行
  * （那些桩在生产进程里是 `GetProcAddress` 解出来的，产物里换一台机器就变）。
  * 所以这里用与 `shell/simplexc_core.cc` **相同**的链（`Frontend(SrcText)` → `build_module` →
- * `Program` → `emit_object()` → `assemble()`）自己算一遍，拿到 `AsmResult::stubs`；同时把这一遍的
- * 产物与 `simplexc_compile` 的产物**逐字节比对**，不一致就报错且不落盘 —— 两条路给出同一个产物
- * 这条断言本身就是判据，不成立的话 stubs 的偏移也不再可信。
+ * `sema::analyze` → `codegen::Program` → `emit_object()` → `assemble()`）自己算一遍，拿到
+ * `AsmResult::stubs`；同时把这一遍的产物与 `simplexc_compile` 的产物**逐字节比对**，不一致就报错
+ * 且不落盘 —— 两条路给出同一个产物这条断言本身就是判据，不成立的话 stubs 的偏移也不再可信。
+ *
+ * 这条断言**只证明确定性**（同一套链跑两遍 = 同一个产物），不证明语义等价：跨路径的等价性
+ * 由 `work/tmp/s2c/dual.py`（同源双跑，75/75）与 `blob_baseline --verify`（98 份语料比参考产物）
+ * 承担。旧 lowering 删掉之后这里就没有「第二条路径」可比了，别把这条断言读成那个意思。
  *
  * 用法：core_selftest --src <file.si> --out <blob>   （同时写 <blob>.entry、<blob>.stubs）
  * 退出码：0 成功；1 编译失败 / 两条路不一致；2 读不了源文件 / 写不了产物 / 参数不对。
@@ -32,14 +36,18 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "codegen/codegen.hh"
+#include "codegen/module_build.hh"
+#include "codegen/module_source.hh"
 #include "frontend/frontend.hh"
-#include "lower/lower.hh"
-#include "lower/module_build.hh"
+#include "sema/analyze.hh"
 #include "shell/embedded_objs.hh"
 
 namespace sx = simplexc;
+namespace cg = simplexc::codegen;
 namespace lw = simplexc::lower;
 namespace sh = simplexc::shell;
+namespace sm = simplexc::sema;
 
 namespace {
 
@@ -78,9 +86,10 @@ class Kernel32Resolver : public tc::ExternResolver {
    这里整个交出来 —— stubs 只在 `AsmResult` 上。 */
 tc::AsmResult assemble_collecting_stubs(const std::string& text) {
   sx::Frontend fe(sx::SrcText{text});
-  if (!fe.decl_errors.empty()) throw lw::CompileFail("声明层错误：" + fe.decl_errors.front());
+  if (!fe.decl_errors.empty()) throw sm::CompileFail("声明层错误：" + fe.decl_errors.front());
   lw::OwnedModule owned = lw::build_module(fe, fe.src_path);
-  lw::Program prog(owned.ast, false);
+  const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
+  cg::Program prog(hir);
   prog.build();
 
   std::vector<tc::ObjectFile> objs;
@@ -187,7 +196,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  /* 两条路必须逐字节相同（同一份源码、确定性）—— 不然下面写出的 stubs 说的可能是另一个产物。 */
+  /* 两遍必须逐字节相同（同一套链、同一份源码 → 确定性）—— 不然下面写出的 stubs 说的可能是另一个产物。 */
   const auto* bytes = static_cast<const unsigned char*>(blob);
   const std::vector<uint8_t>& got = internal.blob.bytes;
   if (got.size() != static_cast<std::size_t>(len) ||

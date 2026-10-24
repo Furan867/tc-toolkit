@@ -1,0 +1,16 @@
+// 前缀函数（方案 §2f）：`get_time` / `sleep` / `memory_clear` / `memory_copy` / `thread_exit`
+// 是前缀里的普通 def，HIR 里仍是 `Call{fn}`（**不是**内建）。被调实例带 `pre_body`、body 是
+// 空块 —— codegen 见到非 `none` 不编译 body，改走对应的 `body_*`（产物符号名与现状一致）。
+// 实参在调用点就 `convert` 到固定的形参类型，与 `lower.cc` 的 `call_prefix` 同。
+const #SIMULATION_STATE = Ptr 2416623026176
+
+run_sim: while true {
+  var t = get_time()
+  sleep(Time 5)
+  memory_clear(#SIMULATION_STATE, 16)
+  memory_copy(#SIMULATION_STATE, #SIMULATION_STATE + 64, 8)
+  if t == Time 0 {
+    thread_exit()
+  }
+  var again = get_time()
+}

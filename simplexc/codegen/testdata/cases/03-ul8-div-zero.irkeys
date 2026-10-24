@@ -1,0 +1,4 @@
+icmp eq i64
+select i1
+sdiv i64
+srem i64

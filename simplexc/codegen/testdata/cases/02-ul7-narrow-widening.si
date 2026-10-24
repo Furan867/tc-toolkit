@@ -1,0 +1,15 @@
+// 引 `docs/facts/semantics.md` §U-L7：提升分两路 —— **编译期常量**按**源类型的符号性**扩展，
+// **运行期窄值**一律 `zext(trunc_W(v))`（与符号性无关，所以不许出现 `sext`）；掩码点两处：
+// 转换与运算结果，掩码 = `(1<<N)-1`。
+// 期望见 `02-ul7-narrow-widening.irkeys`。
+run_sim: while true {
+  // 常量 S32 -8 → U64：按源类型 S32 是**有符号** → 符号扩展 → 8 字节的 -8
+  var c = U64 (S32 -8)
+  // 运行期窄值（S32 是**有符号**、值是 -8）：`zext` 到 64 位 + 掩码 (1<<32)-1
+  // → 0x00000000FFFFFFF8，不是 0xFFFFFFFFFFFFFFF8
+  var s = S32 -8
+  var u = U64 s
+  // 转换处掩码：U8 511（0x1FF）→ 0xFF
+  var e = U8 511
+  break
+}

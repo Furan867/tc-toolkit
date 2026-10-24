@@ -1,0 +1,8 @@
+// `Str` 字面量进串池（`Hir.strings`，同一串只占一个槽）。`Str == Str` **不折叠**、也不比
+// 位模式：参考实现走 `__simplexc_streq`（先比长度、再逐字节），HIR 用 `streq`/`strne` 这个
+// op 把「按内容比」记下来 —— codegen 不必再靠操作数类型猜。
+run_sim: while true {
+  var s = 'abc'
+  var same = s == 'abc'
+  var diff = s != 'abd'
+}

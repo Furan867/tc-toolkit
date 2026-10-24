@@ -1,0 +1,10 @@
+// `Str` 拼接：`+` 两侧先 `convert`（Str → Str 是只换标签的 `Raw`，参考的 `convert` 同形），
+// 结果是 `Binary{Add, ty=Str}` —— 开缓冲 + `__simplexc_copy` + 回填 `len<<16` 是 codegen 的事。
+// 转义按 U-L10 的表解（`\t` → 0x08、`\b`/`\x42`/`\"` 原样留反斜杠），模板的文字段走同一处。
+run_sim: while true {
+  var a = 'ab'
+  var b = a + 'cd'
+  var t = 'A\tB\nC'
+  var u = 'x\by\x42z'
+  var v = `{a}=\t{a}`
+}

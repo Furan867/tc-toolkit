@@ -1,0 +1,17 @@
+// `switch`：主体求值一次；每个 `case 值:` 是**独立**条件（不 fallthrough，命中就只跑自己那块）；
+// `default` 只在全不命中时跑，HIR 里排在所有 case 之后；`break` 穿到外层循环
+// （switch 不进 break 的标签栈 —— 语料里 `break run_sim` 就写在 case 里）。
+// 第二个 switch 的主体是 `Str`：case 值必须是 Str 常量，派发按**内容**比。
+run_sim: while true {
+  var x = 2
+  switch x
+  case 1 { x = 10 }
+  case 2 {
+    x = 20
+    break run_sim
+  }
+  default { x = 30 }
+  var s = 'b'
+  switch s
+  case 'b' { x = 1 }
+}

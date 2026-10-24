@@ -1,0 +1,20 @@
+// 方法糖：糖消解归 sema，**HIR 里不留方法名**（方案 §2f 的追加段）。现状只认 `.len()` 与
+// `.ms()`（98 份语料里 212 / 294 处；其余方法名一处也没有，`lower.cc` 的 `call_method` 本来也
+// 报错，所以它们继续显式报未实现）。
+//   · `.len()` → `Call{builtin:10}`，结果 I64；接收者只能是 Str / Arr；
+//   · `.ms()`  → `Call{builtin:11}`，结果 Time；折不折常量由 codegen 定，所以常量接收者在这里
+//     也是**一条调用**，不折成 `Const`。
+const #CYCLE = 7
+
+run_sim: while true {
+  var s = "abcd"
+  var n = s.len()
+  var a = [1, 2, 3]
+  var m = a.len()
+  var cycles = U32 5
+  var t = cycles.ms()
+  sleep(t)
+  var e = Arr[U8] []
+  var z = e.len()
+  var w = #CYCLE.ms()
+}

@@ -10,13 +10,16 @@
 | case | 判据 |
 |---|---|
 | `ours-nosrc`       | mode=ours + **空源码** → 壳自己判 `InternalError`：失败串 `ours: InternalError`、manifest `impl=ours_failed`、hook.log 的 `error`(stage=ours/kind=InternalError) + `impl` 两条都在 |
-| `fallback-nosrc`   | mode=ours_with_fallback + 空源码 → 整单转交参考实现：产物与**同一进程里**参考实现的产物逐字节相同、manifest `impl=fallback` |
+| `fallback-nosrc`   | mode=ours_with_fallback + 空源码 → 整单转交原版编译器：产物与**同一进程里**原版编译器的产物逐字节相同、manifest `impl=fallback` |
 | `ref`              | mode=reference → manifest `impl=reference`、hook.log 有 `impl` 行（回退率的分母） |
 | `ours-ok`          | mode=ours + 真源码（`SRC` = 176.si）→ 产物是**我们的**（头 bit62=1）、`impl=ours`、无 `error` 行、同进程重复编译逐字节相同、manifest 记的 out_len/out_sha256 与产物一致 |
 | `refcmp`           | reference 不回归：新壳与「改动前」的产物逐字节相同 |
 | `timeout-ours`     | 预算 0 → `ours: Timeout`、manifest `impl=ours_failed` |
 | `timeout-fallback` | 同上但 ours_with_fallback → 转交参考、manifest `impl=fallback` |
 | `ours-budget-ok`   | （超时判据的对照）同一份源码、预算走默认 5 s → ours 成功 |
+| `user-err`         | 用户源码错（`USER_ERR_SRC`）→ `ours: UserError @ sema/…`（三轴都在失败串里）；`ours` 与 `ours_with_fallback` **两种模式都不转交**：`impl=ours_failed`、无 `impl=fallback`、无产物文件 |
+| `undefined-call`   | ours_with_fallback + 调我们没实现的 `hex(2,3)` → **必须转交**：`kind=UnsupportedConstruct`、`impl=fallback`、产物与同进程参考产物逐字节相同 |
+| `user-syntax-err`  | ours_with_fallback + 真语法错（`USER_SYNTAX_ERR_SRC`）→ `UserError`、**不转交**：`impl=ours_failed`、无 `impl=fallback`、无产物（与上一条成对，才分得清两种坏法） |
 
 `ours-budget-ok` 是 `timeout-ours` 的对照：有了它才能说「超时那条的失败是超预算造成的」，
 而不是这份源码本身就走不通。
@@ -120,6 +123,18 @@ BASELINE_SRC = f"{BASELINE_REF}:tools/compile_hook.c"
 # 覆盖掉它等于把交付物的中间物换成测试构建的。
 SHELL_OBJ = os.path.join(WORK, "compile_hook_shell.o")
 SRC = os.path.join(SIMPLEXC, "corpus", "src", "176.si")
+
+# 用户源码错的最小 `.si`（**内联**，不进 `corpus/src/`：语料目录有 manifest，多一个文件会打破
+# `recompile_corpus.py --check` 的条数判据）。`1 == "x"` 落在 sema 的 `unify` 里
+# （`Str 与整数混用`，责任轴 = UserSource）—— 它过了词法/语法，靠 sema 才拒。
+USER_ERR_SRC = b'main: while true {\n    if 1 == "x" { }\n}\n'
+
+# 未实现的内建：`hex` 是前缀格式化，属于 status 里「刻意不做」的那批。这条源码过词法/语法层，
+# 只在**解析未定义的函数**那一步停 —— 而那一处的责任轴必须是 `Unimplemented`（`4c147ef`）。
+UNDEFINED_CALL_SRC = b'main: while true {\n    let s = hex(2, 3)\n}\n'
+
+# 真语法错（`(` 后面直接 `}`）：责任轴 = UserSource、阶段 = parse → 壳判 `UserError`。
+USER_SYNTAX_ERR_SRC = b'main: while true {\n    let x = (1 + \n}\n'
 
 # 为什么是 176.si（这里的 ours 系 case 只要「一份能编过的真源码」）：它是当前 98 份里逐 tick 全等的
 # 三份之一。换掉旧值 058.si 是因为它现在编不过 —— 那是 lowering 的已知缺口（由 `tools/m5/coverage.py`
@@ -766,6 +781,130 @@ def case_ours_budget_ok(c):
             f"{len(error_records(recs))} 条 error")
 
 
+def case_user_err(c):
+    """user-err：用户源码错 → `UserError`，而且**不转交**（`ours` 与 `ours_with_fallback` 都一样）。
+
+    为什么这条要单独判：`InternalError` 在 `ours_with_fallback` 下会触发整单转交参考编译器，
+    于是「用户写错源码」会白跑一次参考编译、还往「回退率」的分母里偷一个「我们的 bug」——
+    回退率是关掉回退的唯一量化依据。判据因此有四层：
+      ① 失败串的前缀是 `ours: UserError`（**不是** `InternalError` / `UnsupportedConstruct`）；
+      ② 三轴真的流出了 C 边界：失败串里带 `sema/`（阶段+责任）与行号；
+      ③ `impl=ours_failed`，且**没有** `impl=fallback`；
+      ④ 没拿到产物：manifest `out_len=0`、目录里没有该 seq 的 `hook_out_NNN.bin`。
+    """
+    os.environ.pop("TC_OURS_TIMEOUT_MS", None)
+    d = vdirs("new")
+    set_mode("new", "ours")
+    dll, before = load_and_snapshot("new")
+    raw1, ret1 = call_compile(dll, USER_ERR_SRC)
+    q1, prod1 = show_result(c, "user-err(ours)", raw1, ret1)
+    rows1, _recs1 = show_delta(c, "new", before, "ours ")
+
+    set_mode("new", "ours_with_fallback")
+    raw2, ret2 = call_compile(dll, USER_ERR_SRC)
+    q2, prod2 = show_result(c, "user-err(ours_with_fallback)", raw2, ret2)
+    rows2, recs2 = show_delta(c, "new", before, "fallback ")
+
+    eb1, eb2 = err_bytes(raw1), err_bytes(raw2)
+    row1 = rows1[-1] if rows1 else {}
+    row2 = rows2[-1] if rows2 else {}
+    seq2 = row2.get("seq", "")
+    recs2 = [r for r in recs2 if r["seq"] == seq2]      # 只认**这一次**调用的行
+    c.fact("err_text", eb2.decode("utf-8", "replace"))
+    for tag, eb in (("ours", eb1), ("fallback", eb2)):
+        c.check(f"err_text_user_error_{tag}",
+                eb.startswith(b"ours: ") and b"UserError" in eb
+                and b"InternalError" not in eb and b"UnsupportedConstruct" not in eb, repr(eb))
+        c.check(f"err_text_has_axes_{tag}", b"sema/" in eb and "第".encode() in eb, repr(eb))
+    c.check("manifest_impl_ours_failed", row1.get("impl") == "ours_failed"
+            and row2.get("impl") == "ours_failed", f"impl={last_impl(rows2)}")
+    c.check("no_impl_fallback_log", not find_log(recs2, "impl", impl="fallback"),
+            f"impl 行：{[r['kv'].get('impl') for r in recs2]}")
+    c.check("log_kind_user_error", bool(find_log(recs2, "error", kind="UserError")))
+    c.check("no_product", prod1 is None and prod2 is None and q1[0] == 0 and q2[0] == 0,
+            f"out_len={q1[0]}/{q2[0]}")
+    c.check("manifest_out_len_zero", row1.get("out_len") == "0" and row2.get("out_len") == "0",
+            f"out_len={row1.get('out_len')}/{row2.get('out_len')}")
+    c.check("no_out_file",
+            not os.path.exists(os.path.join(d["out"], f"hook_out_{int(seq2):03d}.bin"))
+            if seq2.isdigit() else False, f"seq={seq2}")
+    # 进程没死是**本进程**判不了的（崩了就走不到这一行，由子进程 rc 兜）：这里只判两次调用的
+    # 失败 Result 形状都对（err_len/err_ptr 非 0），游戏才能走失败分支而不是当成成功。
+    c.check("failure_result_shaped", q1[3] != 0 and q1[4] != 0 and q2[3] != 0 and q2[4] != 0,
+            f"err_len/ptr：{q1[3]:#x}/{q1[4]:#x}、{q2[3]:#x}/{q2[4]:#x}")
+
+
+def case_undefined_call(c):
+    """未定义的函数（我们没实现的 `hex`）+ ours_with_fallback → **必须转交参考**。
+
+    守的是 `4c147ef` 修的那条回归：这一处若被判成 `UserSource`，壳就会走 `UserError` 那条
+    **不转交**的路，游戏里直接报错 —— 而「我们能不能编」的数字看不出来（那组数字只量产物，
+    不量游戏能不能跑）。四层判据：① 失败分类是 `UnsupportedConstruct`（不是 `UserError`）；
+    ② `impl=fallback` 在 manifest 与 hook.log 里都在；③ 产物与**同一进程、同一个
+    `compile_real.dll` 实例**的参考产物逐字节相同（= 那份 blob 来自参考）；④ 参考那次真的成功
+    （否则「逐字节相同」可能只是两边都空）。
+    """
+    os.environ.pop("TC_OURS_TIMEOUT_MS", None)
+    set_mode("new", "reference")
+    dll, before = load_and_snapshot("new")
+    raw_ref, ret_ref = call_compile(dll, UNDEFINED_CALL_SRC)
+    q_ref, prod_ref = show_result(c, "reference（先跑，作对照）", raw_ref, ret_ref)
+    show_delta(c, "new", before, "reference ")
+    set_mode("new", "ours_with_fallback")
+    raw_fb, ret_fb = call_compile(dll, UNDEFINED_CALL_SRC)
+    q_fb, prod_fb = show_result(c, "ours_with_fallback（hex）", raw_fb, ret_fb)
+    rows, recs = show_delta(c, "new", before, "fallback ")
+    row = rows[-1] if rows else {}
+    seq = row.get("seq", "")
+    errs = [r for r in error_records(recs) if r["seq"] == seq]   # 只认**这一次**调用的行
+    kinds = [r["kv"].get("kind") for r in errs]
+    details = " ".join(r["kv"].get("detail", "") for r in errs)
+    c.fact("impl", row.get("impl"))
+    c.fact("error_kinds", kinds)
+    c.check("reference_ok", q_ref[3] == 0 and prod_ref is not None, f"err_len={q_ref[3]}")
+    c.check("fallback_err_len_zero", q_fb[3] == 0, f"err_len={q_fb[3]}")
+    c.check("fallback_product_equals_reference", prod_fb is not None and prod_fb == prod_ref,
+            f"参考长度 {None if prod_ref is None else len(prod_ref)}"
+            f" / 回退长度 {None if prod_fb is None else len(prod_fb)}")
+    c.check("manifest_impl_fallback", row.get("impl") == "fallback", f"impl={last_impl(rows)}")
+    c.check("log_impl_fallback",
+            bool(find_log([r for r in recs if r["seq"] == seq], "impl",
+                          impl="fallback", mode="ours_with_fallback")))
+    c.check("log_kind_unsupported_construct", kinds == ["UnsupportedConstruct"],
+            f"kind={kinds}（判成 UserError 就不会转交）")
+    c.check("log_detail_undefined_function", "未定义的函数" in details, repr(details))
+
+
+def case_user_syntax_err(c):
+    """真语法错 + ours_with_fallback → `UserError`、**不转交**（`undefined-call` 的对照）。
+
+    两条成对才成判据：同一个模式（ours_with_fallback）下，「未实现的构造」要转交、「用户的
+    源码错」不转交。只判一边分不清两种坏法 —— 永远转交（回退率的分母被用户错灌满）与
+    永远不转交（游戏里所有未实现的构造直接报错）。
+    """
+    os.environ.pop("TC_OURS_TIMEOUT_MS", None)
+    set_mode("new", "ours_with_fallback")
+    dll, before = load_and_snapshot("new")
+    raw, ret = call_compile(dll, USER_SYNTAX_ERR_SRC)
+    q, prod = show_result(c, "user-syntax-err(ours_with_fallback)", raw, ret)
+    rows, recs = show_delta(c, "new", before)
+    eb = err_bytes(raw)
+    row = rows[-1] if rows else {}
+    seq = row.get("seq", "")
+    recs = [r for r in recs if r["seq"] == seq]         # 只认**这一次**调用的行
+    c.fact("err_text", eb.decode("utf-8", "replace"))
+    c.check("err_text_user_error",
+            eb.startswith(b"ours: ") and b"UserError" in eb
+            and b"InternalError" not in eb and b"UnsupportedConstruct" not in eb, repr(eb))
+    c.check("err_text_axes", b"parse/" in eb and "第".encode() in eb, repr(eb))
+    c.check("manifest_impl_ours_failed", row.get("impl") == "ours_failed",
+            f"impl={last_impl(rows)}")
+    c.check("no_impl_fallback_log", not find_log(recs, "impl", impl="fallback"),
+            f"impl 行：{[r['kv'].get('impl') for r in recs if r['event'] == 'impl']}")
+    c.check("log_kind_user_error", bool(find_log(recs, "error", kind="UserError")))
+    c.check("no_product", prod is None and q[0] == 0, f"out_len={q[0]}")
+
+
 CASES = OrderedDict([
     ("ours-nosrc", ("空源码 + mode=ours → 壳自己判 InternalError：失败串 + impl=ours_failed + error/impl 两条日志",
                     case_ours_nosrc)),
@@ -781,6 +920,12 @@ CASES = OrderedDict([
     ("timeout-fallback", ("超时：ours_with_fallback + 预算 0 → 转交参考 / impl=fallback",
                           case_timeout_fallback)),
     ("ours-budget-ok", ("对照：同一份源码 + 默认预算 5 s → ours 成功", case_ours_budget_ok)),
+    ("user-err", ("用户源码错 → ours: UserError（三轴在串里）、两种模式都不转交、无产物",
+                  case_user_err)),
+    ("undefined-call", ("未定义的函数（hex）+ ours_with_fallback → 必须转交参考、产物与参考逐字节相同",
+                        case_undefined_call)),
+    ("user-syntax-err", ("真语法错 + ours_with_fallback → UserError、不转交（上一条的对照）",
+                         case_user_syntax_err)),
 ])
 
 

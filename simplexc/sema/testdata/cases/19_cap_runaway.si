@@ -1,0 +1,333 @@
+// 闭包实例数**不收敛**时报错（不是死循环）：同一个顶层 def 在不同捕获面下各发一份实例，
+// 上限照搬现状（`lower.cc` 的 64）—— 第 65 个捕获签名报 `CompileError{Unimplemented, Sema}`。
+// 断言文本在 `19_cap_runaway.err`（`analyze` 的 `what()` 逐字比）。
+// 为什么这条能到上限而真发散到不了：一个 def 的捕获面只能由**它体里的自由名**在调用点解析出来，
+// 名字集合与类型都取自有限集 ⇒ 签名集有限、终会收敛；能顶着上限的是签名太多（这条用例）。
+def use() U64 { return a + b }
+run_sim: while true {
+  {
+    var a = U8 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = U8 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = U16 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = U32 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = U64 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = S8 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = S16 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = U16 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = U32 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = U64 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = S8 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = S16 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = S32 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = S64 2
+    var r = use()
+  }
+  {
+    var a = S32 1
+    var b = Bool 2
+    var r = use()
+  }
+  {
+    var a = S64 1
+    var b = U8 2
+    var r = use()
+  }
+  {
+    var a = S64 1
+    var b = U16 2
+    var r = use()
+  }
+}

@@ -1,0 +1,13 @@
+Hir funcs=0 globals=1 externs=0 consts=1 strings=0 structs=0
+  global[0] name="g" ty=S64
+  const[0] name="#N" ty=S64 value=0x5
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=6:0
+      While label="run_sim" span=6:0
+        Const ty=Bool const=0x1 span=6:0
+        Block span=6:0
+          VarDecl ty=S64 name="x" span=7:0
+            Binary ty=S64 op=add span=7:0
+              Cast ty=S64 cast=raw span=7:0
+                Global ty=S64 global=0 span=7:0
+              Const ty=S64 const=0x5 span=7:0

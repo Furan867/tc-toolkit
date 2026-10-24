@@ -1,7 +1,8 @@
 // 语句 + 表达式 → AST（M4.5 的 C++17 产品实现）。
 //
 // 方法一条对一条地搬，判定顺序与
-// 错误文本照抄（`ParseError` 的行号/列号进判据）。产出节点就是 `ast.hh` 冻结的那套类型。
+// 错误文本照抄（`detail` 进判据，行号/列号进 `CompileError` 的 span）。
+// 产出节点就是 `ast.hh` 冻结的那套类型。
 //
 // 四条保真纪律（与原型一致，不是风格）：
 //   1. 每个节点带 `src_line`（1-based）。
@@ -24,7 +25,12 @@
 
 namespace simplexc {
 
-/* 位置可以是 token，也可以只有行号（报「这条语句没有副作用」时就只有行号）。 */
+/* 语法错**抛的是** `sema/errors.hh` 的 `CompileError{UserSource, Stage::Parse, Span, detail}`
+ * （`parser.cc` 的 `err_tok` / `err_line` 是唯一的两个构造点）。
+ *
+ * `ParseError` 只剩一个读者：`cli/simplexc_cli.cc` 的 catch（本批不改 `cli/`），所以类型留在
+ * 这里，但**没有抛出点**了 —— 新写的代码不要再用它。
+ * 位置可以是 token（行 + 列），也可以只有行号（报「这条语句没有副作用」时就只有行号）。 */
 struct ParseError {
   int line = 0;
   int col = 0;

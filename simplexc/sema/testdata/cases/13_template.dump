@@ -1,0 +1,22 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=4 structs=0
+  string[0] bytes="n=" cstring=false
+  string[1] bytes=" ok" cstring=false
+  string[2] bytes="" cstring=false
+  string[3] bytes="!" cstring=false
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=4:0
+      While label="run_sim" span=4:0
+        Const ty=Bool const=0x1 span=4:0
+        Block span=4:0
+          VarDecl ty=S64 name="n" span=5:0
+            Const ty=S64 const=0x5 span=5:0
+          VarDecl ty=Str name="t" span=6:0
+            Template ty=Str span=6:0
+              StrLit ty=Str string=0 span=6:0
+              Local ty=S64 name="n" span=6:0
+              StrLit ty=Str string=1 span=6:0
+          VarDecl ty=Str name="b" span=7:0
+            Template ty=Str span=7:0
+              StrLit ty=Str string=2 span=7:0
+              Const ty=Bool const=0x1 span=7:0
+              StrLit ty=Str string=3 span=7:0

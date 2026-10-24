@@ -5,7 +5,15 @@
 #include <map>
 #include <utility>
 
+#include "../sema/errors.hh"
+
 namespace simplexc {
+
+using sema::CompileError;
+using sema::Responsibility;
+using sema::Span;
+using sema::Stage;
+
 namespace {
 
 const std::array<const char*, 4>& unary_ops() {
@@ -97,10 +105,14 @@ int64_t parse_int_literal(const std::string& text) {
   return static_cast<int64_t>(v);
 }
 
-ParseError err_tok(const Tok& t, std::string msg) {
-  return ParseError{t.line, t.col, std::move(msg)};
+/* 语法错的唯一一处构造（`throw err_tok(...)` / `throw err_line(...)`）：责任恒为 `UserSource`、
+ * 阶段恒为 `Parse`。位置能从 token 拿就带列号，只有行号时 `col` 留 0（与 `Span` 的约定一致）。 */
+CompileError err_tok(const Tok& t, std::string msg) {
+  return CompileError{Responsibility::UserSource, Stage::Parse, Span{t.line, t.col}, std::move(msg)};
 }
-ParseError err_line(int line, std::string msg) { return ParseError{line, 0, std::move(msg)}; }
+CompileError err_line(int line, std::string msg) {
+  return CompileError{Responsibility::UserSource, Stage::Parse, Span{line, 0}, std::move(msg)};
+}
 
 }  // namespace
 
@@ -341,6 +353,19 @@ std::unique_ptr<Stmt> Parser::parse_statement() {
     if (w == "elif" || w == "else") throw err_tok(t, "'" + w + "' 前面没有 'if'");
     if (w == "case" || w == "default") throw err_tok(t, "'" + w + "' 前面没有 'switch'");
     if (unsupported_stmt_words().count(w)) throw err_tok(t, "语句 '" + w + "' 未支持");
+    /* 未识别的**语句关键字**别再掉进表达式解析（P1）：`asm x86_64 { … }` 这种「ident + 另一个
+     * ident」在语句位置既不是赋值（`x = …`）、不是调用（`f(…)`）、也不是下标/字段，于是
+     * `cast_ahead()` 把它读成类型转换，最后报出「是不是把 '=' 写成了 '=='？」—— 文案把排查
+     * 引离真因，而且看起来像用户的排版错。判据是**形状**：词既不是已知语句词、也不是声明的
+     * 类型名，而紧跟的 token 让它像「关键字 + 参数」（ident/number/string，与 `cast_ahead()`
+     * 同一条）。它是用户的源码错（语法），但要说清是哪个词。 */
+    if (!stmt_words().count(w) && !type_names_.count(w)) {
+      const Tok n1 = peek(1);
+      if ((n1.kind == "ident" || n1.kind == "number" || n1.kind == "string") &&
+          n1.line == t.line) {
+        throw err_tok(t, "语句 '" + w + "' 未支持");
+      }
+    }
     const Tok n1 = peek(1), n2 = peek(2);
     if (n1.kind == "op" && n1.text == ":" && n1.line == t.line && n2.kind == "ident" &&
         n2.text == "while") {
@@ -634,7 +659,7 @@ void Parser::parse_args(const Tok& open_tok, std::vector<TypeRefPtr>& type_args,
       std::vector<TypeRefPtr> cand;
       try {
         cand = parse_type_arg_list();
-      } catch (const ParseError&) {
+      } catch (const CompileError&) {
         cand.clear(); /* 不是类型实参表 → 当比较运算，回退（notes 与原型一样不回滚） */
       }
       /* 类型实参表后面必须紧跟 ',' 或 ')'，否则那不是 `<T>` 而是比较运算 */
@@ -779,8 +804,9 @@ std::unique_ptr<Expr> Parser::parse_template(const Tok& t) {
       ++j;
     }
     if (depth > 0) {
-      throw ParseError{t.line, t.col + 1 + code_points_between(text, 0, open),
-                       "模板字面量的 '{' 没有配对的 '}'"};
+      throw CompileError{Responsibility::UserSource, Stage::Parse,
+                         Span{t.line, t.col + 1 + code_points_between(text, 0, open)},
+                         "模板字面量的 '{' 没有配对的 '}'"};
     }
     const std::size_t close = j - 1; /* 指向 '}' */
     te->parts.push_back(parse_template_part(t, open + 1, close));
@@ -800,8 +826,7 @@ std::unique_ptr<Expr> Parser::parse_template_part(const Tok& t, std::size_t begi
   std::unique_ptr<Expr> e = p.parse_expr();
   if (!p.at_eof()) {
     const Tok extra = p.peek();
-    throw ParseError{extra.line, extra.col,
-                     "模板插值里多余的 " + describe(extra)};
+    throw err_tok(extra, "模板插值里多余的 " + describe(extra));
   }
   return e;
 }

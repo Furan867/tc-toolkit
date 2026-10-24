@@ -1,0 +1,8 @@
+// 模板插值：文字段与插值**交替**、文字段多一个 —— 所以 kid 个数 = 2×插值数 + 1（奇数），
+// 偶数下标是 StrLit 文字段（允许空串）、奇数下标是表达式。HIR 只描述结构：渲染成多少字节
+// （十进制 / `true` / `false` / 原样字节）是 codegen 的事。可渲染的类型只有 Str / Ptr / Int。
+run_sim: while true {
+  var n = 5
+  var t = `n={n} ok`
+  var b = `{true}!`
+}

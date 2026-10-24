@@ -1,0 +1,25 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=1
+  struct[0] name="Point" bits=8
+    field[0] name="x" ty=U8 offset=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=8:0
+      While label="run_sim" span=8:0
+        Const ty=Bool const=0x1 span=8:0
+        Block span=8:0
+          VarDecl ty=S64 name="x" span=9:0
+            Const ty=S64 const=0x1 span=9:0
+          Block span=12:0
+            VarDecl ty=S64 name="kept" span=13:0
+              Const ty=S64 const=0x2 span=13:0
+          Block span=15:0
+            VarDecl ty=S64 name="here" span=16:0
+              Const ty=S64 const=0x3 span=16:0
+          Block span=18:0
+            VarDecl ty=S64 name="typed" span=19:0
+              Const ty=S64 const=0x4 span=19:0
+          Block span=21:0
+            VarDecl ty=S64 name="seeded" span=22:0
+              Const ty=S64 const=0x5 span=22:0
+          Block span=26:0
+            VarDecl ty=S64 name="pp" span=27:0
+              Const ty=S64 const=0x6 span=27:0

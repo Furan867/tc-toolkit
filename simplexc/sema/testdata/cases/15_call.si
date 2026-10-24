@@ -1,0 +1,17 @@
+// 顶层 def 的调用闭包：同名重载按实参类型挑（`pick_def` 的 `compatible` 粗判）、
+// 自递归与互调（前向引用的 def 也在 `Module::defs` 里，因为预扫比体分析早整单元跑一遍）、
+// 每个调用点都指向**已存在**的实例（第 3 条不变量：`Call.callee.index` 落在 `Hir.funcs` 内）。
+def pick(a: Bool) U64 { return 1 }
+def pick(a: Str) U64 { return 2 }
+def tall(n: U64) U64 {
+  if n == 0 { return 0 }
+  return tall(n - 1) + 1
+}
+def is_even(n: U64) Bool { return n == 0 ? true : is_odd(n - 1) }
+def is_odd(n: U64) Bool { return n == 0 ? false : is_even(n - 1) }
+run_sim: while true {
+  var b = pick(true)
+  var s = pick('x')
+  var t = tall(3)
+  var e = is_even(4)
+}

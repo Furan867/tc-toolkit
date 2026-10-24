@@ -1,0 +1,34 @@
+// 嵌套 def 与闭包捕获：`HCapture.index` = 闭包环境槽位序号 = 首次遇到的顺序（不排序、不去重），
+// 捕获面不同 ⇒ 不同实例（顶层 def 的 `cap_index` 就是现状产物名里 `$c<n>` 的 n，嵌套 def 恒 -1）。
+// 兄弟 def（体里按名调用的、定义在外面的嵌套 def）的捕获要在**这一层**摊平：它自己没有调用点。
+// 嵌套 def 的实例键取**词法**归属（`owner|名字@行`），所以自递归 / 互调都收敛到同一个实例。
+var base = 7
+def with_global() U64 { return base }
+def bump(x: U64) U64 { return x + hits }
+def outer(v: U64) U64 {
+  var local = v
+  def inner(k: U64) U64 { return k + local }
+  return inner(1)
+}
+run_sim: while true {
+  var hits = 1
+  def twice(v: U64) U64 { return v + hits }
+  def chain(v: U64) U64 { return twice(v) + hits }
+  def countdown(n: U64) U64 {
+    if n == 0 { return hits }
+    return countdown(n - 1)
+  }
+  def ping(n: U64) U64 { return n == 0 ? hits : pong(n - 1) }
+  def pong(n: U64) U64 { return n == 0 ? hits : ping(n - 1) }
+  var a = twice(2)
+  var b = chain(3)
+  var c = with_global()
+  var f = outer(4)
+  var g = countdown(5)
+  var h = ping(6)
+  {
+    var hits = U8 5
+    var d = bump(1)
+  }
+  var e = bump(1)
+}

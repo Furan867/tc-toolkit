@@ -1,0 +1,5 @@
+lshr i64
+, 63
+, 31
+ashr i64
+icmp ult i64

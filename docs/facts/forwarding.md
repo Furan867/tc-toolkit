@@ -24,7 +24,7 @@
 → `memcpy(dest, out_ptr + 8, out_len)` → `c_jit()`（exe `0x140001a40` 实测就是 `ret`）
 → `jmp *dest + entry_off`。**不设置任何寄存器、无参数、无返回值** →
 产物内部调用约定由编译器自定，entry 自己保存现场。
-⚠️ memcpy 读到 `out_ptr + 8 + out_len`，比缓冲末尾多 8 字节（参考实现靠 Nim 字符串余量兜住；
+⚠️ memcpy 读到 `out_ptr + 8 + out_len`，比缓冲末尾多 8 字节（原版编译器靠 Nim 字符串余量兜住；
 自研实现要显式留 8 字节 padding）。
 验证：反汇编 exe `0x14021cc60`–`0x14021cd40`、`0x140001a40`
 最后验证：2026-10-15
@@ -121,7 +121,7 @@
 验证：静态核对（`watch_freq.py`）+ 历史铁证（`hook_out_005`/`006` 产物 sha 相同却标了不同模式）
 最后验证：2026-10-13
 
-## 参考实现 compile_real.dll（编译器 / 产物侧）
+## 原版编译器 compile_real.dll（编译器 / 产物侧）
 ### 产物的绝对地址绑定 compile_real.dll 的加载基址
 参考产物里的 `movabs r64,imm64` 全是 image 空间地址，落在 **compile_real.dll 自己的镜像**里：
 会话里 DLL 加载在 `0x7FF9A0DE0000`，产物里的 `0x7FF9A0DE1310` = DLL 内 RVA `0x1310`，字节是

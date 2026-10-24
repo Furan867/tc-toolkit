@@ -1,0 +1,31 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=6 structs=0
+  string[0] bytes="ab" cstring=false
+  string[1] bytes="cd" cstring=false
+  string[2] bytes="A\x08B\nC" cstring=false
+  string[3] bytes="x\\by\\x42z" cstring=false
+  string[4] bytes="" cstring=false
+  string[5] bytes="=\x08" cstring=false
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=4:0
+      While label="run_sim" span=4:0
+        Const ty=Bool const=0x1 span=4:0
+        Block span=4:0
+          VarDecl ty=Str name="a" span=5:0
+            StrLit ty=Str string=0 span=5:0
+          VarDecl ty=Str name="b" span=6:0
+            Binary ty=Str op=add span=6:0
+              Cast ty=Str cast=raw span=6:0
+                Local ty=Str name="a" span=6:0
+              Cast ty=Str cast=raw span=6:0
+                StrLit ty=Str string=1 span=6:0
+          VarDecl ty=Str name="t" span=7:0
+            StrLit ty=Str string=2 span=7:0
+          VarDecl ty=Str name="u" span=8:0
+            StrLit ty=Str string=3 span=8:0
+          VarDecl ty=Str name="v" span=9:0
+            Template ty=Str span=9:0
+              StrLit ty=Str string=4 span=9:0
+              Local ty=Str name="a" span=9:0
+              StrLit ty=Str string=5 span=9:0
+              Local ty=Str name="a" span=9:0
+              StrLit ty=Str string=4 span=9:0

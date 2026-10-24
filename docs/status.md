@@ -1,62 +1,63 @@
 <!-- 整体重写，禁止追加。≤80 行。
-     一次性结论 → notes/；被复用过的结论 → facts.md。
-
-     写法：
-     - 「下一步」只放**已经决定要做**的；还没定的写成「待定：…」，
-       不要把提案写成计划（那会替人做一个他还没做的决定）
-     - 人的**局部取舍**要写明它的条件（「暂时…，因为…」），条件变了就重新考虑
--->
+     一次性结论 → notes/；被复用过的结论 → facts/。具体事实不在这里复制。 -->
 # 状态
 
-在追：
+在追：**M5 收尾**（分层重构 M5.5 已于 2026-10-24 完成）。
 
-## Simplex → LLVM 编译器（主线，2026-10-13 起）
-
-目标：把游戏目录的 `compile.dll` 换成自研实现 —— Simplex → LLVM IR → 优化 → 装配成游戏可 JIT 的 blob。
+目标：把 `compile.dll` 换成自研实现（Simplex → LLVM IR → 装配成游戏可 JIT 的 blob）。
 正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
+验收边界（2026-10-18 负责人确认）：沙盒模式只看 RV32IM 电路。
 
-**验收边界（2026-10-18 负责人确认）**：沙盒模式**只看 RV32IM 电路**（它几乎覆盖所有元件；其他沙盒电路的编译正确性也已测过没问题）。
-98 份语料（`work/hook/all/` 去重，以关卡/地图电路为主）的缺口**不影响沙盒可用** —— 它们决定的是**能不能关掉回退**（M6）。
-
-- 接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.2）；主设计 = `…-simplex-llvm-compiler-design.md`；
+- 接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.4）；主设计 = `…-simplex-llvm-compiler-design.md`；
   主频层 = `…-freq-measurement-design.md`。代码在 `reversing/simplexc/`；LLVM 固定 **23.1.3**。
+- 重构全过程、每个决策与踩过的坑：**`docs/notes/2026-10-24-refactor-plan.md`（唯一入口）**。
 
-**已完成**：
+## M5.5 分层重构：完成
 
-- M0 观测设施 · M1 spike · M2 差分宿主 · 装配器（桩/槽两趟定址、`.stubs` sidecar、返回前自校验）。
-- M3 宿主面等价（Python 原型）· **M4 游戏内**：RV32IM ours 25.835 vs reference 5.369 MHz。
-- **M4.5**：C++17 前端 + lowering + CLI + 壳接线；`check.py` **5 PASS**；壳的 ours 段进程内调 `simplexc_compile()`。
-  **游戏内验收**：同一次会话 `reference 5.364` vs `ours 40.375 MHz`（**7.53×**），`impl=ours result=ok`、无 fallback、游戏不崩。
-- **M5 第一块（98 份）**：插值 + Str 拼接 + `in_scope` + 嵌套 def 前向可见 + 捕获按调用点摊平 + 裸块 + `array` +
-  `const #`/`ror`/`clz` + **`Str` 内容相等与 `switch` 按内容派发**（`cc468ec`）+ **顶层 def 闭包化**（`5f19a7a`）+
-  **壳探栈不再破坏 `%r10`**（`002ca34`）+ **泛型实例化**（`860ef2e`）+ **数组字面量补 Nim 头**（`08748b4`，9 份归零）+
-  **`+` 的位宽规则**（`a47c2b1`）+ **模板内同名 def 的非重入模拟**（`5d4ff13`，8 份归零）→
-  **75 可装配 · 30 全等 · 31 只差 extern · 14 diff · 23 cli_fail**（装配回退率 **23.5%** · 差分回退率 **37.8%**，不含只差 extern）。
-  中途一度「越修越少」（3 全等 + 95）是拆穿假 equal 的必然，不是退步。`check.py` **5 PASS**（每次改动后主程复跑）。
-- **M5 第三块（stdlib 前缀 / 路线 A）**：语义分析完成（14 个功能块）；**前端 3 类构造缺口已补**（`$` 12 行 ·
-  `[T] expr` 与引号成员名 40 行 · 多行 `Enum[` 15 行；`e86bca1`/`5579ef3`），前缀失败点从第 172 行推到 **第 202 行**。
-- **语义档案（实验定死）**：`U-L1` · `U-L2`（下标**不做任何检查**）· `U-L3`（插值渲染全套）· `U-L4`（字段初始化四条）·
-  `U-L5`（enum 只有 1/2 字节两档）· `U-L6`（`$` 是**引用**语义、调用点强制写 `$`）· `U-L7` · `U-L8` · `U-L10`（字面量无 NUL、`\t`→0x08）·
-  `U-L12`（`min`/`max` 取**第一个实参**的类型）· `U-L14` · 泛型实例化规则 · `asm` 会**重新汇编** · 顶层算子单元**接管**运算符 · `random` 递推式。
+目录就是设计 §8 的形状：`frontend/ sema/ codegen/ runtime/ assemble/ shell/ cli/`。四条硬要求逐条兑现：
 
-### 下一步（已决定）
+| 要求（设计 §3.2–§3.4） | 判据 |
+| --- | --- |
+| sema 不发任何 LLVM 指令 | `grep -c LLVM simplexc/sema/` = 0 |
+| codegen 不查 AST/源码、不做类型推导、不决定实例化 | `grep -rn 'frontend/' simplexc/codegen/` 为空；`convert` 从 16 处删到 4 处且都有理由 |
+| 无 save/restore 可变状态 | `grep -c 'save_state\|restore_state\|FnState' simplexc/codegen/` = 0 |
+| 错误三轴从第一层带出 | `sema/`+`codegen/`+`frontend/` 共 168+ 个抛点全是 `CompileError{resp,stage,span,detail}`；`Unsupported`/`CompileFail` 在产品代码里清零 |
 
-1. **移位/窄位宽语义：已收口**（`docs/notes/2026-10-18-width-180.md`）—— 真条件测清了一部分，但改对后 176/177/180 的 IR **逐行相同** ⇒
-   对 98 份没有可测收益，不再投入（HEAD 保持不变）。
-   ⚠️ 但 `lower.cc` 里有一句旧注释说「铺给 `%/<<//` 会让 176/177/180/rv32im 从全等掉成 diff」—— 铺开时必须先复核这句（要嘛它有额外条件，要嘛旧结论有误）。
-   另两处独立缺口：`const #K300` 具名常量认不出 · 有符号窄值我们一律 `zext`（参考按符号算）。
-2. **14 diff 的剩余**（分类见 `docs/notes/2026-10-18-diff-classify2.md`）：A′ 残部（096/098/100/102/157，098 已定位到全局数组字面量初始化）、C′ 5 份、D′ 4 份。
-3. **前缀渲染族 `hex` / `str` / `bin`（13+3+1 份）**——已定位到 `stdlib_prefix.si:1110-1234`；另 `kernel32!memcpy` 未解析 5 份。
-4. **23 cli_fail 的剩余零散**（链式，清单随修复滚动）。
+**判据（全绿，可逐条复跑）**：
 
-### 待定 / 未解
+- `python simplexc/tools/check.py` → 6 步全 PASS（含 `blob_baseline` 与 `hook_offline` 11 个 case）。
+- `python simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline` → **98 份产物逐字节相同**（掩掉 stub/slot 槽位）。
+- `python work/tmp/s2c/dual.py --all-corpus` → 旧 AST 路径与新 HIR 路径 **75/75 相同**（blob + IR 逐函数）。
+- `build/analyze_selftest.exe` 24/24、`build/hir_selftest.exe` 全过、`build/codegen_selftest.exe` 5/5。
 
-- 窄位宽 / 移位语义：真条件测清了一部分（`docs/notes/2026-10-18-width-180.md`），但**对 98 份没有可测收益**（改对掩码后 176/177/180 的 IR 逐行相同）
-  ⇒ **这条线已收口**，不再投入；日后若某份因移位语义掉分再回来。旁证：HEAD 的 `>>` 在 probe 上确实与参考不同（`x7>>8` 0 vs 0x7F）——「全等」不等于「语义对了」。
-- 未验的语义：`U-L4` 的偏移/padding（三次尝试都不可观测）· `$` 的写回时机 · `U-L5` 的显式宽度语法与 4/8 字节档 · `Str == Str` 是否编译期折叠 ·
-  `@Type` 的值形实参（语料没考到）· 泛型的实例化缓存规则。
-- **`-O0` 伏笔**：M4 的 25.835 MHz 是 Python 原型 `-O0` 代码生成的成绩；产品（C++ 产物）是 **40.375** —— 别混用。
-- 宿主那 23 份的 **extern 条数**相对改前变了（页/段/`sim_cycle` 仍逐 tick 全等）—— 只差 extern 时别当成内存语义差异。
-- 已知但未修的差异：顶层非声明语句被整体丢掉 · 参考对 `return a) + 1` 是静默吃掉后面的一切（我们只吃一个 `)`）·
-  枚举插值参考自己 fatal（无对照语义）· 空数组的指针值未与参考对照。
+**重记账（2026-10-24，`docs/notes/2026-10-24-m5-recount.md`）**：98 份 · 10 tick · 非平凡图案 ——
+可装配 **75** · 逐 tick 全等 **30** · 只差 extern **31** · 装配成功但不等 **14** · 装不出来 **23**。
+**与重构前逐 id 98/98 一致，变了 0 份** —— 这比重构只比 blob 更强，它包含宿主里逐 tick 跑。
+
+## 下一步
+
+1. **M5 收尾**：18 份卡在 sema 的语料全是**刻意不做**的三类——`hex` 13 + `str` 3 + `bin` 1 +
+   `ui_set_instruction` 1（它们在基线里本来就不出产物，补了等于新增能力，会污染「产物逐字节相同」判据）；
+   另有 5 份卡在装配期 `kernel32!memcpy` 缺符号（它在 msvcrt/ntdll，属符号解析问题，不是编译问题）；
+   以及 14 份 `diff`（A′/C′/D′ 残部）。这些决定「能不能关掉回退」（M6）。
+2. **回退率按三轴统计**：shell 现在能拿到 `kind`，先跑一轮得到基线（分 `UserError`/`UnsupportedConstruct`/`InternalError`），
+   那是关回退的量化依据。
+3. 语义未验项（`U-L4` 偏移/padding、`$` 写回时机、`U-L5` 显式宽度语法、`Str == Str` 编译期折叠、
+   `@Type` 值形实参）—— 判据与缺口见 `docs/facts/semantics.md`。
+
+## 待定 / 未解
+
+- 壳在 `compile_real.dll` 加载失败时不写 `out[3]`（保留 0xCC 哨兵）。那是部署错误、原版无法转交，
+  要不要自造失败 Result 待定。
+- `simplexc_core.cc` 的 `catch(...)`（非 `std::exception` 的前端值）仍折成 `InternalError` → 会转交。
+  今天的前端都抛 `CompileError`，所以这条不可达；但留着就是一处静默降级。
+- `codegen_selftest` 的 `.irkeys` 只能断言「必须出现」，否定断言（`llvm.trap` 不该出现）写不出来。
+- `facts/semantics.md` 的 U-L1 说 `N>32` 是 8 字节访存，但 IR 上是 `i40` ——
+  「事实 → IR 宽度」这层映射只写在 `codegen.cc` 的注释里，facts 没有。
+- 已知未修差异：顶层非声明语句被整体丢掉 · 参考对 `return a) + 1` 静默吃掉后面的一切 · 空数组的指针值未对照。
 - `entry`（`Result[2]`）用途仍只知「相对机器码起点的偏移」；参考产物的热环没定位到（要 RIP 采样）。
+
+## 环境
+
+- **`build/` 是共享的**：两个写者同时跑 `build.py`/`check.py` 会互相覆盖产物；多写者按目录切分，
+  且同一时刻只让一个写者跑判据入口。

@@ -4,8 +4,8 @@
  * 边界是 C（纯 C 头 + `extern "C"` 定义），因为壳是 C 且继续演进，C++ 名字改编会让链接找不到符号；
  * 异常一律在**这里**折成返回码 —— 穿过 Nim 帧的展开没有保证（接口冻结版 §5）。
  *
- * 与 CLI（`cli/simplexc_cli.cc`）共用同一套核心：`frontend` → `lower::build_module` →
- * `lower::Program` → `assemble()`。差别只有两处，都是「在游戏进程里」逼出来的：
+ * 与 CLI（`cli/simplexc_cli.cc`）共用同一套核心：`frontend` → `build_module`（`codegen/module_build.hh`）
+ * → `sema::analyze` → `codegen::Program` → `assemble()`。差别只有两处，都是「在游戏进程里」逼出来的：
  *   · 源码在内存里（没有临时文件可写）→ `Frontend(SrcText{...})`；
  *   · 装配的 `entry_shim.o` / `rt_min.o` 在构建期嵌进了 DLL → `embedded_objs.hh`。
  *
@@ -26,23 +26,49 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "codegen/codegen.hh"
+#include "codegen/module_build.hh"
+#include "codegen/module_source.hh"
 #include "frontend/frontend.hh"
-#include "lower/lower.hh"
-#include "lower/module_build.hh"
+#include "sema/analyze.hh"
 #include "shell/embedded_objs.hh"
 
 namespace sx = simplexc;
+namespace cg = simplexc::codegen;
 namespace lw = simplexc::lower;
 namespace sh = simplexc::shell;
+namespace sm = simplexc::sema;
 
 namespace {
 
 /* 失败分类串：就是 `simplexc_core.h` 里列的那几个名字（接口 §8），只在这里拼一次。 */
+constexpr const char* kUserError = "UserError";
 constexpr const char* kUnsupportedConstruct = "UnsupportedConstruct";
 constexpr const char* kInternalError = "InternalError";
 constexpr const char* kBlobTooLarge = "BlobTooLarge";
 constexpr const char* kRelocUnsupported = "RelocUnsupported";
 constexpr const char* kSymbolUndefined = "SymbolUndefined";
+
+/* 最近一次失败的诊断串（三轴都在里面，见 `simplexc_last_error()`）。
+   静态缓冲：C 边界不给动态所有权，而 `simplexc_compile` 的签名被壳固定住了。
+   壳在同一次调用里读完即弃，所以只有「下一次失败」会覆盖它 —— 不会跨调用串值。 */
+char g_last_error[512];
+
+/* 最近一次的**非致命观察**（解析期 notes、「不可达 def 被跳过」）。长度上限写在 header 里
+ * （“同一次调用里读完即弃”），这里负责拼接与显式截断 —— 内容里带用户源码的标识符，
+ * 长度不受我们控制，所以不用 `+=`，也不手算长度。 */
+char g_last_warnings[1024];
+
+/* notes 只是一行行独立事实，拼成一条串的目的是让 C 边界只多一个函数。`; ` 作分隔是因为
+ * `；` 与 `;` 在日志里都常见得让人看不出来（用户的那条 note 里就有 `U8(…)`）。 */
+void set_last_warnings(const std::vector<std::string>& notes) {
+  std::string joined;
+  for (const std::string& n : notes) {
+    if (!joined.empty()) joined += "; ";
+    joined += n;
+  }
+  std::snprintf(g_last_warnings, sizeof g_last_warnings, "%s", joined.c_str());
+}
 
 /* 产物上限（接口 §4 第 6 条，与装配器同一个数）与头后的尾部 padding（第 8 条：
  * 游戏会读到末尾之外，所以要多分配 8 字节）。上限在这里再判一次：malloc 的尺寸由本文件算。 */
@@ -141,6 +167,8 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
 
   try {
     const std::string text(src, static_cast<std::size_t>(src_len));
+    g_last_error[0] = '\0';
+    g_last_warnings[0] = '\0'; /* 观察串也只跟本次调用走 */
     sx::Frontend fe(sx::SrcText{text});
     /* 声明层错误（原型 `Frontend.decl_errors`）不是异常，但同样是我们不支持的源码形态。
        为什么直接判 InternalError 而不是继续 lowering：声明表不全时 lowering 只会报更离谱的错。 */
@@ -150,7 +178,11 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
     }
 
     lw::OwnedModule owned = lw::build_module(fe, fe.src_path);
-    lw::Program prog(owned.ast, false);
+    /* notes 在 lowering **之前**就搬进静态缓冲：它们描述的是前端已经发生的事，
+       后面 sema/codegen 失败也不应该把它们弄丢（失败时用户更需要知道「这里被略过了什么」）。 */
+    set_last_warnings(owned.notes);
+    const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
+    cg::Program prog(hir);
     prog.build();
     std::vector<uint8_t> module_obj = prog.emit_object();
 
@@ -176,6 +208,23 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
   } catch (const lw::Unsupported& e) {
     std::cerr << "[simplexc] 未支持构造：第 " << e.line() << " 行 " << e.what() << std::endl;
     return kUnsupportedConstruct;
+  } catch (const sm::CompileError& e) {
+    /* 三轴在 `e.what()` 里（`sema/errors.hh`），并原样交给壳（`simplexc_last_error`）——
+       游戏是 GUI 进程，看不到我们的 stderr，失败信息得过 C 边界。分类按**责任轴**分三档：
+       用户能改对的源码错 = `UserError`（壳不转交：转交只会白跑一次参考编译，还污染
+       回退率的分母）；我们没实现的构造 = `UnsupportedConstruct`；其余（断言失败、同一
+       输入两次不一致）= `InternalError`。这一档是壳决定回不回的判据（接口 §8）。 */
+    std::cerr << "[simplexc] 编译失败：" << e.what() << std::endl;
+    std::snprintf(g_last_error, sizeof g_last_error, "%s", e.what());
+    switch (e.resp) {
+      case sm::Responsibility::UserSource:
+        return kUserError;
+      case sm::Responsibility::Unimplemented:
+        return kUnsupportedConstruct;
+      case sm::Responsibility::OurBug:
+        break;
+    }
+    return kInternalError;
   } catch (const lw::CompileFail& e) {
     std::cerr << "[simplexc] 编译失败：" << e.what() << std::endl;
     return kInternalError;
@@ -189,5 +238,9 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
     return kInternalError;
   }
 }
+
+extern "C" const char* simplexc_last_error(void) { return g_last_error; }
+
+extern "C" const char* simplexc_last_warnings(void) { return g_last_warnings; }
 
 extern "C" void simplexc_free(void* blob) { std::free(blob); }

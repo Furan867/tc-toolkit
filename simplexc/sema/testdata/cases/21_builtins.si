@@ -1,0 +1,26 @@
+// 内建 3..9（方案 §2f 冻结的编号）：能折的常量在 sema 折好，折不了的发 `Call{builtin:<编号>}`。
+//   · `asr` 按操作数位宽饱和（n ≥ W 取 W-1），`>>` 不是它；
+//   · `clz` 数**操作数声明位宽**里的前导零，现状**不折常量**（`ctlz` 交给 codegen）；
+//   · `ror` 两条路口径不同：常量按 64 位旋转，运行期按操作数位宽；
+//   · `min`/`max` 先 `unify` 再两侧 `convert`，常量比按目标类型的符号性；
+//   · `array(<T>, n)` 的 `ty` 是 `Arr[T]`、长度必须是编译期常量；
+//   · `random` 的状态就是前缀那枚 `global_seed` 全局（进 kids 第一枚）。
+def pick(x: U8, y: U8) U8 {
+  return min(x, max(y, U8 3))
+}
+
+run_sim: while true {
+  var a = asr(S32 -8, 1)
+  var b = asr(S32 -8, 2)
+  var c = clz(U8 1)
+  var d = ror(U8 0x81, 1)
+  var m = min(U8 7, U8 9)
+  var n = max(S32 -2, S32 3)
+  var t = array(<U8>, 4)
+  var s = random()
+  var q = random(100)
+  var p = pick(U8 5, U8 7)
+  var r = asr(S32 -1, U8 1)
+  var u = ror(U8 2, U8 1)
+  t[1] = U8 (d)
+}

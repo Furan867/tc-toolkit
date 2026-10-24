@@ -1,0 +1,22 @@
+Hir funcs=0 globals=2 externs=0 consts=2 strings=0 structs=1
+  global[0] name="table" ty=Arr[U64]
+  global[1] name="zero" ty=Struct.Pair
+  const[0] name="#BASE" ty=U64 value=0x232a6ff0000
+  const[1] name="#NEXT" ty=U64 value=0x232a6ff0008
+  struct[0] name="Pair" bits=64
+    field[0] name="lo" ty=U32 offset=0
+    field[1] name="hi" ty=U32 offset=4
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=14:0
+      While label="run_sim" span=14:0
+        Const ty=Bool const=0x1 span=14:0
+        Block span=14:0
+          VarDecl ty=U64 name="a" span=15:0
+            Index ty=U64 span=15:0
+              Global ty=Arr[U64] global=0 span=15:0
+              Const ty=S64 const=0x0 span=15:0
+          VarDecl ty=U32 name="z" span=16:0
+            Member ty=U32 field=1 offset=4 span=16:0
+              Global ty=Struct.Pair global=1 span=16:0
+          VarDecl ty=U64 name="n" span=17:0
+            Const ty=U64 const=0x232a6ff0008 span=17:0

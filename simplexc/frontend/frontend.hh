@@ -3,13 +3,14 @@
 // 按 `decls.hh` 给的 `lo`/`hi` 切出某个 def 的 token 流，
 // 解析成语法树 —— **只到语法层**，类型仍只是源里的拼写。
 //
-// 错误沿用原型的形状（抛异常）：
-//   * `ReadError` —— 源文件读不了（原型是 OSError，CLI 退出码 2）；
-//   * `LexError`  —— 整文件分词失败（构造 Frontend 时就抛，**不可达 def 里的词法错也会拦下来**，
-//                    这是原型的行为：`self.toks = tokenize(raw_text)` 在构造期做）；
-//   * `ParseError` —— 某个 def 的语法错（CLI 退出码 1）。
-// 冻结接口 §1 的 `CompileError`（ast.hh）留给将来的 `parse_and_typecheck` 做映射，
-// 这一层不预先造一套错误码 —— 判据要的是与原型逐字一致的报错文本。
+// 错误三轴从第一层就带全（方案 §2d），词法错与语法错**都抛 `sema::CompileError`**：
+//   * `ReadError` —— 源文件读不了（原型是 OSError；它不是源码错，CLI 退出码 2）；
+//   * `CompileError{UserSource, Lex, span, detail}` —— 整文件分词失败（构造 Frontend 时就抛，
+//                    **不可达 def 里的词法错也会拦下来**，这是原型的行为：
+//                    `self.toks = tokenize(raw_text)` 在构造期做）；
+//   * `CompileError{UserSource, Parse, span, detail}` —— 某个 def 的语法错。
+// `detail` 与原型逐字一致（判据要的就是那个文本）；三轴是给壳的：责任轴决定回不回退，
+// 位置轴进 `simplexc_last_error()`（游戏进程里看不到 stderr）。
 #pragma once
 
 #include <functional>
@@ -90,7 +91,7 @@ inline constexpr const char* kMemorySrcPath = "<memory>";
 
 class Frontend {
  public:
-  /* 读文件 + 掩码 + 扫描 + 整文件分词。ReadError / LexError 从构造期抛。 */
+  /* 读文件 + 掩码 + 扫描 + 整文件分词。ReadError / 词法 CompileError 从构造期抛。 */
   explicit Frontend(const std::string& src_path);
 
   /* 同一套处理，只是源码来自内存（壳在游戏进程里编译，没有临时文件可写）。

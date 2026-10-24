@@ -1,7 +1,7 @@
 /* rt_min.cc —— 路线 B 运行时的最小一块（够跑通「空程序」这个 spike，不是终态）。
  *
  * 只做两件事：
- *   · `thread_exit()` —— 程序根的收尾（参考实现里是 `kernel32.'ExitThread'(0)`）；
+ *   · `thread_exit()` —— 程序根的收尾（原版编译器里是 `kernel32.'ExitThread'(0)`）；
  *   · 一个能被汇编器用 `ExternResolver` 解析的运行期依赖示范。
  *
  * 约定

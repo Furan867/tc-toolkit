@@ -21,7 +21,14 @@
     simplexc_dll  同上（与其它 simplexc 目标对齐的名字；部署入口转调它）
     core_selftest build/core_selftest.exe  判据入口：源码字节 → `simplexc_compile` → 产物 +
                `.entry` / `.stubs`（不进 DLL）
+    hir_selftest build/hir_selftest.exe  sema 的判据入口：HIR dump 与 `sema/testdata/` 里的
+               golden 逐字节比 + 六条不变量（不进产品路径，不依赖 LLVM）
+    analyze_selftest build/analyze_selftest.exe  sema 的另一个判据入口：`.si` → 前端 AST →
+               `sema::analyze` → dump，与 `sema/testdata/cases/` 的 golden 逐字节比 + 六条不变量
+               （不进产品路径，不依赖 LLVM）
     ast_dump   build/ast_dump.exe     前端的判据入口（frontend/ 的 C++17 实现，不进产品 DLL）
+    codegen_selftest build/codegen_selftest.exe  codegen 的 L4 判据入口：`.si` → IR，逐条查
+               `codegen/testdata/cases/*.irkeys` 的期望子串（不判产物；要链 LLVM）
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
                现在**没有判据**读它：新版壳在进程内编源码，基线壳只在 reference 模式下被驱动。
@@ -78,9 +85,12 @@ CORE_SOURCES = [
     "simplexc/frontend/frontend.cc",
     "simplexc/frontend/ast_dump.cc",
     "simplexc/frontend/json.cc",
-    "simplexc/lower/module_build.cc",
-    "simplexc/lower/lower.cc",
-    "simplexc/lower/llvm_ffi.cc",
+    "simplexc/codegen/module_build.cc",
+    "simplexc/codegen/codegen.cc",
+    "simplexc/codegen/llvm_ffi.cc",
+    "simplexc/sema/analyze.cc",
+    "simplexc/sema/layout.cc",
+    "simplexc/sema/types.cc",
     "build/objs/assemble.o",
 ]
 
@@ -181,7 +191,7 @@ def step_llvm_prog() -> None:
 
 def step_hook() -> None:
     print("== hook / simplexc_dll ==")
-    # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/lower/assemble/shell）。
+    # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
     # 壳仍是单文件 C，但它现在链接核心，所以构建从「一条 gcc 命令」变成三步，
     # 而且链接要用 g++（要 C++ 运行库）。两个名字是同一个目标：
     #   `hook` 是既有名字（`all` 里有它）；`simplexc_dll` 是与其它 simplexc 目标对齐的名字。
@@ -225,6 +235,45 @@ def step_core_selftest() -> None:
         hint="链接失败 → 先跑 `build.py objs`（embedded_objs.cc 要它）与取 LLVM（build/llvm）。")
 
 
+def step_hir_selftest() -> None:
+    print("== hir_selftest ==")
+    out = os.path.join(BUILD, "hir_selftest.exe")
+    # sema 的自检入口（不进产品路径）：只要 sema 自己的三个文件，不链前端、不链 LLVM ——
+    # 它的 golden 是 `simplexc/sema/testdata/hir_sample.dump.txt`，路径由 `__FILE__` 推出，
+    # 所以 `-I simplexc/sema` 与相对源文件路径都不能省（见 sema/hir_selftest.cc 的 golden_path）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "-I", "simplexc/sema",
+         "simplexc/sema/hir_selftest.cc",
+         "simplexc/sema/hir_dump.cc",
+         "simplexc/sema/types.cc",
+         "-o", REL(out)], out=out,
+        hint="编译失败 → 看 simplexc/sema/*.{cc,hh} 的报错；这个目标只用 C++17 标准库"
+             "（不需要 LLVM，也不需要前端）。")
+
+
+def step_analyze_selftest() -> None:
+    print("== analyze_selftest ==")
+    out = os.path.join(BUILD, "analyze_selftest.exe")
+    # sema 的第二个判据入口（不进产品路径）：`.si` → 前端 AST → `sema::analyze` → dump，
+    # 与 `sema/testdata/cases/*.dump` 逐字比 + 六条不变量。**不链 LLVM**：sema 里本来就没有
+    # LLVM（`grep -c LLVM simplexc/sema/` 为 0），判据要把这件事当场证明。
+    # 链前端是因为输入是源码；`.si` → AST 那一段粘合属于判据侧（见 analyze_selftest.cc 头注释）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "-I", "simplexc/sema",
+         "simplexc/sema/analyze_selftest.cc",
+         "simplexc/sema/analyze.cc",
+         "simplexc/sema/layout.cc",
+         "simplexc/sema/hir_dump.cc",
+         "simplexc/sema/types.cc",
+         "simplexc/frontend/decls.cc",
+         "simplexc/frontend/lexer.cc",
+         "simplexc/frontend/parser.cc",
+         "simplexc/frontend/frontend.cc",
+         "-o", REL(out)], out=out,
+        hint="编译失败 → 看 simplexc/sema/ 或 simplexc/frontend/ 的报错；这个目标只用 C++17"
+             " 标准库（不需要 LLVM）。")
+
+
 def step_ast_dump() -> None:
     print("== ast_dump ==")
     out = os.path.join(BUILD, "ast_dump.exe")
@@ -264,6 +313,34 @@ def step_simplexc_cli() -> None:
         print(f"  警告：找不到 {dll}，CLI 跑起来会缺依赖")
 
 
+def step_codegen_selftest() -> None:
+    print("== codegen_selftest ==")
+    need(os.path.join(LLVM_INC, "llvm-c", "Core.h"),
+         "先取 LLVM：python tools/fetch_llvm.py --dest D:/downloads（build/llvm 不进 git）")
+    out = os.path.join(BUILD, "codegen_selftest.exe")
+    # codegen 的判据入口（不进产品路径）：`.si` 走产品链（Frontend → build_module → analyze →
+    # `codegen::Program`）出 IR，再逐条查 `codegen/testdata/cases/*.irkeys`。要链 LLVM 是因为
+    # 被测对象（codegen.cc + llvm_ffi.cc）本来就在 LLVM 上；不用 assemble.o —— 它只出 IR，
+    # 不出产物（产物那一路由 blob_baseline 判）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "-I", "simplexc", "-I", REL(LLVM_INC),
+         "simplexc/codegen/codegen_selftest.cc",
+         "simplexc/frontend/decls.cc",
+         "simplexc/frontend/lexer.cc",
+         "simplexc/frontend/parser.cc",
+         "simplexc/frontend/frontend.cc",
+         "simplexc/codegen/module_build.cc",
+         "simplexc/codegen/codegen.cc",
+         "simplexc/codegen/llvm_ffi.cc",
+         "simplexc/sema/analyze.cc",
+         "simplexc/sema/layout.cc",
+         "simplexc/sema/types.cc",
+         "-L", REL(LLVM_LIB), "-lLLVM-C",
+         "-o", REL(out)], out=out,
+        hint="链接失败 → 确认 build/llvm/{include,lib} 都在（LLVM 固定 23.1.3，见 docs/facts.md）；"
+             "运行期要 PATH 里有 build/llvm/bin 或 build/LLVM-C.dll 才找得到 LLVM-C.dll。")
+
+
 def step_spike() -> None:
     print("== spike ==")
     out = os.path.join(BUILD, "blob_empty.bin")
@@ -288,10 +365,14 @@ STEPS = {
     "hook": step_hook,
     "simplexc_dll": step_hook,        # 同一个目标的两个名字（见 step_hook 的注释）
     "core_selftest": step_core_selftest,
+    "hir_selftest": step_hir_selftest,
+    "analyze_selftest": step_analyze_selftest,
     "ast_dump": step_ast_dump,
+    "codegen_selftest": step_codegen_selftest,
     "spike": step_spike,
 }
-ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump"]
+ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analyze_selftest",
+       "codegen_selftest"]
 DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"],
            "hook": ["objs"], "simplexc_dll": ["objs"], "core_selftest": ["objs"]}
 

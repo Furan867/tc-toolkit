@@ -1,0 +1,24 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=4:0
+      While label="run_sim" span=4:0
+        Const ty=Bool const=0x1 span=4:0
+        Block span=4:0
+          VarDecl ty=Arr[S64] name="a" span=5:0
+            ArrayLit ty=Arr[S64] span=5:0
+              Const ty=S64 const=0x1 span=5:0
+              Const ty=S64 const=0x2 span=5:0
+              Const ty=S64 const=0x3 span=5:0
+          VarDecl ty=Arr[U8] name="e" span=6:0
+            ArrayLit ty=Arr[U8] span=6:0
+          Assign span=7:0
+            Index ty=S64 span=7:0
+              Local ty=Arr[S64] name="a" span=7:0
+              Const ty=S64 const=0x1 span=7:0
+            Index ty=U8 span=7:0
+              Local ty=Arr[U8] name="e" span=7:0
+              Const ty=S64 const=0x0 span=7:0
+          VarDecl ty=S64 name="z" span=8:0
+            Index ty=S64 span=8:0
+              Local ty=Arr[S64] name="a" span=8:0
+              Const ty=S64 const=0x0 span=8:0

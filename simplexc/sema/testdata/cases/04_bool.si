@@ -1,0 +1,8 @@
+// `Bool` 与 `U1` 在算术上等价、但名义位必须留着：`Bool 2` 按 1 位截断成 0；比较折出 Bool；
+// `!` 与 `&&` 都不折叠（`lower` 同形），所以留下 Unary/Binary 节点。
+run_sim: while true {
+  var t = 1 < 2
+  var u = Bool 2
+  var v = !t
+  var w = t && u
+}

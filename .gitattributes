@@ -2,3 +2,7 @@
 # 默认 core.autocrlf=true 会把 CRLF 折成 LF 存、检出时再折回来 —— 混合行尾的文件一旦往返就失真，
 # `cmp` 判据与 sha256 都会对不上。这里显式关掉 EOL 归一化。
 simplexc/corpus/**  -text
+
+# 判据的 golden 文本同理：它是「逐字节比较」的对象，行尾一变判据就假失败。
+# 生成命令（仓库根）：build/hir_selftest.exe --dump-only > simplexc/sema/testdata/hir_sample.dump.txt
+simplexc/sema/testdata/**  -text

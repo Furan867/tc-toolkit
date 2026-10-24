@@ -1,6 +1,10 @@
 // Simplex 的语法树（M4.5 冻结接口）。
 //
 // 这是 parser 的产出、lowering 的输入，两者按本文件对齐；改字段 = 改契约，先通知对面的写者。
+//
+// 本文件**不再定义** `CompileError`：接口冻结版 §1 的那个（`kind` + `message` + `span`）字段与
+// `sema/errors.hh` 的三轴模型不同，两套同名类型并存只会让人拿错那一个。错误类型只有
+// `sema/errors.hh` 一处定义，前端直接抛它。
 // 节点与字段**逐条对应** M3 冻结原型的 dataclass 形状（语义依据见 `docs/facts/semantics.md`）：
 // 原型怎么表达的，这里就怎么表达 —— 包括 `TypeRef` 只存**源里的拼写**这一点（类型解析在 lowering 侧）。
 //
@@ -14,26 +18,22 @@
 #include <string>
 #include <vector>
 
+#include "../sema/span.hh"
+
 namespace simplexc {
 
+// `Span` 的归属在 sema（HIR 的每个节点都要带它，而 `sema/` 不许 include `frontend/`）；
+// 这里用 using 把名字留在 `simplexc::`，前端与 lowering 的写法一行没变。
+using sema::Span;
+
 // ---------------------------------------------------------------------------
-// 错误（接口冻结版 §1 / §8）
+// 错误（接口冻结版 §8 的分类词表）
 // ---------------------------------------------------------------------------
-struct Span {
-  int line = 0;
-  int col = 0;
-};
 
 enum class ErrKind {
   UnsupportedConstruct,
   InternalError,
   ParseError,
-};
-
-struct CompileError {
-  ErrKind kind = ErrKind::InternalError;
-  std::string message;
-  Span span;
 };
 
 // ---------------------------------------------------------------------------

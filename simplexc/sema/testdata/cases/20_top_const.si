@@ -1,0 +1,18 @@
+// `raw_cast(<T>, <常量>)` 是**编译期常量**（方案 §2f）：顶层 var 的地址初值、`const #` 的
+// 初始化式都靠它。聚合（struct）的顶层初值只接**全零**那一形态 —— `HirGlobal.init_bits` 只有
+// 一个 u64，非全零的聚合常量没有表示位。
+type Pair Struct {
+  lo: U32,
+  hi: U32,
+}
+
+var table = raw_cast(<Arr[U64]>, 4096)
+var zero = Pair {}
+const #BASE = raw_cast(<U64>, 2416573349888)
+const #NEXT = #BASE + 8
+
+run_sim: while true {
+  var a = table[0]
+  var z = zero.hi
+  var n = #NEXT
+}

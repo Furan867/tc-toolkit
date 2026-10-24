@@ -1,0 +1,16 @@
+// struct 布局（U-L4 的现状规则：`ceil(bits/8)`、声明序、**无 padding**）：
+// `U8` 占 1 字节、`U32` 4、`U16` 2 ⇒ 偏移 0 / 1 / 5，整块 7 字节 = 56 位。
+// 复合字面量的字段按**名字**匹配（书写顺序无关），HIR 里按**声明序**摆、没写的字段是零值
+// `Const`；字段访问是 `Member`（字段序号 + 字节偏移）。
+// 书写序 y 在前、x 在后（≠ 声明序），所以字段必须**各占一行**：同一行里声明序倒置时
+// 书写序无法从行号还原，sema 直接报错（`composite_lit_node`）。
+type Point Struct { x: U8, y: U32, z: U16 }
+
+run_sim: while true {
+  var p = Point {
+    y: 7,
+    x: 1,
+  }
+  p.z = 2
+  var w = p.y
+}

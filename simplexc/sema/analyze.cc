@@ -1106,8 +1106,10 @@ HNode Analyzer::e_cast(const CastExpr& node) {
     HNode inner = e(*node.expr);
     /* 旧的 `convert` 对**显式** cast 无条件补掩码 —— 目标类型与源相同时也不例外
      * （`repro_mask5.si`：旧 3 道 `and`、不补时 2 道，blob 长度跟着变）。`same_val_ty` 早退
-     * 只属于隐式转换那一侧，所以这里自己发 `Trunc`（同宽 → 只出一道掩码）。 */
-    if (is_int(*target) && same_val_ty(inner.ty, target)) {
+     * 只属于隐式转换那一侧，所以这里自己发 `Trunc`（同宽 → 只出一道掩码）。
+     * 操作数是**常量**时不出 —— 旧 `convert` 先查常量、再查 `same_val_ty`，常量那一路本来
+     * 就零条指令（`let v = (U1 ~(U1 0))` 这种就不该变成一个槽）。 */
+    if (is_int(*target) && same_val_ty(inner.ty, target) && !pat_const(inner)) {
         return cast_node(HCastKind::Trunc, std::move(inner), target, node.src_line);
     }
     return convert(std::move(inner), target, node.src_line);
@@ -2534,18 +2536,20 @@ void Analyzer::var_decl_stmt(HNode& parent, const VarDeclStmt& st) {
     bind_local(st.name, ty);
 }
 
-/* `lower.cc` 的 `s_AssignStmt`：先取左值、再求右值，右侧 `convert` 到左值的类型；
- * 复合赋值 `x op= v` = `binop(op, 读一次 x, v)` 再 `convert`。 */
+/* `lower.cc` 的 `s_AssignStmt`：先取左值、再求右值。**隐式转换不在这里发** —— 旧路径把它留给
+ * codegen 的 store 链（`s_Assign` 的 `convert` + `store_addr` 的 `convert`，两道掩码），
+ * 这里再插一个 `Cast` 就成了三道（157 的 4 道就是它）。源码里写了类型前缀的
+ * （`x = U8 (y)`）那道 `Cast` 是 `e_cast` 发的，与隐式转换不是同一道，所以在 HIR 里仍可区分。 */
 void Analyzer::assign_stmt(HNode& parent, const AssignStmt& st) {
     HNode target = lvalue(*st.target);
     HNode val;
     if (st.op == "=") {
-        val = convert(e(*st.value), target.ty, st.src_line);
+        val = e(*st.value);
     } else {
         auto it = assign_binop().find(st.op);
         if (it == assign_binop().end()) throw Unsupported("复合赋值运算符 " + st.op, st.src_line);
         const HNode cur = target; /* HIR 里 `Local`/`Global` 节点就是「读一次」 */
-        val = convert(binop(it->second, cur, e(*st.value), st.src_line), target.ty, st.src_line);
+        val = binop(it->second, cur, e(*st.value), st.src_line);
     }
     HNode n = stmt_node(HKind::Assign, st.src_line);
     n.kids.push_back(std::move(target));

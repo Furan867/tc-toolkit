@@ -15,10 +15,9 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=0
             Index ty=S64 span=7:0
               Local ty=Arr[S64] name="a" span=7:0
               Const ty=S64 const=0x1 span=7:0
-            Cast ty=S64 cast=zext span=7:0
-              Index ty=U8 span=7:0
-                Local ty=Arr[U8] name="e" span=7:0
-                Const ty=S64 const=0x0 span=7:0
+            Index ty=U8 span=7:0
+              Local ty=Arr[U8] name="e" span=7:0
+              Const ty=S64 const=0x0 span=7:0
           VarDecl ty=S64 name="z" span=8:0
             Index ty=S64 span=8:0
               Local ty=Arr[S64] name="a" span=8:0

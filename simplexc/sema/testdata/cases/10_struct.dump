@@ -16,7 +16,7 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=1
           Assign span=9:0
             Member ty=U16 field=2 offset=5 span=9:0
               Local ty=Struct.Point name="p" span=9:0
-            Const ty=U16 const=0x2 span=9:0
+            Const ty=S64 const=0x2 span=9:0
           VarDecl ty=U32 name="w" span=10:0
             Member ty=U32 field=1 offset=1 span=10:0
               Local ty=Struct.Point name="p" span=10:0

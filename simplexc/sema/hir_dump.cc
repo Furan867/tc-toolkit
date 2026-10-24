@@ -591,8 +591,13 @@ bool check_conv_node(const HNode& n, const TyRef& ret, const std::string& where,
             break;
         case HKind::Assign:
             if (!expect_kids(n, 2, 2, where, err)) return false;
-            if (!same_ty(n.kids[0].ty, n.kids[1].ty)) {
-                return fail(err, 4, where, "赋值的两侧类型不一致（隐式转换必须已经是 Cast）");
+            /* rhs 的隐式转换**故意不是 `Cast` 节点**：codegen 的 store 链（`s_Assign` 的
+             * `convert` + `store_addr` 的 `convert`）本来就发两道，那是旧路径的形状；
+             * sema 再插一道就是三道。所以这里只查「能转换」——都是整数（宽度/符号可不同）
+             * 或者同类型。 */
+            if (!same_ty(n.kids[0].ty, n.kids[1].ty) &&
+                !(is_int(*n.kids[0].ty) && is_int(*n.kids[1].ty))) {
+                return fail(err, 4, where, "赋值的两侧既不同类型、也不是整数之间的隐式转换");
             }
             break;
         case HKind::ExprStmt:

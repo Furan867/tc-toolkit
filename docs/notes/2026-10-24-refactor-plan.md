@@ -66,15 +66,18 @@
 
 ```text
 Hir { main: HirFunc; funcs[]; globals[]; externs[]; strings[]; consts[]; structs[] }
-HirFunc { key(规范化实例键); name(产物符号名); params[]; caps[]{name,ty,index}; body; ret }
+HirFunc { key(规范化实例键); name(逻辑名, 如 main / f$u64); cap_index(-1=无捕获); params[]; caps[]{name,ty,index}; body; ret }
 HirGlobal { name; ty; init_bits: optional<u64> }   // 初值必须是编译期常量，sema 折好
 HirStruct { name; bits; fields[]{name,ty,offset} }
 ```
 
 **三处规格补漏（2026-10-24 由 S2c 切割清单查出，不加就产物会变）：**
 
-1. `Hir.funcs[].name` 必须**逐字复现**现状的产物符号名规则：`_f`、`_f$<sig>`、`$c<n>`、`#L<lo>`，
-   包括 `cap_instances_` 的 64 上限与其报错。internal linkage 不代表名字可改。
+1. **符号名分层**（2026-10-24 实测 `lower.cc:2369/2373/3194` 后改定）：HIR 只给**逻辑名**（`main` / `f$u64`，
+   即接口 §1 的实例化名）+ `cap_index`；**产物符号名由 codegen 派生**，规则必须与现状逐字相同：
+   程序根 = `tc_main`；顶层 def = `name` 或 `name + "#L" + lo`；有捕获再挂 `"$c" + cap_index`；
+   嵌套 def = `owner + "$" + name + "#L" + src_line`。sema 若直接把产物名钉死，等于把产物细节搬进 sema，并且
+   `#L` 的选法（`lo>=0` 与否）属于 codegen 的 `ensure_*_fn` 逻辑，搬过去就是隐式耦合。
 2. `HirGlobal.init_bits` 与 `Hir.structs[]` 是硬缺口：`make_globals` 要求全局初值是编译期常量，
    `make_types` 今天从 `ast_.structs` 建。缺了就只能把初值降级成 `main` 里的 store，产物会变。
 3. **`in_scope(...)` 是编译期谓词，不限于 `#if`**：它也出现在裸 `if` 里。判定与剪枝都在 sema

@@ -5,7 +5,7 @@
  * → `assemble()`。
  *
  * 为什么源 → 前端产物的那段不在这里：壳（`shell/simplexc_core.cc`）要的是同一段，
- * 两个调用方共用 `lower/module_build.{hh,cc}`（接口冻结版 §0「一处定义」）。
+ * 两个调用方共用 `codegen/module_build.{hh,cc}`（接口冻结版 §0「一处定义」）。
  *
  * 用法：
  *   simplexc-cli --src <file.si> [--out <blob>] [--ir-out <ll>] [--obj-out <coff>]
@@ -24,11 +24,11 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "codegen/codegen.hh"
+#include "codegen/module_build.hh"
+#include "codegen/module_source.hh"
 #include "frontend/frontend.hh"
 #include "frontend/parser.hh"
-#include "lower/hir/codegen.hh"
-#include "lower/hir/module_source.hh"
-#include "lower/module_build.hh"
 #include "sema/analyze.hh"
 
 namespace sx = simplexc;
@@ -61,7 +61,7 @@ class Kernel32Resolver : public tc::ExternResolver {
 
 // ---------------------------------------------------------------- 源 → 前端产物
 /* 源 → 前端产物的那一段粘合（`OwnedModule` + `build_module`）住在
-   `lower/module_build.{hh,cc}` —— 壳（`shell/simplexc_core.cc`）与这里**共用同一份**，
+   `codegen/module_build.{hh,cc}` —— 壳（`shell/simplexc_core.cc`）与这里**共用同一份**，
    不许各留一份实现（接口冻结版 §0）。本文件只负责把它接起来。 */
 
 

@@ -129,7 +129,7 @@ std::unique_ptr<TypeRef> make_type_ref(const std::string& word) {
 }
 
 /* `type X Enum [A, B]` / `type X Struct { f: T, g: U }` → `EnumSource` / `StructSource`。
- * 切法与 `lower/module_build.cc` 的 `scan_type` 同形（改一处要同时改另一处）：这里是**判据侧的
+ * 切法与 `codegen/module_build.cc` 的 `scan_type` 同形（改一处要同时改另一处）：这里是**判据侧的
  * 粘合**，与 `parse_top_var` 同一个位置 —— 接线（②c）之后它属于壳/CLI，不属于 sema。 */
 void add_type_decl(const Frontend& fe, const Decl& d, CaseSource* out) {
     const std::string text = join_lines(fe.code_lines, d.lo, d.hi);

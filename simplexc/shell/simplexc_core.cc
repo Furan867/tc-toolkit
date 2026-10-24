@@ -4,8 +4,8 @@
  * 边界是 C（纯 C 头 + `extern "C"` 定义），因为壳是 C 且继续演进，C++ 名字改编会让链接找不到符号；
  * 异常一律在**这里**折成返回码 —— 穿过 Nim 帧的展开没有保证（接口冻结版 §5）。
  *
- * 与 CLI（`cli/simplexc_cli.cc`）共用同一套核心：`frontend` → `lower::build_module` →
- * `sema::analyze` → `codegen::Program` → `assemble()`。差别只有两处，都是「在游戏进程里」逼出来的：
+ * 与 CLI（`cli/simplexc_cli.cc`）共用同一套核心：`frontend` → `build_module`（`codegen/module_build.hh`）
+ * → `sema::analyze` → `codegen::Program` → `assemble()`。差别只有两处，都是「在游戏进程里」逼出来的：
  *   · 源码在内存里（没有临时文件可写）→ `Frontend(SrcText{...})`；
  *   · 装配的 `entry_shim.o` / `rt_min.o` 在构建期嵌进了 DLL → `embedded_objs.hh`。
  *
@@ -26,11 +26,10 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "codegen/codegen.hh"
+#include "codegen/module_build.hh"
+#include "codegen/module_source.hh"
 #include "frontend/frontend.hh"
-#include "lower/hir/codegen.hh"
-#include "lower/hir/module_source.hh"
-#include "lower/lower.hh"
-#include "lower/module_build.hh"
 #include "sema/analyze.hh"
 #include "shell/embedded_objs.hh"
 

@@ -1,6 +1,6 @@
-/* lower/hir/codegen.cc —— `sema::Hir` → LLVM IR（接口与取舍见 codegen.hh）。
+/* codegen/codegen.cc —— `sema::Hir` → LLVM IR（接口与取舍见 codegen.hh）。
  *
- * 本文件逐函数对应旧 `lower/lower.cc` 的同名实现：「读 AST 节点」换成「读 HNode」，
+ * 本文件逐函数对应旧 `lower.cc` 的同名实现：「读 AST 节点」换成「读 HNode」，
  * 「按 AST 推类型/折常量/挑实例」整段消失（HIR 已经算好）。发射逻辑、块与指令的命名、alloca
  * 的位置、按需发函数体的顺序**一处不改** —— 那是产物逐字节相同的前提，也是双跑对照能定位
  * 差异的前提。
@@ -12,7 +12,7 @@
 #include <functional>
 #include <utility>
 
-#include "../../sema/builtins.hh"
+#include "../sema/builtins.hh"
 
 namespace simplexc {
 namespace codegen {

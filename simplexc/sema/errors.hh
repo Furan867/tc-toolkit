@@ -1,8 +1,9 @@
 /* sema/errors.hh —— 编译期错误的分型与诊断条目。
  *
- * 两代模型并存，`Unsupported`/`CompileFail` 那一代是①b 从 `lower/lower.hh` 原样搬来的
- * （`lower/lower.hh` 用 using 引入 `simplexc::lower`，调用点一行没改）；`CompileError` 是
- * 方案 §2d 定的新模型，**新写的 sema 代码只用它**，旧路径 S3 再迁。 */
+ * 两代模型并存，`Unsupported`/`CompileFail` 那一代是①b 从旧 `lower.hh` 原样搬来的
+ * （当时用 using 引入 `simplexc::lower` 让调用点一行不用改；旧 lowering 删掉后，改由
+ * `codegen/module_build.hh` 引回 `simplexc::lower`，因为 `build_module` 的抛点在那里）；
+ * `CompileError` 是方案 §2d 定的新模型，**新写的代码只用它**，旧路径 S3 再迁。 */
 #pragma once
 
 #include <stdexcept>

@@ -83,10 +83,9 @@ CORE_SOURCES = [
     "simplexc/frontend/frontend.cc",
     "simplexc/frontend/ast_dump.cc",
     "simplexc/frontend/json.cc",
-    "simplexc/lower/module_build.cc",
-    "simplexc/lower/lower.cc",
-    "simplexc/lower/hir/codegen.cc",
-    "simplexc/lower/llvm_ffi.cc",
+    "simplexc/codegen/module_build.cc",
+    "simplexc/codegen/codegen.cc",
+    "simplexc/codegen/llvm_ffi.cc",
     "simplexc/sema/analyze.cc",
     "simplexc/sema/layout.cc",
     "simplexc/sema/types.cc",
@@ -190,7 +189,7 @@ def step_llvm_prog() -> None:
 
 def step_hook() -> None:
     print("== hook / simplexc_dll ==")
-    # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/lower/assemble/shell）。
+    # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
     # 壳仍是单文件 C，但它现在链接核心，所以构建从「一条 gcc 命令」变成三步，
     # 而且链接要用 g++（要 C++ 运行库）。两个名字是同一个目标：
     #   `hook` 是既有名字（`all` 里有它）；`simplexc_dll` 是与其它 simplexc 目标对齐的名字。

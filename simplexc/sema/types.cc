@@ -1,4 +1,4 @@
-/* sema/types.cc —— 类型系统与常量折叠的实现（步①b 从 `lower/lower.cc` 原样搬来，逐行未改）。
+/* sema/types.cc —— 类型系统与常量折叠的实现（步①b 从 旧 `lower.cc` 原样搬来，逐行未改）。
  *
  * `neg64` 也一起搬：它在 lower.cc 里只被 fold_arith / fold_unary 用，跟着搬才不用复制一份。 */
 #include "types.hh"
@@ -133,7 +133,7 @@ int storage_bytes(const Ty& ty) {
             throw Unsupported("类型 " + std::string(ty_kind_name(ty.kind)) + " 没有字节宽度", 0);
     }
 }
-/* 实例键 / 捕获签名用的类型拼写（方案 §2 决策 7 的**唯一**一处；`lower/lower.cc` 里还有一份
+/* 实例键 / 捕获签名用的类型拼写（方案 §2 决策 7 的**唯一**一处；旧 `lower.cc` 里还有一份
  * 逐行相同的拷贝，②c 接线时删那一份）。只要「同一个变量在不同宽度/种类下能分开」就够：
  * 同名变量在两个调用点绑不同类型时，实例体里的读写宽度不同，不能复用同一个实例。 */
 std::string ty_key(const Ty& ty) {

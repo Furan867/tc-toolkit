@@ -1,11 +1,12 @@
-# lower
+# codegen
 
-**HIR → LLVM IR**（目标形态；当前输入是 `frontend` 的无类型 AST，sema 也在这个目录里）：
-语义保真映射（内存模型、`$` 写回、extern 声明、entry 包装）、内建映射表，
-以及固定版本的 pass pipeline（`LLVMRunPasses` 的 `-O2`）。
-本目录将拆成 `sema/`（AST → HIR）与 `codegen/`（HIR → LLVM IR）—— 主设计 §3.2。
+**HIR → LLVM IR**（主设计 §3.2 的终态）：语义保真映射（内存模型、`$` 写回、extern 声明、entry 包装）、
+内建映射表，以及固定版本的 pass pipeline（`LLVMRunPasses` 的 `-O2`）。输入只有 `sema::Hir`
+（`sema/` 已于 S2 拆出，本目录原先叫 `lower/`）。
 
-**现状**：**C++17 实现已落地**（M4.5）。M3 期的 Python 原型 `ir_build.py` 已于 2026-10-18 删除
+**现状**：**C++17 实现已落地并接上产品路径**（`49568d8`；旧的无类型 AST → IR 那条路已删）。
+`module_ast.hh` / `module_source.hh` / `module_build.{hh,cc}` 是还没消掉的过渡物 —— 它们把前端产出的
+`ModuleAst` 搬成 `sema::ModuleSource`，与旧 lowering 无关。M3 期的 Python 原型 `ir_build.py` 已于 2026-10-18 删除
 （git 历史可查），不再有任何实现被当作语义权威 —— 语义以原版编译器的实测行为为准。
 接口两侧都已冻结：输入见接口 §1，输出侧的
 三元组 / ABI / pass 见接口 §7 与主设计 §4。

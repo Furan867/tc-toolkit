@@ -1,7 +1,7 @@
-/* lower/hir/codegen_ctx.hh —— HIR codegen 的**函数级**状态：值表示 `V`、名字绑定 `Binding`、
+/* codegen/codegen_ctx.hh —— HIR codegen 的**函数级**状态：值表示 `V`、名字绑定 `Binding`、
  * 每函数一份的上下文 `FnCtx`。
  *
- * 与 `lower/fn_ctx.hh`（旧 AST 路径那份）的差别只有一处，但这处是本质的：`Binding` 里没有
+ * 与旧 AST 路径的 `fn_ctx.hh`（随旧 lowering 一起删了）的差别只有一处，但这处是本质的：`Binding` 里没有
  * `const DefStmt*`——HIR 里「按名调一个 def」已经变成 `Call{FnId}`，名字绑定只剩「有地址的局部/
  * 捕获」与「编译期常量」两种。另加 `FnCtx.captures`：HIR 的 `Capture` 节点只有序号，没有名字，
  * 所以捕获按**下标**绑（`HirFunc.caps` 的顺序 = 闭包环境槽位顺序，见 `sema/hir.hh` 的 `HCapture`）。
@@ -12,7 +12,7 @@
  */
 #pragma once
 
-#include "../../sema/types.hh"
+#include "../sema/types.hh"
 
 #include <llvm-c/Core.h>
 

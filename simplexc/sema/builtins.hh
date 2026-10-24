@@ -12,7 +12,7 @@
  * `Const`；`load`/`store`/`raw_cast` 之外的内建体在 codegen 侧）在 sema 里显式抛
  * `CompileError{Unimplemented, Sema, …}`，不猜语义、也不静默降级。
  *
- * 操作数（`kids`）的形状逐条跟着 `lower/lower.cc` 的 `builtin_*` 走：
+ * 操作数（`kids`）的形状逐条跟着 旧 `lower.cc` 的 `builtin_*` 走：
  *   Load / Store / RawCast   见各自的声明处
  *   Asr(x, n)                kids = [x, n→x.ty]；饱和与 `ashr` 是 codegen 的事
  *   Clz(x)                   kids = [x]；数的是**操作数声明位宽**里的前导零

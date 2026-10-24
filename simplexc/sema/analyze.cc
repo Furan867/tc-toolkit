@@ -1549,7 +1549,7 @@ HNode Analyzer::call_raw_cast(const CallExpr& node) {
 
 /* ---------------------------------------------------------------- 内建（方案 §2f 的 3..9）
  *
- * 七条都逐句照 `lower/lower.cc` 的同名 `builtin_*`：能折的常量在 sema 折好（决策 4：折叠全归
+ * 七条都逐句照 旧 `lower.cc` 的同名 `builtin_*`：能折的常量在 sema 折好（决策 4：折叠全归
  * sema），折不了的发 `Call{Builtin}`；操作数的形状与那几条 `builtin_*` 取的一致（见
  * `builtins.hh` 的头注释）。语义的细节（`min/max` 的窄侧规则、`clz` 数的是声明位宽、`ror` 两条
  * 路口径不同、`array` 每调用点一枚私有全局、`random` 的顺序递推）一律照现状，不重新推导。

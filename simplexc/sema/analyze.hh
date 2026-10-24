@@ -7,7 +7,7 @@
  *
  * `type` 声明（enum / struct）为什么也在这里而不在 AST：`frontend/ast.hh` 只管语句与表达式，
  * 顶层 `type` 只有声明表（`frontend/decls.hh` 的 `Decl`：名字 + 行范围 + 一个 `note`），字段与
- * 成员要从源码文本里切（`lower/module_build.cc` 的 `scan_type` 干这件事，②c 之后只剩一处）。
+ * 成员要从源码文本里切（`codegen/module_build.cc` 的 `scan_type` 干这件事，②c 之后只剩一处）。
  * sema 只吃**切好的形状**：字段类型仍是源码拼写（`TypeRef`），解析在 `make_types` 里。
  */
 #pragma once

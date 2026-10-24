@@ -1,4 +1,4 @@
-/* lower/hir/codegen.hh —— **类型化 HIR → LLVM IR**（codegen 的终态入口）。
+/* codegen/codegen.hh —— **类型化 HIR → LLVM IR**（codegen 的终态入口）。
  *
  * 输入只有 `sema::Hir`：不 include `frontend/`，不查源码，不做类型推导、不决定实例化
  * （方案 §1 的终态表 / §2 决策 2、4）。三件事因此从本模块消失：
@@ -20,10 +20,10 @@
  */
 #pragma once
 
-#include "../../sema/errors.hh"
-#include "../../sema/hir.hh"
-#include "../../sema/types.hh"
-#include "../llvm_ffi.hh"
+#include "../sema/errors.hh"
+#include "../sema/hir.hh"
+#include "../sema/types.hh"
+#include "llvm_ffi.hh"
 #include "codegen_ctx.hh"
 
 #include <cstdint>

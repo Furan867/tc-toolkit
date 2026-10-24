@@ -8,7 +8,8 @@
 | 目录 | 负责什么 | 现状 |
 |---|---|---|
 | `frontend/` | 源码文本 → **无类型 AST**（**C++17**，接口 `frontend/ast.hh`） | C++17 实现（M4.5 已落地） |
-| `lower/` | 名字解析/类型/单态化 + **HIR → LLVM IR**（**C++17**）；sema 待拆到 `sema/`、本目录改名 `codegen/`（主设计 §3.2） | 同上 |
+| `sema/` | 无类型 AST → **HIR**：名字解析、类型、常量求值、单态化、内建识别（**C++17**） | 已拆出（主设计 §3.2） |
+| `codegen/` | **HIR → LLVM IR**（**C++17**）：语义保真映射、内建映射表、pass pipeline | 产品路径（`49568d8` 起） |
 | `runtime/` | 路线 B 运行时（编成 COFF，随 blob 装配） | 只有 `rt_min.cc`（spike 用） |
 | `assemble/` | COFF → blob | 可用 |
 | `shell/` | 壳里新增的那部分 | 只有入口桩与链接探针；选实现/失败转交仍在 `tools/compile_hook.c` |
@@ -19,7 +20,7 @@
 
 每个目录一个 README（负责什么 / 现在有什么 / 对外接口在哪 / 怎么用）。
 
-**产品 vs 工具**：产品路径（进 DLL）一律 **C++17** —— `frontend/` / `lower/` / `runtime/` / `assemble/` /
+**产品 vs 工具**：产品路径（进 DLL）一律 **C++17** —— `frontend/` / `sema/` / `codegen/` / `runtime/` / `assemble/` /
 `shell/` / `cli/`；`tools/` 下的 Python 只做离线工具。M3 期的 Python 原型已于 2026-10-18 删除
 （权威清单 = 接口冻结版 §0）。
 

@@ -128,3 +128,6 @@
   生成这类长文本时被 provider 的 content_filter 掐断过两次，且每次都是「文件已落盘、未接线、未验证」
   的半成品。期望值一律用**重定向从程序输出生成**（给程序加 `--dump-only` 之类的开关，
   `./exe --dump-only > testdata/x.txt`），再人工核对 golden 的每一行是否合规格。
+- 别拿**报错文案**给缺口分类 —— 我以为剩下的 14 份是「`const #X = "<串>"` 字符串常量」，因为
+  `analyze.cc` 的报错就是这么写的；实测 `grep 'const #* *= *"' simplexc/corpus/src/*.si` 是 **0 处**，
+  真正的缺口是**聚合常量**（`const #C = [U1 1,0]`）。归因必须查语料，不能读报错。

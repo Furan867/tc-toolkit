@@ -278,9 +278,14 @@ HIR 里只留消解后的结果，不留方法名。
 3. **`random` 的种子全局进 kids**：`Call{Builtin::Random, kids=[Global 种子, m?]}`。HIR 的引用
    一律是**已解析的编号**（§2b 形状决定 3），所以不许 codegen 按名字 `global_seed` 去查表。
 
-**S2b-4 之后的覆盖底数**：98 份语料 OK **66** / Unimplemented **32** / 崩溃 **0**；基线里出产物的
-那 75 份中 OK **61** 份。剩余失败按 detail 归类：
-`const #X = "<串>"`（字符串常量，`HirConst` 只有 `bits`、没有串池 id）**15 份**，其中 14 份在
-那 75 份里 —— 也就是那 75 份里剩下的**全部**缺口；前缀里的字符串格式化函数 `hex`/`bin`（14 份）
-与 `str`（2 份）、`ui_set_instruction()` 的重载解析（1 份），这三类 16 份在基线里本来就不出产物
-（`status=fail:rc=1`），不影响 75 份那条判据。
+**S2b-4 之后的覆盖底数**（2026-10-24 当日更正：原先归因错了）：98 份语料 OK **66** / Unimplemented **32** /
+崩溃 **0**；基线里出产物的那 75 份中 OK **61** 份。剩余失败分两类：
+
+- **聚合常量**（14 份，就是那 75 份里剩下的全部缺口）：`const #CORRECT_OUTPUT = [U1 1,0]`、
+  `const #MAZES = [0b111…]`、`const #OUTPUTS_0 = [U8 195,…]`。根因是 `Binding::Const` 只存
+  `uint64_t bits`，而 `const #` 的初值可以是**聚合**。修法：`Binding::Const` 携带已折好的 `HNode`，
+  并按**声明节点指针备忘**（同一个 `const #` 只折一次、只产一份，照 `root_const_values_` 的语义）。
+  ⚠️ 最初记成「`const #X = "<串>"`（字符串常量）」是**照着 `analyze.cc` 的报错文案归的类**：
+  实测 `grep 'const #* *= *"' simplexc/corpus/src/*.si` 为 **0 处**，语料里根本没有字符串常量。
+- 刻意不做的三类（18 份）：`hex` 13 + `str` 3 + `bin` 1 + `ui_set_instruction` 1。它们在基线里本来就
+  不出产物（`status=fail:rc=1`），补了等于新增能力，会让「产物逐字节相同」混入新产物。

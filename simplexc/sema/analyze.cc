@@ -1090,7 +1090,7 @@ HNode Analyzer::e_ident(const IdentExpr& node) {
     }
     auto rc = mod_->root_consts.find(name);
     if (rc != mod_->root_consts.end()) return const_decl_value(*rc->second);
-    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "未定义的名字 " + name};
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "未定义的名字 " + name};
 }
 
 HNode Analyzer::e_cast(const CastExpr& node) {
@@ -1461,7 +1461,7 @@ HNode Analyzer::call_named(const std::string& name, const CallExpr& node) {
     if (mod_->defs.count(name) != 0) {
         throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, name + "() 的重载解析拿不到参数类型"};
     }
-    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, "未定义的函数 " + name};
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "未定义的函数 " + name};
 }
 
 /* `lower.cc` 的 `call_user`。**三步的顺序不能换**：定实例（含泛型绑定）→ 在**调用点**算捕获表 →
@@ -2781,7 +2781,7 @@ HNode Analyzer::lvalue_ident(const IdentExpr& id) {
         const GlobalRef pg = prefix_global(name, id.src_line);
         return global_node(pg.id, pg.ty, id.src_line);
     }
-    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{id.src_line}, "未定义的名字 " + name};
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{id.src_line}, "未定义的名字 " + name};
 }
 
 /* `lower.cc` 的 `lvalue(Index)`：基址必须是 `Arr`/`Str`，下标 `convert` 到 `I64`（无符号零扩展），

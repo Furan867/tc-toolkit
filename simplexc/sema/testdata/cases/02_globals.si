@@ -1,0 +1,8 @@
+// 三种名字来源各一个：顶层 `const #N`（编译期常量，零条指令、进 `consts`）、顶层 `var g`
+// （带 `init_bits` 的全局）、程序根里的局部。`g + #N` 里有运行期读，所以不折叠。
+const #N = 5
+var g = #N * 2
+
+run_sim: while true {
+  var x = g + #N
+}

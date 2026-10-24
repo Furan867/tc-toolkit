@@ -23,6 +23,9 @@
                `.entry` / `.stubs`（不进 DLL）
     hir_selftest build/hir_selftest.exe  sema 的判据入口：HIR dump 与 `sema/testdata/` 里的
                golden 逐字节比 + 六条不变量（不进产品路径，不依赖 LLVM）
+    analyze_selftest build/analyze_selftest.exe  sema 的另一个判据入口：`.si` → 前端 AST →
+               `sema::analyze` → dump，与 `sema/testdata/cases/` 的 golden 逐字节比 + 六条不变量
+               （不进产品路径，不依赖 LLVM）
     ast_dump   build/ast_dump.exe     前端的判据入口（frontend/ 的 C++17 实现，不进产品 DLL）
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
@@ -244,6 +247,28 @@ def step_hir_selftest() -> None:
              "（不需要 LLVM，也不需要前端）。")
 
 
+def step_analyze_selftest() -> None:
+    print("== analyze_selftest ==")
+    out = os.path.join(BUILD, "analyze_selftest.exe")
+    # sema 的第二个判据入口（不进产品路径）：`.si` → 前端 AST → `sema::analyze` → dump，
+    # 与 `sema/testdata/cases/*.dump` 逐字比 + 六条不变量。**不链 LLVM**：sema 里本来就没有
+    # LLVM（`grep -c LLVM simplexc/sema/` 为 0），判据要把这件事当场证明。
+    # 链前端是因为输入是源码；`.si` → AST 那一段粘合属于判据侧（见 analyze_selftest.cc 头注释）。
+    run([CXX, "-std=c++17", "-O2", "-static",
+         "-I", "simplexc/sema",
+         "simplexc/sema/analyze_selftest.cc",
+         "simplexc/sema/analyze.cc",
+         "simplexc/sema/hir_dump.cc",
+         "simplexc/sema/types.cc",
+         "simplexc/frontend/decls.cc",
+         "simplexc/frontend/lexer.cc",
+         "simplexc/frontend/parser.cc",
+         "simplexc/frontend/frontend.cc",
+         "-o", REL(out)], out=out,
+        hint="编译失败 → 看 simplexc/sema/ 或 simplexc/frontend/ 的报错；这个目标只用 C++17"
+             " 标准库（不需要 LLVM）。")
+
+
 def step_ast_dump() -> None:
     print("== ast_dump ==")
     out = os.path.join(BUILD, "ast_dump.exe")
@@ -308,10 +333,11 @@ STEPS = {
     "simplexc_dll": step_hook,        # 同一个目标的两个名字（见 step_hook 的注释）
     "core_selftest": step_core_selftest,
     "hir_selftest": step_hir_selftest,
+    "analyze_selftest": step_analyze_selftest,
     "ast_dump": step_ast_dump,
     "spike": step_spike,
 }
-ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest"]
+ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analyze_selftest"]
 DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"],
            "hook": ["objs"], "simplexc_dll": ["objs"], "core_selftest": ["objs"]}
 

@@ -1,0 +1,14 @@
+// 语句形态：VarDecl / 裸块（一层作用域）/ Assign / 复合赋值 / 翻译期常量的 `let`（零条指令）/
+// 带标签的 `break`（从裸块里穿出去，标签匹配照 `s_BreakStmt`）/ 裸 `return`（程序根是 `None`）。
+run_sim: while true {
+  var x = 1
+  {
+    var y = 2
+    x = y + 1
+    break run_sim
+  }
+  x += 3
+  let k = 3 + 4
+  var z = k
+  return
+}

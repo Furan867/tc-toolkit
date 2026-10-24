@@ -1,0 +1,12 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=0
+  main key="main" name="main" ret=Void params=0 caps=0
+    Block span=3:0
+      While label="run_sim" span=3:0
+        Const ty=Bool const=0x1 span=3:0
+        Block span=3:0
+          VarDecl ty=U8 name="a" span=4:0
+            Const ty=U8 const=0x4 span=4:0
+          VarDecl ty=S64 name="b" span=5:0
+            Const ty=S64 const=0x7ffffffffffffffe span=5:0
+          VarDecl ty=S64 name="c" span=6:0
+            Const ty=S64 const=0xfffffffffffffffd span=6:0

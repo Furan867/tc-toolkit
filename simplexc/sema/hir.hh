@@ -29,6 +29,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -175,9 +176,13 @@ struct HirFunc {
     TyRef ret;
 };
 
+/* `init_bits` 是硬缺口（方案 §2b 补漏 2）：全局初值必须是编译期常量，由 sema 折好放这里；
+ * 少了它 codegen 只能把初值降级成程序根里的 store，产物就变了。`Const` 的约定同样适用：
+ * 位模式已按 `ty` 截断（非 Int 类型按 64 位）。空 = 没有初值（本步不会出现）。 */
 struct HirGlobal {
     std::string name;
     TyRef ty;
+    std::optional<uint64_t> init_bits;
 };
 
 struct HirExtern {

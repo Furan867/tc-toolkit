@@ -144,8 +144,13 @@ struct HNode {
     Span span;
     TyRef ty; /* 表达式：值的类型；语句：为空（VarDecl 例外：被声明者的类型） */
 
-    /* Const：已折叠、已按 `ty` 截断的位模式（决策 4 —— codegen 不再有 fold 分支）。 */
+    /* Const：已折叠、已按 `ty` 截断的位模式（决策 4 —— codegen 不再有 fold 分支）。
+     * 只有**整数**常量用得上；串/数组/聚合常量的位模式没有意义，它们走 `const_id`。 */
     uint64_t const_bits = 0;
+    /* Const：**非整数**常量的身份（`Hir.consts` 下标）。同一个 `const #` 声明只有一个条目，
+     * 引用 N 次都是这一个号 —— 没有它，codegen 只能给每次引用各发一枚私有全局（现状
+     * `lower` 是「一枚全局一个常量」）。整数常量不用它，`-1` = 位模式就在 `const_bits` 里。 */
+    int const_id = -1;
     /* Local / VarDecl：局部名（决策 3 —— 不引入 slot 编号）。 */
     std::string name;
     /* While / Break：循环标签（`break run_sim`，语料里到处都是）。空 = 无标签。
@@ -241,12 +246,18 @@ struct HirStruct {
     std::vector<HirField> fields; /* 声明序 */
 };
 
-/* 已折叠的具名编译期常量（`const #SIMULATION_STATE = …`）：值已经在用到它的 `Const` 节点里，
- * 这张表只为「按名查值/诊断」活着。 */
+/* 已折叠的具名编译期常量（`const #SIMULATION_STATE = …`）＝**常量值池**。
+ *   · 整数常量：位模式在 `bits`，引用点也直接把位模式写在 `Const.const_bits` 上 —— 这张表对
+ *     它们只为「按名查值/诊断」活着。
+ *   · 非整数（串/数组/聚合）：值在 `value`（已折叠的节点），引用点是 `Const{const_id}`。
+ *     值必须进池：同一个 `const #` 引用 N 次要对应**同一个**常量（`codegen` 那边是一枚私有
+ *     全局），每次引用各带一份值就没有身份可去重了。
+ * `value.ty` 为空 = 这条是整数常量（值在 `bits`）。 */
 struct HirConst {
     std::string name;
     TyRef ty;
     uint64_t bits = 0;
+    HNode value;
 };
 
 struct Hir {

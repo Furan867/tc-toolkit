@@ -1,0 +1,24 @@
+// 编译期常量不只是整数：串/数组/聚合常量的值进 `Hir.consts` 池，引用点带 `const_id`。
+// 判据（S2b-5）：同一个 `const #` 在**程序根**和**某个 def** 里各引用一次时，池里只有**一条**
+// 条目（`#PATTERN` 那条），两个引用点指向同一个号 —— 没有这个身份，codegen 会给每次引用各发
+// 一枚私有全局，而现状 `lower` 是「一份常量一枚全局」（`root_const_values_` 按声明节点备忘）。
+type Pair Struct {
+  lo: U8,
+  hi: U8,
+}
+
+const #NAME = "abc"
+
+def pick(i: Int) U8 {
+  return #PATTERN[i]
+}
+
+run_sim: while true {
+  const #PATTERN = [U1 1, 0, 1]
+  const #ZERO = Pair {}
+  var a = pick(1)
+  var b = #PATTERN[0]
+  var n = U16 #NAME.len()
+  var z = #ZERO
+  if a == b { break }
+}

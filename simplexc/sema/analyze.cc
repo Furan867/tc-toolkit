@@ -347,6 +347,15 @@ HNode const_node(const TyRef& ty, uint64_t bits, int line) {
     return n;
 }
 
+/* 常量**引用点**：整数常量带位模式，非整数常量（串/数组/聚合）带 `const_id`（`Hir.consts` 下标）。
+ * span 记**引用点**的行，所以同一个常量在不同引用点的 dump 行不同 —— 但 `const_id` 相同，
+ * 一眼能看出它们在引用同一个条目。 */
+HNode const_ref(const TyRef& ty, uint64_t bits, int const_id, int line) {
+    HNode n = const_node(ty, bits, line);
+    n.const_id = const_id;
+    return n;
+}
+
 HNode local_node(const std::string& name, TyRef ty, int line) {
     HNode n = expr_node(HKind::Local, std::move(ty), line);
     n.name = name;
@@ -375,9 +384,11 @@ HNode cast_node(HCastKind kind, HNode v, const TyRef& target, int line) {
 }
 
 /* 常量形态下按**源类型符号性**扩展后的 64 位内容（`lower.cc` 的 `pat_const`；U-L7 的第一路）。
- * 非 `Const` 节点返回空 —— 「加宽按符号性扩」只对常量成立。 */
+ * 非 `Const` 节点返回空 —— 「加宽按符号性扩」只对常量成立。带 `const_id` 的 `Const`（串/数组/
+ * 聚合常量）也返回空：它的值不是位模式，当成 0 折叠就是静默错值。 */
 std::optional<uint64_t> pat_const(const HNode& n) {
     if (n.kind != HKind::Const) return std::nullopt;
+    if (n.const_id >= 0) return std::nullopt;
     if (!is_int(*n.ty)) return n.const_bits & kMask64;
     uint64_t v = n.const_bits & mask_of(n.ty->bits);
     if (n.ty->is_signed && n.ty->bits < 64 && ((v >> (n.ty->bits - 1)) & 1) != 0) {
@@ -402,7 +413,9 @@ bool same_val_ty(const TyRef& a, const TyRef& b) {
 
 /* `cv` 里「必须是常量」的断言：与 `lower.cc` 的 `need_const` 同名同义（内部失败，不是用户错）。 */
 uint64_t need_const(const HNode& n, int line) {
-    if (n.kind != HKind::Const) throw Unsupported("（内部）常量求值拿到非常量", line);
+    if (n.kind != HKind::Const || n.const_id >= 0) {
+        throw Unsupported("（内部）常量求值拿到非常量", line);
+    }
     return n.const_bits;
 }
 
@@ -411,7 +424,9 @@ uint64_t need_const(const HNode& n, int line) {
  * 位模式就是 0（codegen 按 `ty` 的完整宽度写 `zeroinitializer`）。别的聚合常量没有表示位，
  * 显式报未实现 —— 不许挑一个字段代替整个聚合（那是静默错值）。 */
 uint64_t global_init_bits(const HNode& v, int line) {
-    if (v.kind == HKind::Const) return v.const_bits;
+    /* 带 `const_id` 的 `Const` 是串/数组/聚合常量：它没有 64 位位模式，拿 `const_bits`（0）当
+     * 初值就是静默错值。 */
+    if (v.kind == HKind::Const && v.const_id < 0) return v.const_bits;
     if (v.kind == HKind::CompositeLit) {
         for (const HNode& field : v.kids) {
             if (field.kind != HKind::Const || field.const_bits != 0) {
@@ -522,8 +537,12 @@ struct Module {
     /* 程序根体里的嵌套 def：整单元可见、且前向可见（`lower.cc` 的 `root_defs_`）。 */
     std::map<std::string, const DefStmt*> root_defs;
     std::map<std::string, GlobalRef> globals;
-    std::map<std::string, HirConst> consts;                  /* 顶层 `const #` */
+    /* 顶层 `const #`：名字 → **引用节点**（整数带位模式，非整数带 `const_id`）。 */
+    std::map<std::string, HNode> consts;
     std::map<std::string, const VarDeclStmt*> root_consts;   /* 程序根体里的 `const #` */
+    /* `const #` 声明 → 已折好的引用节点（`lower.cc` 的 `root_const_values_` 同一件事）：同一个
+     * 声明只折一次、非整数常量只占一个 `Hir.consts` 条目。按**声明节点指针**备。 */
+    std::map<const VarDeclStmt*, HNode> const_by_decl;
     std::map<std::string, TyRef> enums;                      /* 枚举类型名 → 类型 */
     std::map<std::string, std::pair<std::string, int>> enum_member; /* 成员 → (枚举, 序号) */
     std::map<std::string, StructLayout> structs;             /* struct 名 → 布局 */
@@ -549,7 +568,8 @@ private:
         enum class Kind { Local, Capture, Const, Def };
         Kind kind = Kind::Local;
         TyRef ty;                     /* Local / Capture */
-        uint64_t bits = 0;            /* Const：已按 ty 截断的位模式 */
+        uint64_t bits = 0;            /* Const：已按 ty 截断的位模式（整数常量） */
+        int const_id = -1;            /* Const：非整数常量的身份（`Hir.consts` 下标） */
         int index = -1;               /* Capture：闭包环境里的槽位序号 */
         const DefStmt* def = nullptr; /* Def */
         std::string owner_lex;        /* Def：它声明在那一层的词法键（键里的归属段） */
@@ -560,7 +580,7 @@ private:
     void scan_scope_names(const ModuleSource& src);
     void make_top_level(const std::vector<const VarDeclStmt*>& top_vars);
     void scan_root_consts(const Block& body);
-    HNode root_const_value(const VarDeclStmt& decl);
+    HNode const_decl_value(const VarDeclStmt& decl);
     GlobalRef prefix_global(const std::string& name, int line);
     int intern_string(const std::string& bytes);
 
@@ -670,7 +690,7 @@ private:
     void push_scope() { scopes_.emplace_back(); }
     void pop_scope() { scopes_.pop_back(); }
     void bind_local(const std::string& name, TyRef ty);
-    void bind_const(const std::string& name, TyRef ty, uint64_t bits);
+    void bind_const(const std::string& name, HNode value);
     void bind_capture(const std::string& name, TyRef ty, int index);
     void bind_def(const std::string& name, const DefStmt* def, const std::string& owner_lex);
     const Binding* lookup(const std::string& name) const;
@@ -777,18 +797,17 @@ void Analyzer::scan_scope_names(const ModuleSource& src) {
 void Analyzer::make_top_level(const std::vector<const VarDeclStmt*>& top_vars) {
     for (const VarDeclStmt* st : top_vars) {
         if (st->kw == "const" && !st->name.empty() && st->name[0] == '#') {
-            auto v = const_value(*st->init);
-            if (!v) throw Unsupported("编译期常量 " + st->name + " 的初始化式不是常量", st->src_line);
-            if (v->kind != HKind::Const) {
-                throw Unsupported("编译期常量 " + st->name + " 不是整数常量（字符串常量未接）",
-                                  st->src_line);
+            const HNode ref = const_decl_value(*st);
+            if (ref.const_id < 0) {
+                /* 整数常量：一个具名条目（dump/诊断用），值在 `bits`。 */
+                HirConst c;
+                c.name = st->name;
+                c.ty = ref.ty;
+                c.bits = ref.const_bits;
+                mod_->hir.consts.push_back(c);
             }
-            HirConst c;
-            c.name = st->name;
-            c.ty = v->ty;
-            c.bits = v->const_bits;
-            mod_->hir.consts.push_back(c);
-            mod_->consts[c.name] = std::move(c);
+            /* 非整数常量的条目已由 `const_decl_value` 建好（值在池里、引用点是 `const_id`）。 */
+            mod_->consts[st->name] = ref;
             continue;
         }
         auto v = const_value(*st->init);
@@ -845,10 +864,23 @@ int Analyzer::intern_string(const std::string& bytes) {
     return id;
 }
 
-HNode Analyzer::root_const_value(const VarDeclStmt& decl) {
+HNode Analyzer::const_decl_value(const VarDeclStmt& decl) {
+    auto hit = mod_->const_by_decl.find(&decl);
+    if (hit != mod_->const_by_decl.end()) return hit->second;
     auto v = const_value(*decl.init);
     if (!v) throw Unsupported("编译期常量 " + decl.name + " 的初始化式不是常量", decl.src_line);
-    return *v;
+    HNode ref = *v;
+    if (v->kind != HKind::Const) {
+        HirConst c;
+        c.name = decl.name;
+        c.ty = v->ty;
+        c.value = *v;
+        mod_->hir.consts.push_back(std::move(c));
+        ref = const_node(v->ty, 0, decl.src_line);
+        ref.const_id = static_cast<int>(mod_->hir.consts.size()) - 1;
+    }
+    mod_->const_by_decl[&decl] = ref;
+    return ref;
 }
 
 /* ---------------------------------------------------------------- 类型 */
@@ -1031,7 +1063,7 @@ HNode Analyzer::e_ident(const IdentExpr& node) {
         if (b->kind == Binding::Kind::Capture) {
             return capture_node(b->ty, b->index, node.src_line);
         }
-        if (b->kind == Binding::Kind::Const) return const_node(b->ty, b->bits, node.src_line);
+        if (b->kind == Binding::Kind::Const) return const_ref(b->ty, b->bits, b->const_id, node.src_line);
         throw Unsupported("def 名 " + name + " 当值用", node.src_line);
     }
     auto g = mod_->globals.find(name);
@@ -1049,14 +1081,14 @@ HNode Analyzer::e_ident(const IdentExpr& node) {
     }
     auto c = mod_->consts.find(name);
     if (c != mod_->consts.end()) {
-        return const_node(c->second.ty, c->second.bits, node.src_line);
+        return const_ref(c->second.ty, c->second.const_bits, c->second.const_id, node.src_line);
     }
     auto hc = hash_consts().find(name);
     if (hc != hash_consts().end()) {
         return const_node(hc->second.ty, hc->second.value, node.src_line);
     }
     auto rc = mod_->root_consts.find(name);
-    if (rc != mod_->root_consts.end()) return root_const_value(*rc->second);
+    if (rc != mod_->root_consts.end()) return const_decl_value(*rc->second);
     throw Unsupported("未定义的名字 " + name, node.src_line);
 }
 
@@ -2314,10 +2346,14 @@ HNode Analyzer::cv(const Node& node) {
             /* 局部 `const` 只活在作用域里（`e_ident` 同样先查 lookup）—— 不查这里，
                函数内的 `const #N = #A | #B` 会被判成「初始化式不是常量」。 */
             if (const Binding* b = lookup(n.name)) {
-                if (b->kind == Binding::Kind::Const) return const_node(b->ty, b->bits, n.src_line);
+                if (b->kind == Binding::Kind::Const) {
+                    return const_ref(b->ty, b->bits, b->const_id, n.src_line);
+                }
             }
             auto c = mod_->consts.find(n.name);
-            if (c != mod_->consts.end()) return const_node(c->second.ty, c->second.bits, n.src_line);
+            if (c != mod_->consts.end()) {
+                return const_ref(c->second.ty, c->second.const_bits, c->second.const_id, n.src_line);
+            }
             auto em = mod_->enum_member.find(n.name);
             if (em != mod_->enum_member.end()) {
                 return const_node(mod_->enums.at(em->second.first),
@@ -2328,7 +2364,7 @@ HNode Analyzer::cv(const Node& node) {
                 return const_node(hc->second.ty, hc->second.value, n.src_line);
             }
             auto rc = mod_->root_consts.find(n.name);
-            if (rc != mod_->root_consts.end()) return root_const_value(*rc->second);
+            if (rc != mod_->root_consts.end()) return const_decl_value(*rc->second);
             throw Unsupported("名字 " + n.name, n.src_line);
         }
         case NK::Cast: {
@@ -2463,14 +2499,9 @@ void Analyzer::statement(HNode& parent, const Stmt& st) {
  *   其余（含 `var`）       → 一个 `VarDecl`（codegen 版 alloca + store） */
 void Analyzer::var_decl_stmt(HNode& parent, const VarDeclStmt& st) {
     if (st.kw == "const" && !st.name.empty() && st.name[0] == '#') {
-        auto v = const_value(*st.init);
-        if (!v) throw Unsupported("编译期常量 " + st.name + " 的初始化式不是常量", st.src_line);
-        /* `Binding::Const` 只存**位模式**，字符串常量无处放 —— 报错，不静默丢串池 id。 */
-        if (v->kind != HKind::Const) {
-            throw Unsupported("编译期常量 " + st.name + " 不是整数常量（字符串常量未接）",
-                              st.src_line);
-        }
-        bind_const(st.name, v->ty, v->const_bits);
+        /* 值只折一次（`const_decl_value` 按声明节点备忘）；非整数常量进 `Hir.consts` 池，
+         * 引用点拿到的 `Const` 带 `const_id` —— 引用 N 次仍是同一个常量。 */
+        bind_const(st.name, const_decl_value(st));
         return;
     }
     HNode init = e(*st.init);
@@ -2478,7 +2509,7 @@ void Analyzer::var_decl_stmt(HNode& parent, const VarDeclStmt& st) {
         throw Unsupported(st.name + " 的初始化式没有值", st.src_line);
     }
     if ((st.kw == "let" || st.kw == "const") && init.kind == HKind::Const) {
-        bind_const(st.name, init.ty, init.const_bits);
+        bind_const(st.name, init);
         return;
     }
     HNode n = stmt_node(HKind::VarDecl, st.src_line);
@@ -2748,11 +2779,12 @@ void Analyzer::bind_local(const std::string& name, TyRef ty) {
     scopes_.back()[name] = std::move(b);
 }
 
-void Analyzer::bind_const(const std::string& name, TyRef ty, uint64_t bits) {
+void Analyzer::bind_const(const std::string& name, HNode value) {
     Binding b;
     b.kind = Binding::Kind::Const;
-    b.ty = std::move(ty);
-    b.bits = bits;
+    b.ty = value.ty;
+    b.bits = value.const_bits;
+    b.const_id = value.const_id;
     scopes_.back()[name] = std::move(b);
 }
 

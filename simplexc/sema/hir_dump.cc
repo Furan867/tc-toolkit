@@ -190,7 +190,13 @@ void dump_node(std::string& out, const HNode& n, int depth) {
     out += hkind_name(n.kind);
     switch (n.kind) {
         case HKind::Const:
-            out += " ty=" + ty_text(n.ty) + " const=" + hex64(n.const_bits);
+            out += " ty=" + ty_text(n.ty);
+            /* 非整数常量（串/数组/聚合）打印身份：同一个 `const #` 的所有引用点都是同一个号。 */
+            if (n.const_id >= 0) {
+                out += " const_id=" + std::to_string(n.const_id);
+            } else {
+                out += " const=" + hex64(n.const_bits);
+            }
             break;
         case HKind::StrLit:
             out += " ty=" + ty_text(n.ty) + " string=" + std::to_string(n.string_id);
@@ -656,9 +662,18 @@ std::string dump(const Hir& hir) {
                quoted(hir.externs[i].name) + " ty=" + ty_text(hir.externs[i].ty) + "\n";
     }
     for (std::size_t i = 0; i < hir.consts.size(); ++i) {
-        out += indent_of(1) + "const[" + std::to_string(i) + "] name=" +
-               quoted(hir.consts[i].name) + " ty=" + ty_text(hir.consts[i].ty) +
-               " value=" + hex64(hir.consts[i].bits) + "\n";
+        const HirConst& c = hir.consts[i];
+        out += indent_of(1) + "const[" + std::to_string(i) + "] name=" + quoted(c.name) +
+               " ty=" + ty_text(c.ty);
+        /* `value.ty` 为空 = 整数常量（值在 `bits`）；否则把折叠后的值整个印出来 —— 引用点只带
+         * `const_id`，值本身只在这里看得到。 */
+        if (c.value.ty == nullptr) {
+            out += " value=" + hex64(c.bits);
+        } else {
+            out += " value=" + std::string(hkind_name(c.value.kind));
+        }
+        out += "\n";
+        if (c.value.ty != nullptr) dump_node(out, c.value, 2);
     }
     for (std::size_t i = 0; i < hir.structs.size(); ++i) {
         const HirStruct& st = hir.structs[i];

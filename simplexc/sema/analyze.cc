@@ -749,7 +749,9 @@ void Analyzer::make_types(const ModuleSource& src) {
     for (const StructSource& d : src.structs) {
         std::vector<std::pair<std::string, TyRef>> fields;
         fields.reserve(d.fields.size());
-        for (const auto& f : d.fields) fields.emplace_back(f.first, ty_of_ref(*f.second, 0));
+        /* 字段类型名认不出时（`@T`/泛型/拼错的类型）报的是**字段自己那一行**：`TypeRef::src_line`
+         * 由 `scan_type` 填（P4 之前这里写死 0，诊断里是「第 0 行」，与 §2d 的「不许留 0」冲突）。 */
+        for (const auto& f : d.fields) fields.emplace_back(f.first, ty_of_ref(*f.second, f.second->src_line));
         StructLayout lay = layout_struct(d.name, fields);
         mod_->hir.structs.push_back(HirStruct{d.name, lay.ty->bits, lay.fields});
         mod_->structs[d.name] = std::move(lay);

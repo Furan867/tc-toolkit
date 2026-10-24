@@ -19,12 +19,30 @@ namespace simplexc {
 namespace lower {
 namespace {
 
-std::string join_lines(const std::vector<std::string>& lines, int lo, int hi) {
-  std::string out;
+/* 声明可能跨行，所以先拼成一个串再切。拼完行号就没了，而字段的类型名要在**它自己那一行**上报错，
+ * 所以同时记下每段物理行在 `text` 里的起点。（`span.hh`：`line >= 1` 才算有位置，第 0 行不算。） */
+struct JoinedDecl {
+  std::string text;
+  std::vector<size_t> seg_begin; /* 第 i 段 = 物理行 `lo + i` 在 `text` 里的起始偏移 */
+  int lo = 1;
+
+  int line_of(size_t pos) const {
+    int line = lo;
+    for (size_t i = 0; i < seg_begin.size() && seg_begin[i] <= pos; ++i) {
+      line = lo + static_cast<int>(i);
+    }
+    return line;
+  }
+};
+
+JoinedDecl join_lines(const std::vector<std::string>& lines, int lo, int hi) {
+  JoinedDecl out;
+  out.lo = lo;
   for (int i = lo - 1; i < hi && i < static_cast<int>(lines.size()); ++i) {
     if (i >= 0) {
-      if (!out.empty()) out += ' ';
-      out += lines[static_cast<size_t>(i)];
+      if (!out.text.empty()) out.text += ' ';
+      out.seg_begin.push_back(out.text.size());
+      out.text += lines[static_cast<size_t>(i)];
     }
   }
   return out;
@@ -49,8 +67,9 @@ std::string read_ident(const std::string& s, size_t& i) {
 }
 
 /* 字段/成员的类型拼写：`U32` / `@Size`（接口 §1 的 `TypeRef` 只存拼写）。 */
-std::unique_ptr<TypeRef> make_type_ref(const std::string& word) {
+std::unique_ptr<TypeRef> make_type_ref(const std::string& word, int line) {
   auto t = std::make_unique<TypeRef>();
+  t->src_line = line;
   if (!word.empty() && word[0] == '@') {
     t->at = true;
     t->name = word.substr(1);
@@ -62,7 +81,8 @@ std::unique_ptr<TypeRef> make_type_ref(const std::string& word) {
 
 /* `type X Enum [A, B, C]` 与 `type X Struct { f: T, g: U }` —— 生成代码子集里只有这两种。 */
 void scan_type(const std::vector<std::string>& code_lines, const Decl& d, OwnedModule& out) {
-  const std::string text = join_lines(code_lines, d.lo, d.hi);
+  const JoinedDecl joined = join_lines(code_lines, d.lo, d.hi);
+  const std::string& text = joined.text;
   if (d.note == "Enum") {
     const size_t lb = text.find("Enum");
     const size_t l = lb == std::string::npos ? std::string::npos : text.find('[', lb);
@@ -98,18 +118,28 @@ void scan_type(const std::vector<std::string>& code_lines, const Decl& d, OwnedM
           body.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
       size_t i = skip_ws(part, 0);
       std::string fname = read_ident(part, i);
+      /* 空片段（尾随逗号、纯空白）照旧跳过；**有字段名却切不出类型**的不许再静默丢掉 ——
+       * 静默丢字段等于悄悄改布局，后面按少一个字段的偏移读写字节（P4）。 */
       if (!fname.empty()) {
-        i = skip_ws(part, i);
-        if (i < part.size() && part[i] == ':') {
-          const bool at = i + 1 < part.size() && part[i + 1] == '@';
-          i = skip_ws(part, i + 1);
-          size_t j = i;
-          if (j < part.size() && part[j] == '@') ++j;
-          std::string tname = read_ident(part, j);
-          if (!tname.empty()) {
-            s.fields.emplace_back(fname, out.keep_type(make_type_ref(at ? "@" + tname : tname)));
-          }
+        const size_t after_name = skip_ws(part, i);
+        if (after_name >= part.size() || part[after_name] != ':') {
+          throw CompileError{Responsibility::UserSource, Stage::Parse,
+                             Span{joined.line_of(l + 1 + pos + i)},
+                             "结构 " + d.name + " 的字段 '" + fname + "' 缺类型（写成 '名字: 类型'）：" + part};
         }
+        const bool at = after_name + 1 < part.size() && part[after_name + 1] == '@';
+        i = skip_ws(part, after_name + 1);
+        size_t j = i;
+        if (j < part.size() && part[j] == '@') ++j;
+        std::string tname = read_ident(part, j);
+        if (tname.empty()) {
+          throw CompileError{Responsibility::UserSource, Stage::Parse,
+                             Span{joined.line_of(l + 1 + pos + after_name)},
+                             "结构 " + d.name + " 的字段 '" + fname + "' 的类型名是空的：" + part};
+        }
+        s.fields.emplace_back(
+            fname, out.keep_type(make_type_ref(at ? "@" + tname : tname,
+                                              joined.line_of(l + 1 + pos + j))));
       }
       if (comma == std::string::npos) break;
       pos = comma + 1;
@@ -156,6 +186,15 @@ const TypeRef* OwnedModule::keep_type(std::unique_ptr<TypeRef> t) {
 
 OwnedModule build_module(const Frontend& fe, std::string source_name) {
   OwnedModule out;
+  /* 顶层未知行（`decls.cc:479-484` 记进 `top_unsupported`）以前只写不读：那行既不进声明表、也不进
+   * 解析器，于是「这不是 simplex 能认的一行」没有任何痕迹，文件照出 blob（P5）。98 份语料里
+   * **0 份**走到这里（`work/tmp/s3/notes-p145.md`），所以改成显式失败：责任 = 未实现（分不清是
+   * 用户拼错还是我们没接的顶层构造）、阶段 = 语法（声明扫描属前端）、span = 行号 + 原文。 */
+  if (!fe.top_unsupported.empty()) {
+    const std::pair<int, std::string>& first = fe.top_unsupported.front();
+    throw CompileError{Responsibility::Unimplemented, Stage::Parse, Span{first.first},
+                       "顶层这一行既不是声明也不是语句（未支持）：" + first.second};
+  }
   for (size_t i = 0; i < fe.decls.size(); ++i) {
     const Decl& d = fe.decls[i];
     const int idx = static_cast<int>(i);

@@ -23,6 +23,7 @@
 #include "../frontend/ast.hh"
 #include "../sema/errors.hh"
 #include "../sema/types.hh"
+#include "fn_ctx.hh"
 #include "llvm_ffi.hh"
 
 #include <cstdint>
@@ -68,15 +69,8 @@ using sema::ty_str;
 using sema::ty_time;
 using sema::ty_void;
 
-/* 表达式的 lowering 结果：i64 位模式值（或 struct 聚合）+ 类型 + 可选的编译期常量。 */
-struct V {
-    LLVMValueRef ll = nullptr;
-    TyRef ty;
-    std::optional<uint64_t> c;
-
-    static V instr(LLVMValueRef v, TyRef t) { return V{v, std::move(t), std::nullopt}; }
-    static V konst(TyRef t, uint64_t c) { return V{nullptr, std::move(t), c}; }
-};
+/* `V` / `Binding` / `Scope` / `FnCtx` 在 `fn_ctx.hh`：它们都是**每函数一份**的东西，
+ * 按需生成的递归靠压/弹 `FnCtx` 表达，不再靠逐字段快照存取。 */
 
 /* ---------------------------------------------------------------- 前端 → lowering 的输入
  * 声明表（`Program` 从 `frontend/decls.hh` 拿的那张）。`ast.hh` 没有顶层 `type` 声明的
@@ -122,6 +116,7 @@ struct Closure {
 /* ---------------------------------------------------------------- Lower */
 class Lower {
 public:
+    Lower();
     virtual ~Lower();
 
     const std::vector<Diagnostic>& diagnostics() const { return unsupported_; }
@@ -145,39 +140,21 @@ protected:
     LLVMValueRef const_for_storage(const V& v);
     LLVMValueRef field_storage_value(const V& v, const TyRef& ty, int line);
 
-    /* ---- 函数的状态保存 / 恢复（「按需生成」要边发一个函数边发它调用的函数） */
-    struct Binding {
-        enum class Kind { Local, Capture, Const, Def } kind = Kind::Local;
-        LLVMValueRef ptr = nullptr;      /* Local / Capture：地址 */
-        TyRef ty;                        /* Local / Capture */
-        std::optional<V> value;          /* Const */
-        const DefStmt* def = nullptr;    /* Def */
-
-        static Binding local(LLVMValueRef p, TyRef t);
-        static Binding capture(LLVMValueRef p, TyRef t);
-        static Binding constant(V v);
-        static Binding nested(const DefStmt* d);
-    };
-    using Scope = std::map<std::string, Binding>;
-
-    struct FnState {
-        LLVMBuilderRef bd = nullptr;
-        LLVMValueRef fnref = nullptr;
-        TyRef ret_ty;
-        LLVMBasicBlockRef cur_block = nullptr;
-        LLVMBasicBlockRef entry = nullptr;
-        std::vector<Scope> scopes;
-        std::vector<std::pair<std::string, LLVMBasicBlockRef>> breaks;
-        std::string cur_name;
-        const FunctionDef* cur_def = nullptr;
-        std::map<std::string, TyRef> ty_binds;
-    };
-    FnState save_state() const;
-    void restore_state(const FnState& s);
+    /* ---- 当前函数的上下文
+     * `fn_ctxs_` 是**栈**：`back()` 就是当前函数（基座在 `Lower` 构造时压入，所以 `cur_fn()`
+     * 在任何时刻都有效 —— `make_globals` 这类模块级步骤会求编译期常量，那时也要读 `ty_binds`）。
+     * 递归生成被调函数时 `begin_function` 压一个新的，`finish_function` 弹掉；两者之外没有
+     * 任何地方能改「当前函数」（见 `fn_ctx.hh` 头注释）。 */
+    FnCtx& cur_fn() { return *fn_ctxs_.back(); }
+    const FnCtx& cur_fn() const { return *fn_ctxs_.back(); }
+    std::vector<std::unique_ptr<FnCtx>> fn_ctxs_;
 
     /* ---- 函数的开始 / 收尾 / 块与 alloca */
     void mark_no_builtin(LLVMValueRef fnref);
-    void begin_function(LLVMValueRef fnref, const TyRef& ret_ty);
+    /* 压一个新函数上下文并返回它：builder / entry 块 / 空作用域表在这里建好；
+     * 身份字段（`name` / `def` / `ty_binds`）由调用点在返回的引用上写 —— 它们的沿用规则
+     * 三种调用点各不相同（见 `ensure_*_fn` 与 `emit_main`）。 */
+    FnCtx& begin_function(LLVMValueRef fnref, const TyRef& ret_ty);
     void finish_function();
     LLVMBasicBlockRef new_block(const char* name);
     LLVMBasicBlockRef br_new_block(const char* name);
@@ -396,9 +373,6 @@ protected:
     /* 键 = (类别, 名字, 源码行, 附加名字)：与原型的三元组 / 二元组一一对应。
      * 类别 1（顶层 def）的第 4 位是**捕获签名**：空串 = 没有捕获，键与闭包化之前完全相同。 */
     std::map<std::tuple<int, std::string, int64_t, std::string>, Fn> fns_;
-    /* 当前函数（或正在为某个实例发的函数体）的类型参数绑定：`size(x)` / `type_of(x)` 与
-     * 「类型参数当类型用」都从这里取。与 `FnState` 一起存/取，因为按需生成会嵌套。 */
-    std::map<std::string, TyRef> ty_binds_;
     /* 每个顶层 def 已发过几个捕获实例（生成 `$c0`/`$c1` 这样的名字后缀，并按上限兜住
      * 「互调 + 捕获」的发散，见 `ensure_def_fn`）。 */
     std::map<std::pair<std::string, int64_t>, int> cap_instances_;
@@ -409,17 +383,6 @@ protected:
     LLVMTypeRef ptr_ = nullptr;
     LLVMTypeRef void_ty_ = nullptr;
     std::map<unsigned, LLVMTypeRef> int_types_;
-
-    /* 当前函数 */
-    LLVMBuilderRef bd_ = nullptr;
-    LLVMValueRef fnref_ = nullptr;
-    TyRef ret_ty_;
-    LLVMBasicBlockRef cur_block_ = nullptr;
-    LLVMBasicBlockRef entry_ = nullptr;
-    std::vector<Scope> scopes_;
-    std::vector<std::pair<std::string, LLVMBasicBlockRef>> breaks_;   /* label（空 = 无标签）→ 出口块 */
-    std::string cur_name_;
-    const FunctionDef* cur_def_ = nullptr;
 
     int fn_seen_ = 0;
     bool collect_ = false;

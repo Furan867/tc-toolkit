@@ -2,6 +2,7 @@
 #include "lower.hh"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdio>
 #include <functional>
 #include <set>
@@ -232,32 +233,9 @@ const std::string* callee_name_of(const Expr& e) {
 
 }  // namespace
 
-/* 捕获签名用的类型拼写：只要**同一个变量的不同宽度/种类能分开**就够（同名在不同调用点绑不同
- * 类型时 IR 函数体里的读写宽度不同，不能复用同一个实例）。 */
-std::string ty_key(const Ty& ty) {
-    switch (ty.kind) {
-        case TyKind::Int:
-            if (ty.is_bool) return "bool";
-            return std::string(ty.is_signed ? "s" : "u") + std::to_string(ty.bits);
-        case TyKind::Ptr: return "ptr";
-        case TyKind::Str: return "str";
-        case TyKind::Enum: return "enum:" + ty.name;
-        case TyKind::Struct: return "struct:" + ty.name;
-        case TyKind::Array:
-            return "arr:" + (ty.elem != nullptr ? ty_key(*ty.elem) : std::string("?"));
-        case TyKind::Void: return "void";
-    }
-    return "?";
-}
-
-/* `size(x)` 的单位是**位**（docs/facts.md「泛型」一条），宽度来源与 `storage_bytes` 同一处。
- * Enum 是唯一例外（U-L5：只有 1/2 字节两档，而它的存储宽度是 1 个机器字），所以它在这里报掉，
- * 不静默给一个错的 64。 */
-int size_bits(const Ty& ty) {
-    if (ty.kind == TyKind::Enum) throw Unsupported("size() 用在枚举上", 0);
-    return storage_bytes(ty) * 8;
-}
-
+/* `ty_key` / `size_bits` 已搬进 `sema/types.hh`（唯一实现）。这里**不能**留拷贝：
+ * 参数类型 `Ty` 属于 `sema` 命名空间，ADL 会把 `sema::ty_key` 一起拉到调用点，
+ * 与 `lower::ty_key` 撞成重载二义（实测：`cap_sig` 那行编译失败）。 */
 const char* kind_name(NK k) {
     switch (k) {
         case NK::Literal: return "LiteralExpr";
@@ -295,8 +273,12 @@ const char* kind_name(NK k) {
 
 /* ================================================================ Lower：骨架 */
 
+/* 基座上下文：`cur_fn()` 在第一个函数开始之前也得有效（`make_globals` 求全局初值时会
+ * 读 `ty_binds`）。它没有 builder、没有作用域，`finish_function` 拒绝弹它。 */
+Lower::Lower() { fn_ctxs_.push_back(std::make_unique<FnCtx>()); }
+
 Lower::~Lower() {
-    if (bd_ != nullptr) LLVMDisposeBuilder(bd_);
+    if (cur_fn().bd != nullptr) LLVMDisposeBuilder(cur_fn().bd);
 }
 
 void Lower::open_module(const char* name) {
@@ -361,34 +343,6 @@ LLVMValueRef Lower::const_for_storage(const V& v) {
     return LLVMConstInt(storage_ll(*v.ty), *v.c & mask_of(v.ty->bits), 0);
 }
 
-Lower::FnState Lower::save_state() const {
-    FnState s;
-    s.bd = bd_;
-    s.fnref = fnref_;
-    s.ret_ty = ret_ty_;
-    s.cur_block = cur_block_;
-    s.entry = entry_;
-    s.scopes = scopes_;
-    s.breaks = breaks_;
-    s.cur_name = cur_name_;
-    s.cur_def = cur_def_;
-    s.ty_binds = ty_binds_;
-    return s;
-}
-
-void Lower::restore_state(const FnState& s) {
-    bd_ = s.bd;
-    fnref_ = s.fnref;
-    ret_ty_ = s.ret_ty;
-    cur_block_ = s.cur_block;
-    entry_ = s.entry;
-    scopes_ = s.scopes;
-    breaks_ = s.breaks;
-    cur_name_ = s.cur_name;
-    cur_def_ = s.cur_def;
-    ty_binds_ = s.ty_binds;
-}
-
 void Lower::mark_no_builtin(LLVMValueRef fnref) {
     /* 原版编译器给每个函数挂 `nobuiltin`（否则 LLVM 会把 `memory_copy` 之类的名字当内建去认）。 */
     const unsigned kind = LLVMGetEnumAttributeKindForName("nobuiltin", 9);
@@ -398,59 +352,72 @@ void Lower::mark_no_builtin(LLVMValueRef fnref) {
     }
 }
 
-void Lower::begin_function(LLVMValueRef fnref, const TyRef& ret_ty) {
+FnCtx& Lower::begin_function(LLVMValueRef fnref, const TyRef& ret_ty) {
     mark_no_builtin(fnref);
-    bd_ = LLVMCreateBuilderInContext(ctx());
-    fnref_ = fnref;
-    ret_ty_ = ret_ty;
-    entry_ = LLVMAppendBasicBlockInContext(ctx(), fnref, "entry");
-    LLVMPositionBuilderAtEnd(bd_, entry_);
-    cur_block_ = entry_;
-    scopes_.clear();
-    scopes_.emplace_back();
-    breaks_.clear();
+    const FnCtx& outer = cur_fn();   /* 压栈只动 `unique_ptr`，所以这个引用在 push 后仍有效 */
+    auto child = std::make_unique<FnCtx>();
+    child->parent = &outer;
+    /* 身份字段**沿用外层**（与改前逐字段存取时的可见值相同）：前缀函数与内联辅助函数
+     * （`get_time`/`sleep`/`memory_*`、`__simplexc_*`）的 `def` 与类型参数绑定来自调用者；
+     * `ensure_def_fn` 换上实例自己的 `ty_binds`、`emit_main` 清空 `def`。名字一律由调用点写 ——
+     * 三种调用点的取名规则不同（含 `$c<n>` 后缀与 `owner$name#L行`）。 */
+    child->name = outer.name;
+    child->def = outer.def;
+    child->ty_binds = outer.ty_binds;
+    child->bd = LLVMCreateBuilderInContext(ctx());
+    child->fnref = fnref;
+    child->ret_ty = ret_ty;
+    child->entry = LLVMAppendBasicBlockInContext(ctx(), fnref, "entry");
+    LLVMPositionBuilderAtEnd(child->bd, child->entry);
+    child->block = child->entry;
+    child->scopes.emplace_back();
+    fn_ctxs_.push_back(std::move(child));
+    return cur_fn();
 }
 
 void Lower::finish_function() {
-    if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) {
-        if (ret_ty_->kind == TyKind::Void) {
-            LLVMBuildRetVoid(bd_);
+    if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) {
+        if (cur_fn().ret_ty->kind == TyKind::Void) {
+            LLVMBuildRetVoid(cur_fn().bd);
         } else {
-            warnings_.push_back(cur_name_ + "：控制流落到函数末尾，补 ret 零值");
-            LLVMBuildRet(bd_, LLVMConstNull(val_ll(*ret_ty_)));
+            warnings_.push_back(cur_fn().name + "：控制流落到函数末尾，补 ret 零值");
+            LLVMBuildRet(cur_fn().bd, LLVMConstNull(val_ll(*cur_fn().ret_ty)));
         }
     }
-    LLVMDisposeBuilder(bd_);
-    bd_ = nullptr;
+    LLVMDisposeBuilder(cur_fn().bd);
+    cur_fn().bd = nullptr;
+    /* 上下文与函数同生共死：基座（`parent == nullptr`）不是函数的，弹它就是漏了压栈。 */
+    assert(cur_fn().parent != nullptr);
+    fn_ctxs_.pop_back();
 }
 
 LLVMBasicBlockRef Lower::new_block(const char* name) {
-    LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, name);
-    LLVMPositionBuilderAtEnd(bd_, bb);
-    cur_block_ = bb;
+    LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, name);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, bb);
+    cur_fn().block = bb;
     return bb;
 }
 
 LLVMBasicBlockRef Lower::br_new_block(const char* name) {
-    LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, name);
-    LLVMBuildBr(bd_, bb);
-    LLVMPositionBuilderAtEnd(bd_, bb);
-    cur_block_ = bb;
+    LLVMBasicBlockRef bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, name);
+    LLVMBuildBr(cur_fn().bd, bb);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, bb);
+    cur_fn().block = bb;
     return bb;
 }
 
 LLVMValueRef Lower::alloca_in_entry(LLVMTypeRef ty, const std::string& name) {
     /* 插在 **entry 块最前面**：循环里声明也不会每次迭代吃栈，而且它是**静态** alloca
        （LLVM 只把「在 entry 块 + 尺寸是常量」的 alloca 当静态 —— 否则会拉出 `___chkstk_ms` 且每轮涨栈）。 */
-    LLVMValueRef first = LLVMGetFirstInstruction(entry_);
+    LLVMValueRef first = LLVMGetFirstInstruction(cur_fn().entry);
     if (first == nullptr) {
-        LLVMPositionBuilderAtEnd(bd_, entry_);
+        LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().entry);
     } else {
-        LLVMPositionBuilderBefore(bd_, first);
+        LLVMPositionBuilderBefore(cur_fn().bd, first);
     }
-    LLVMValueRef a = LLVMBuildAlloca(bd_, ty, name.c_str());
+    LLVMValueRef a = LLVMBuildAlloca(cur_fn().bd, ty, name.c_str());
     LLVMSetAlignment(a, 1);
-    LLVMPositionBuilderAtEnd(bd_, cur_block_);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().block);
     return a;
 }
 
@@ -460,44 +427,14 @@ LLVMValueRef Lower::alloca_slot(const TyRef& ty, const std::string& name) {
 
 /* ================================================================ Lower：作用域与绑定 */
 
-Lower::Binding Lower::Binding::local(LLVMValueRef p, TyRef t) {
-    Binding b;
-    b.kind = Kind::Local;
-    b.ptr = p;
-    b.ty = std::move(t);
-    return b;
-}
-
-Lower::Binding Lower::Binding::capture(LLVMValueRef p, TyRef t) {
-    Binding b;
-    b.kind = Kind::Capture;
-    b.ptr = p;
-    b.ty = std::move(t);
-    return b;
-}
-
-Lower::Binding Lower::Binding::constant(V v) {
-    Binding b;
-    b.kind = Kind::Const;
-    b.value = std::move(v);
-    return b;
-}
-
-Lower::Binding Lower::Binding::nested(const DefStmt* d) {
-    Binding b;
-    b.kind = Kind::Def;
-    b.def = d;
-    return b;
-}
-
-void Lower::bind(const std::string& name, Binding b) { scopes_.back()[name] = std::move(b); }
+void Lower::bind(const std::string& name, Binding b) { cur_fn().scopes.back()[name] = std::move(b); }
 
 void Lower::bind_root_scope(const std::string& name, Binding b) {
-    scopes_.front()[name] = std::move(b);
+    cur_fn().scopes.front()[name] = std::move(b);
 }
 
-const Lower::Binding* Lower::lookup(const std::string& name) const {
-    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
+const Binding* Lower::lookup(const std::string& name) const {
+    for (auto it = cur_fn().scopes.rbegin(); it != cur_fn().scopes.rend(); ++it) {
         auto f = it->find(name);
         if (f != it->end()) return &f->second;
     }
@@ -538,7 +475,7 @@ uint64_t Lower::need_const(const V& v, int line) {
 
 LLVMValueRef Lower::mask_ll(LLVMValueRef ll, int bits) {
     if (bits >= 64) return ll;
-    return LLVMBuildAnd(bd_, ll, const_int(mask_of(bits)), "m");
+    return LLVMBuildAnd(cur_fn().bd, ll, const_int(mask_of(bits)), "m");
 }
 
 V Lower::convert(const V& v, const TyRef& target, int line) {
@@ -555,7 +492,7 @@ V Lower::convert(const V& v, const TyRef& target, int line) {
     auto c = pat_const(v);
     if (target->kind == TyKind::Int) {
         if (v.ty->kind == TyKind::Str || v.ty->kind == TyKind::Array) {   /* 真指针 → 整数 */
-            return V::instr(LLVMBuildPtrToInt(bd_, llv(v), i64_, "pi"), target);
+            return V::instr(LLVMBuildPtrToInt(cur_fn().bd, llv(v), i64_, "pi"), target);
         }
         if (c) return V::konst(target, *c & mask_of(target->bits));
         return V::instr(mask_ll(llv(v), target->bits), target);
@@ -576,31 +513,31 @@ LLVMValueRef Lower::to_ptr(const V& v) {
     /* `Str`/`Arr`/槽本来就是 ptr，直接用 —— 这样全局/局部地址只会出 `lea rip+…`（REL32），
      * 不出绝对重定位。`Ptr`（i64 游戏地址）走 inttoptr。 */
     if (v.ty->kind == TyKind::Str || v.ty->kind == TyKind::Array) return llv(v);
-    return LLVMBuildIntToPtr(bd_, llv(v), ptr_, "p");
+    return LLVMBuildIntToPtr(cur_fn().bd, llv(v), ptr_, "p");
 }
 
 V Lower::load_addr(LLVMValueRef p, const TyRef& ty) {
     LLVMTypeRef st = ll_type(*ty);
-    LLVMValueRef inst = LLVMBuildLoad2(bd_, st, p, "ld");
+    LLVMValueRef inst = LLVMBuildLoad2(cur_fn().bd, st, p, "ld");
     LLVMSetAlignment(inst, 1);   /* U-L1：地址是字节地址、无对齐要求，且不许插对齐检查 */
     if (!is_int(*ty)) return V::instr(inst, ty);
     LLVMValueRef v = inst;
-    if (st != i64_) v = LLVMBuildZExt(bd_, v, i64_, "z");
+    if (st != i64_) v = LLVMBuildZExt(cur_fn().bd, v, i64_, "z");
     if (ty->bits < 64) v = mask_ll(v, ty->bits);
     return V::instr(v, ty);
 }
 
 void Lower::store_addr(LLVMValueRef p, const V& v, const TyRef& ty, int line) {
     if (!is_int(*ty)) {
-        LLVMValueRef inst = LLVMBuildStore(bd_, llv(v), p);
+        LLVMValueRef inst = LLVMBuildStore(cur_fn().bd, llv(v), p);
         LLVMSetAlignment(inst, 1);
         return;
     }
     V conv = convert(v, ty, line);
     LLVMTypeRef st = storage_ll(*ty);
     LLVMValueRef ll = llv(conv);
-    if (st != i64_) ll = LLVMBuildTrunc(bd_, ll, st, "t");   /* 窄写只写该宽度 */
-    LLVMValueRef inst = LLVMBuildStore(bd_, ll, p);
+    if (st != i64_) ll = LLVMBuildTrunc(cur_fn().bd, ll, st, "t");   /* 窄写只写该宽度 */
+    LLVMValueRef inst = LLVMBuildStore(cur_fn().bd, ll, p);
     LLVMSetAlignment(inst, 1);
 }
 
@@ -643,9 +580,9 @@ std::pair<LLVMValueRef, TyRef> Lower::lvalue(const Node& node) {
             }
             V idx = convert(e(*n.index), ty_i64(), n.src_line);
             const int step = storage_bytes(*base.ty->elem);   /* 地址是字节地址（U-L1） */
-            LLVMValueRef off = LLVMBuildMul(bd_, llv(idx), const_int(uint64_t(step)), "io");
+            LLVMValueRef off = LLVMBuildMul(cur_fn().bd, llv(idx), const_int(uint64_t(step)), "io");
             std::vector<LLVMValueRef> gi{off};
-            LLVMValueRef p = LLVMBuildGEP2(bd_, storage_ll(*make_int(8, false)), to_ptr(base),
+            LLVMValueRef p = LLVMBuildGEP2(cur_fn().bd, storage_ll(*make_int(8, false)), to_ptr(base),
                                            gi.data(), 1, "ea");
             return {p, base.ty->elem};
         }
@@ -667,7 +604,7 @@ std::pair<LLVMValueRef, TyRef> Lower::lvalue(const Node& node) {
             }
             if (f->second.off == 0) return {base.first, f->second.ty};
             std::vector<LLVMValueRef> gi{const_int(uint64_t(f->second.off))};
-            LLVMValueRef p = LLVMBuildGEP2(bd_, storage_ll(*make_int(8, false)), base.first,
+            LLVMValueRef p = LLVMBuildGEP2(cur_fn().bd, storage_ll(*make_int(8, false)), base.first,
                                            gi.data(), 1, "fa");
             return {p, f->second.ty};
         }
@@ -713,9 +650,9 @@ TyRef Lower::ty_of_ref(const TypeRef& ref, int line) {
 /* ================================================================ Lower：语句 */
 
 void Lower::lower_block(const Block& block) {
-    scopes_.emplace_back();
+    cur_fn().scopes.emplace_back();
     for (const auto& st : block.stmts) lower_stmt(*st);
-    scopes_.pop_back();
+    cur_fn().scopes.pop_back();
 }
 
 void Lower::lower_stmt(const Stmt& st) {
@@ -745,7 +682,7 @@ void Lower::lower_stmt(const Stmt& st) {
         if (!collect_) throw;
     }
     /* 块已被终止符收口（return / break）→ 后续语句放进一个不可达块继续发。 */
-    if (LLVMGetBasicBlockTerminator(cur_block_) != nullptr) new_block("dead");
+    if (LLVMGetBasicBlockTerminator(cur_fn().block) != nullptr) new_block("dead");
 }
 
 V Lower::root_const_value(const VarDeclStmt& decl) {
@@ -828,30 +765,30 @@ void Lower::lower_if_runtime(const std::vector<const IfCase*>& cases, const Bloc
     /* 所有分支跑完汇到同一个 cont 块（惰性创建）。 */
     LLVMBasicBlockRef cont = nullptr;
     auto join = [&]() {
-        if (cont == nullptr) cont = LLVMAppendBasicBlockInContext(ctx(), fnref_, "ifend");
-        LLVMBuildBr(bd_, cont);
+        if (cont == nullptr) cont = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "ifend");
+        LLVMBuildBr(cur_fn().bd, cont);
     };
     for (const IfCase* case_ : cases) {
         LLVMValueRef cond = as_cond(e(*case_->cond));
-        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "then");
-        LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "next");
-        LLVMBuildCondBr(bd_, cond, then_bb, next_bb);
-        LLVMPositionBuilderAtEnd(bd_, then_bb);
-        cur_block_ = then_bb;
+        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "then");
+        LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "next");
+        LLVMBuildCondBr(cur_fn().bd, cond, then_bb, next_bb);
+        LLVMPositionBuilderAtEnd(cur_fn().bd, then_bb);
+        cur_fn().block = then_bb;
         lower_block(*case_->block);
-        if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) join();
-        LLVMPositionBuilderAtEnd(bd_, next_bb);
-        cur_block_ = next_bb;
+        if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) join();
+        LLVMPositionBuilderAtEnd(cur_fn().bd, next_bb);
+        cur_fn().block = next_bb;
     }
     if (else_block != nullptr) {
         lower_block(*else_block);
-        if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) join();
+        if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) join();
     }
     if (cont != nullptr) {
         /* 没有 else 时，`next_bb` 就是「条件全不成立」那条路 —— 它也要汇进 cont。 */
-        if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) LLVMBuildBr(bd_, cont);
-        LLVMPositionBuilderAtEnd(bd_, cont);
-        cur_block_ = cont;
+        if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) LLVMBuildBr(cur_fn().bd, cont);
+        LLVMPositionBuilderAtEnd(cur_fn().bd, cont);
+        cur_fn().block = cont;
     }
 }
 
@@ -898,43 +835,43 @@ void Lower::s_PpIfStmt(const PpIfStmt& st) {
 
 void Lower::s_WhileStmt(const WhileStmt& st) {
     LLVMBasicBlockRef head = br_new_block("loop");
-    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "body");
-    LLVMBasicBlockRef exit_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "exit");
+    LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "body");
+    LLVMBasicBlockRef exit_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "exit");
     LLVMValueRef cond = as_cond(e(*st.cond));
-    LLVMBuildCondBr(bd_, cond, body_bb, exit_bb);
-    LLVMPositionBuilderAtEnd(bd_, body_bb);
-    cur_block_ = body_bb;
-    breaks_.push_back({st.label, exit_bb});
+    LLVMBuildCondBr(cur_fn().bd, cond, body_bb, exit_bb);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body_bb);
+    cur_fn().block = body_bb;
+    cur_fn().breaks.push_back({st.label, exit_bb});
     lower_block(*st.block);
-    breaks_.pop_back();
-    if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) LLVMBuildBr(bd_, head);
-    LLVMPositionBuilderAtEnd(bd_, exit_bb);
-    cur_block_ = exit_bb;
+    cur_fn().breaks.pop_back();
+    if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, exit_bb);
+    cur_fn().block = exit_bb;
 }
 
 void Lower::s_BreakStmt(const BreakStmt& st) {
     LLVMBasicBlockRef target = nullptr;
-    for (auto it = breaks_.rbegin(); it != breaks_.rend(); ++it) {
+    for (auto it = cur_fn().breaks.rbegin(); it != cur_fn().breaks.rend(); ++it) {
         if (st.label.empty() || st.label == it->first) {
             target = it->second;
             break;
         }
     }
     if (target == nullptr) throw Unsupported("break " + st.label, st.src_line);
-    LLVMBuildBr(bd_, target);
+    LLVMBuildBr(cur_fn().bd, target);
 }
 
 void Lower::s_ReturnStmt(const ReturnStmt& st) {
     if (st.value == nullptr) {
-        if (ret_ty_->kind != TyKind::Void) {
+        if (cur_fn().ret_ty->kind != TyKind::Void) {
             throw Unsupported("非 None 函数里裸 return", st.src_line);
         }
-        LLVMBuildRetVoid(bd_);
+        LLVMBuildRetVoid(cur_fn().bd);
         return;
     }
-    if (ret_ty_->kind == TyKind::Void) throw Unsupported("None 函数里 return 值", st.src_line);
-    V v = convert(e(*st.value), ret_ty_, st.src_line);
-    LLVMBuildRet(bd_, llv(v));
+    if (cur_fn().ret_ty->kind == TyKind::Void) throw Unsupported("None 函数里 return 值", st.src_line);
+    V v = convert(e(*st.value), cur_fn().ret_ty, st.src_line);
+    LLVMBuildRet(cur_fn().bd, llv(v));
 }
 
 void Lower::s_SwitchStmt(const SwitchStmt& st) {
@@ -951,8 +888,8 @@ void Lower::s_SwitchStmt(const SwitchStmt& st) {
     }
     LLVMBasicBlockRef end = nullptr;
     auto join = [&]() {
-        if (end == nullptr) end = LLVMAppendBasicBlockInContext(ctx(), fnref_, "swend");
-        LLVMBuildBr(bd_, end);
+        if (end == nullptr) end = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "swend");
+        LLVMBuildBr(cur_fn().bd, end);
     };
     for (const SwitchCase* case_ : plain) {
         LLVMValueRef cnd = nullptr;
@@ -966,27 +903,27 @@ void Lower::s_SwitchStmt(const SwitchStmt& st) {
             auto cvv = const_value(*case_->value);
             if (!cvv) throw Unsupported("switch case 的值不是常量", case_->src_line);
             LLVMValueRef cval = const_int(pat_const(*cvv).value_or(0));
-            cnd = LLVMBuildICmp(bd_, LLVMIntEQ, subj_ll, cval, "sc");
+            cnd = LLVMBuildICmp(cur_fn().bd, LLVMIntEQ, subj_ll, cval, "sc");
         }
-        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "case");
-        LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "casenext");
-        LLVMBuildCondBr(bd_, cnd, then_bb, next_bb);
-        LLVMPositionBuilderAtEnd(bd_, then_bb);
-        cur_block_ = then_bb;
+        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "case");
+        LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "casenext");
+        LLVMBuildCondBr(cur_fn().bd, cnd, then_bb, next_bb);
+        LLVMPositionBuilderAtEnd(cur_fn().bd, then_bb);
+        cur_fn().block = then_bb;
         lower_block(*case_->block);
-        if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) join();
-        LLVMPositionBuilderAtEnd(bd_, next_bb);
-        cur_block_ = next_bb;
+        if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) join();
+        LLVMPositionBuilderAtEnd(cur_fn().bd, next_bb);
+        cur_fn().block = next_bb;
     }
     if (!defaults.empty()) {
         lower_block(*defaults[0]->block);
-        if (LLVMGetBasicBlockTerminator(cur_block_) == nullptr) join();
+        if (LLVMGetBasicBlockTerminator(cur_fn().block) == nullptr) join();
     } else if (end != nullptr) {
-        LLVMBuildBr(bd_, end);
+        LLVMBuildBr(cur_fn().bd, end);
     }
     if (end != nullptr) {
-        LLVMPositionBuilderAtEnd(bd_, end);
-        cur_block_ = end;
+        LLVMPositionBuilderAtEnd(cur_fn().bd, end);
+        cur_fn().block = end;
     }
 }
 
@@ -1191,8 +1128,8 @@ V Lower::e_UnaryExpr(const UnaryExpr& node) {
             out.c = r;
             return out;
         }
-        LLVMValueRef cnd = LLVMBuildICmp(bd_, LLVMIntEQ, llv(v), const_int(0), "n");
-        return V::instr(LLVMBuildZExt(bd_, cnd, i64_, "nb"), ty_bool());
+        LLVMValueRef cnd = LLVMBuildICmp(cur_fn().bd, LLVMIntEQ, llv(v), const_int(0), "n");
+        return V::instr(LLVMBuildZExt(cur_fn().bd, cnd, i64_, "nb"), ty_bool());
     }
     V v = e(*node.expr);
     if (!is_int(*v.ty)) {
@@ -1202,9 +1139,9 @@ V Lower::e_UnaryExpr(const UnaryExpr& node) {
     if (c) return V::konst(v.ty, fold_unary(node.op, *c, *v.ty));
     LLVMValueRef ll = nullptr;
     if (node.op == "-") {
-        ll = LLVMBuildSub(bd_, const_int(0), llv(v), "neg");
+        ll = LLVMBuildSub(cur_fn().bd, const_int(0), llv(v), "neg");
     } else if (node.op == "~") {
-        ll = LLVMBuildXor(bd_, llv(v), const_int(mask_of(v.ty->bits)), "bnot");
+        ll = LLVMBuildXor(cur_fn().bd, llv(v), const_int(mask_of(v.ty->bits)), "bnot");
     } else {
         throw Unsupported("一元运算符 " + node.op, node.src_line);
     }
@@ -1223,35 +1160,35 @@ V Lower::e_CondExpr(const CondExpr& node) {
     /* 形状是 **condbr + phi**，不是 `select`：两臂里都可能有 `load(…)`，`select` 会两支都求值
      * —— 与短路语义不一致。每个臂的 `convert` 必须在**它自己那个块**里做完。 */
     LLVMValueRef cond = as_cond(e(*node.cond));
-    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "t_then");
-    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "t_else");
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "t_end");
-    LLVMBuildCondBr(bd_, cond, then_bb, else_bb);
+    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "t_then");
+    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "t_else");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "t_end");
+    LLVMBuildCondBr(cur_fn().bd, cond, then_bb, else_bb);
 
-    LLVMPositionBuilderAtEnd(bd_, then_bb);
-    cur_block_ = then_bb;
+    LLVMPositionBuilderAtEnd(cur_fn().bd, then_bb);
+    cur_fn().block = then_bb;
     V tv = e(*node.then_);
-    LLVMBasicBlockRef t_bb = cur_block_;
-    LLVMPositionBuilderAtEnd(bd_, else_bb);
-    cur_block_ = else_bb;
+    LLVMBasicBlockRef t_bb = cur_fn().block;
+    LLVMPositionBuilderAtEnd(cur_fn().bd, else_bb);
+    cur_fn().block = else_bb;
     V ev = e(*node.else_);
-    LLVMBasicBlockRef e_bb = cur_block_;
+    LLVMBasicBlockRef e_bb = cur_fn().block;
 
     if (tv.ty->kind == TyKind::Void || ev.ty->kind == TyKind::Void) {
         throw Unsupported("三目的一支没有值", node.src_line);
     }
     TyRef ty = unify(tv.ty, ev.ty, node.src_line);
-    LLVMPositionBuilderAtEnd(bd_, t_bb);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, t_bb);
     tv = convert(tv, ty, node.src_line);
-    LLVMBuildBr(bd_, end_bb);
-    LLVMPositionBuilderAtEnd(bd_, e_bb);
+    LLVMBuildBr(cur_fn().bd, end_bb);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, e_bb);
     ev = convert(ev, ty, node.src_line);
-    LLVMBuildBr(bd_, end_bb);
+    LLVMBuildBr(cur_fn().bd, end_bb);
 
-    LLVMPositionBuilderAtEnd(bd_, end_bb);
-    cur_block_ = end_bb;
+    LLVMPositionBuilderAtEnd(cur_fn().bd, end_bb);
+    cur_fn().block = end_bb;
     /* phi 的结果类型是**值的类型**（窄整数一律 i64 位模式），不是内存宽度。 */
-    LLVMValueRef phi = LLVMBuildPhi(bd_, val_ll(*ty), "cnd");
+    LLVMValueRef phi = LLVMBuildPhi(cur_fn().bd, val_ll(*ty), "cnd");
     std::vector<LLVMValueRef> vals{llv(tv), llv(ev)};
     std::vector<LLVMBasicBlockRef> blocks{t_bb, e_bb};
     LLVMAddIncoming(phi, vals.data(), blocks.data(), 2);
@@ -1340,14 +1277,14 @@ TyRef Lower::arith_ty(const V& a, const V& b, const std::string& op, int line) {
 
 LLVMValueRef Lower::as_cond(const V& v) {
     if (v.ty->kind == TyKind::Void) throw Unsupported("None 值当条件", 0);
-    return LLVMBuildICmp(bd_, LLVMIntNE, llv(v), const_int(0), "c");
+    return LLVMBuildICmp(cur_fn().bd, LLVMIntNE, llv(v), const_int(0), "c");
 }
 
 LLVMValueRef Lower::sext64(LLVMValueRef ll, int bits) {
     if (bits >= 64) return ll;
     const int sh = 64 - bits;
     return LLVMBuildAShr(
-        bd_, LLVMBuildShl(bd_, ll, const_int(uint64_t(sh)), "sh"), const_int(uint64_t(sh)),
+        cur_fn().bd, LLVMBuildShl(cur_fn().bd, ll, const_int(uint64_t(sh)), "sh"), const_int(uint64_t(sh)),
         "sa");
 }
 
@@ -1377,45 +1314,45 @@ V Lower::compare(const std::string& op, const V& a, const V& b, int line) {
         pred = base == "LT" ? LLVMIntULT : base == "LE" ? LLVMIntULE
                : base == "GT" ? LLVMIntUGT : LLVMIntUGE;
     }
-    LLVMValueRef cnd = LLVMBuildICmp(bd_, pred, x, y, "cmp");
-    return V::instr(LLVMBuildZExt(bd_, cnd, i64_, "cmpz"), ty_bool());
+    LLVMValueRef cnd = LLVMBuildICmp(cur_fn().bd, pred, x, y, "cmp");
+    return V::instr(LLVMBuildZExt(cur_fn().bd, cnd, i64_, "cmpz"), ty_bool());
 }
 
 V Lower::str_compare(const std::string& op, const V& a, const V& b, int line) {
     if (op != "==" && op != "!=") throw Unsupported("Str 比大小（" + op + "）", line);
     LLVMValueRef la = len_of(a, line);
     LLVMValueRef lb = len_of(b, line);
-    LLVMValueRef same = LLVMBuildICmp(bd_, LLVMIntEQ, la, lb, "sleq");
+    LLVMValueRef same = LLVMBuildICmp(cur_fn().bd, LLVMIntEQ, la, lb, "sleq");
     /* 长度不等时把比较长度取 0 —— 否则逐字节会读越过短的那一条的 payload。 */
-    LLVMValueRef n = LLVMBuildSelect(bd_, same, la, const_int(0), "sln");
+    LLVMValueRef n = LLVMBuildSelect(cur_fn().bd, same, la, const_int(0), "sln");
     LLVMValueRef eqv = emit_call(ensure_streq_fn(), {to_ptr(a), to_ptr(b), n});
-    LLVMValueRef eq = LLVMBuildICmp(bd_, LLVMIntNE, eqv, const_int(0), "seq");
-    LLVMValueRef res = LLVMBuildAnd(bd_, eq, same, "seqb");
-    if (op == "!=") res = LLVMBuildNot(bd_, res, "snot");
-    return V::instr(LLVMBuildZExt(bd_, res, i64_, "seqz"), ty_bool());
+    LLVMValueRef eq = LLVMBuildICmp(cur_fn().bd, LLVMIntNE, eqv, const_int(0), "seq");
+    LLVMValueRef res = LLVMBuildAnd(cur_fn().bd, eq, same, "seqb");
+    if (op == "!=") res = LLVMBuildNot(cur_fn().bd, res, "snot");
+    return V::instr(LLVMBuildZExt(cur_fn().bd, res, i64_, "seqz"), ty_bool());
 }
 
 V Lower::logical(const BinaryExpr& node) {
     /* `&&` / `||` 短路（`get_command` 读的是游戏内存，不能随意重排）。 */
     LLVMValueRef lhs = as_cond(e(*node.left));
-    LLVMBasicBlockRef lhs_bb = cur_block_;
-    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "rhs");
-    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx(), fnref_, "lend");
-    if (node.op == "&&") LLVMBuildCondBr(bd_, lhs, rhs_bb, end_bb);
-    else LLVMBuildCondBr(bd_, lhs, end_bb, rhs_bb);
-    LLVMPositionBuilderAtEnd(bd_, rhs_bb);
-    cur_block_ = rhs_bb;
+    LLVMBasicBlockRef lhs_bb = cur_fn().block;
+    LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "rhs");
+    LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "lend");
+    if (node.op == "&&") LLVMBuildCondBr(cur_fn().bd, lhs, rhs_bb, end_bb);
+    else LLVMBuildCondBr(cur_fn().bd, lhs, end_bb, rhs_bb);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, rhs_bb);
+    cur_fn().block = rhs_bb;
     LLVMValueRef rhs = as_cond(e(*node.right));
-    LLVMBasicBlockRef rhs_end = cur_block_;
-    LLVMBuildBr(bd_, end_bb);
-    LLVMPositionBuilderAtEnd(bd_, end_bb);
-    cur_block_ = end_bb;
+    LLVMBasicBlockRef rhs_end = cur_fn().block;
+    LLVMBuildBr(cur_fn().bd, end_bb);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, end_bb);
+    cur_fn().block = end_bb;
     LLVMTypeRef i1 = LLVMIntTypeInContext(ctx(), 1);
-    LLVMValueRef phi = LLVMBuildPhi(bd_, i1, "lg");
+    LLVMValueRef phi = LLVMBuildPhi(cur_fn().bd, i1, "lg");
     std::vector<LLVMValueRef> vals{LLVMConstInt(i1, node.op == "&&" ? 0 : 1, 0), rhs};
     std::vector<LLVMBasicBlockRef> blocks{lhs_bb, rhs_end};
     LLVMAddIncoming(phi, vals.data(), blocks.data(), 2);
-    return V::instr(LLVMBuildZExt(bd_, phi, i64_, "lgz"), ty_bool());
+    return V::instr(LLVMBuildZExt(cur_fn().bd, phi, i64_, "lgz"), ty_bool());
 }
 
 V Lower::binop(const std::string& op, const V& a, const V& b, int line) {
@@ -1436,8 +1373,8 @@ V Lower::binop(const std::string& op, const V& a, const V& b, int line) {
             const uint64_t r = op == "+" ? *ca + *cb : *ca - *cb;
             return V::konst(ty_ptr(), r & kMask64);
         }
-        LLVMValueRef ll = op == "+" ? LLVMBuildAdd(bd_, llv(av), llv(bv), "pa")
-                                     : LLVMBuildSub(bd_, llv(av), llv(bv), "pa");
+        LLVMValueRef ll = op == "+" ? LLVMBuildAdd(cur_fn().bd, llv(av), llv(bv), "pa")
+                                     : LLVMBuildSub(cur_fn().bd, llv(av), llv(bv), "pa");
         return V::instr(ll, ty);
     }
     if (ca && cb) return V::konst(ty, fold_arith(op, *ca, *cb, *ty));
@@ -1449,22 +1386,22 @@ V Lower::binop(const std::string& op, const V& a, const V& b, int line) {
         return V::instr(div(op, x, y, *ty), ty);
     }
     if (op == "<<") {
-        LLVMValueRef amt = LLVMBuildAnd(bd_, y, const_int(uint64_t(bits - 1)), "amt");
-        return V::instr(mask_ll(LLVMBuildShl(bd_, x, amt, "shl"), bits), ty);
+        LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, y, const_int(uint64_t(bits - 1)), "amt");
+        return V::instr(mask_ll(LLVMBuildShl(cur_fn().bd, x, amt, "shl"), bits), ty);
     }
     if (op == ">>") {
         /* U-L8：**永远 lshr**（不是 ashr），左操作数走 `pattern_of`（常量按符号性扩），再截回 W。 */
-        LLVMValueRef amt = LLVMBuildAnd(bd_, y, const_int(uint64_t(bits - 1)), "amt");
-        LLVMValueRef ll = LLVMBuildLShr(bd_, pattern_of(av), amt, "shr");
+        LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, y, const_int(uint64_t(bits - 1)), "amt");
+        LLVMValueRef ll = LLVMBuildLShr(cur_fn().bd, pattern_of(av), amt, "shr");
         return V::instr(mask_ll(ll, bits), ty);
     }
     LLVMValueRef r = nullptr;
-    if (op == "+") r = LLVMBuildAdd(bd_, x, y, "op");
-    else if (op == "-") r = LLVMBuildSub(bd_, x, y, "op");
-    else if (op == "*") r = LLVMBuildMul(bd_, x, y, "op");
-    else if (op == "&") r = LLVMBuildAnd(bd_, x, y, "op");
-    else if (op == "|") r = LLVMBuildOr(bd_, x, y, "op");
-    else r = LLVMBuildXor(bd_, x, y, "op");
+    if (op == "+") r = LLVMBuildAdd(cur_fn().bd, x, y, "op");
+    else if (op == "-") r = LLVMBuildSub(cur_fn().bd, x, y, "op");
+    else if (op == "*") r = LLVMBuildMul(cur_fn().bd, x, y, "op");
+    else if (op == "&") r = LLVMBuildAnd(cur_fn().bd, x, y, "op");
+    else if (op == "|") r = LLVMBuildOr(cur_fn().bd, x, y, "op");
+    else r = LLVMBuildXor(cur_fn().bd, x, y, "op");
     return V::instr(mask_ll(r, bits), ty);
 }
 
@@ -1475,29 +1412,29 @@ LLVMValueRef Lower::div(const std::string& op, LLVMValueRef x, LLVMValueRef y, c
      * 就是从这个形状出来的，别顺手改成 pattern_of。 */
     const int bits = ty.bits;
     LLVMValueRef zero = const_int(0);
-    LLVMValueRef bz = LLVMBuildICmp(bd_, LLVMIntEQ, y, zero, "bz");
-    LLVMValueRef safe = LLVMBuildSelect(bd_, bz, const_int(1), y, "sb");
+    LLVMValueRef bz = LLVMBuildICmp(cur_fn().bd, LLVMIntEQ, y, zero, "bz");
+    LLVMValueRef safe = LLVMBuildSelect(cur_fn().bd, bz, const_int(1), y, "sb");
     LLVMValueRef bm1 = nullptr;
     if (ty.is_signed) {
-        bm1 = LLVMBuildICmp(bd_, LLVMIntEQ, y, const_int(mask_of(bits)), "bm1");
-        safe = LLVMBuildSelect(bd_, bm1, const_int(1), safe, "sb2");
+        bm1 = LLVMBuildICmp(cur_fn().bd, LLVMIntEQ, y, const_int(mask_of(bits)), "bm1");
+        safe = LLVMBuildSelect(cur_fn().bd, bm1, const_int(1), safe, "sb2");
     }
     LLVMValueRef raw = nullptr;
     if (op == "/") {
-        raw = ty.is_signed ? LLVMBuildSDiv(bd_, x, safe, "q") : LLVMBuildUDiv(bd_, x, safe, "q");
+        raw = ty.is_signed ? LLVMBuildSDiv(cur_fn().bd, x, safe, "q") : LLVMBuildUDiv(cur_fn().bd, x, safe, "q");
     } else {
-        raw = ty.is_signed ? LLVMBuildSRem(bd_, x, safe, "r") : LLVMBuildURem(bd_, x, safe, "r");
+        raw = ty.is_signed ? LLVMBuildSRem(cur_fn().bd, x, safe, "r") : LLVMBuildURem(cur_fn().bd, x, safe, "r");
     }
     LLVMValueRef res = nullptr;
     if (op == "/") {
-        res = LLVMBuildSelect(bd_, bz, zero, raw, "qz");
+        res = LLVMBuildSelect(cur_fn().bd, bz, zero, raw, "qz");
         if (bm1 != nullptr) {
-            LLVMValueRef neg = mask_ll(LLVMBuildSub(bd_, zero, x, "nq"), bits);
-            res = LLVMBuildSelect(bd_, bm1, neg, res, "qz2");
+            LLVMValueRef neg = mask_ll(LLVMBuildSub(cur_fn().bd, zero, x, "nq"), bits);
+            res = LLVMBuildSelect(cur_fn().bd, bm1, neg, res, "qz2");
         }
     } else {
-        res = LLVMBuildSelect(bd_, bz, x, raw, "rz");
-        if (bm1 != nullptr) res = LLVMBuildSelect(bd_, bm1, zero, res, "rz2");
+        res = LLVMBuildSelect(cur_fn().bd, bz, x, raw, "rz");
+        if (bm1 != nullptr) res = LLVMBuildSelect(cur_fn().bd, bm1, zero, res, "rz2");
     }
     return res;
 }
@@ -1786,8 +1723,8 @@ TyRef Lower::operand_type(const Expr& node, int line) {
      * 名字 → 具体类型只能从本实例的类型环境拿。 */
     const auto* id = as<IdentExpr>(&node);
     if (id != nullptr) {
-        auto it = ty_binds_.find(id->name);
-        if (it != ty_binds_.end()) return it->second;
+        auto it = cur_fn().ty_binds.find(id->name);
+        if (it != cur_fn().ty_binds.end()) return it->second;
     }
     TyRef ty = static_type(node);
     if (!ty) throw Unsupported("拿不到类型", line);
@@ -1854,7 +1791,7 @@ V Lower::call_named(const std::string& name, const CallExpr& node) {
 
 LLVMValueRef Lower::emit_call(LLVMValueRef fnref, const std::vector<LLVMValueRef>& args) {
     std::vector<LLVMValueRef> a = args;
-    return LLVMBuildCall2(bd_, LLVMGlobalGetValueType(fnref), fnref, a.data(),
+    return LLVMBuildCall2(cur_fn().bd, LLVMGlobalGetValueType(fnref), fnref, a.data(),
                           static_cast<unsigned>(a.size()), "");
 }
 
@@ -1946,14 +1883,14 @@ V Lower::builtin_asr(const CallExpr& node) {
     }
     LLVMValueRef amt = llv(convert(n, x.ty, node.src_line));
     if (bits == 64) {
-        amt = LLVMBuildAnd(bd_, amt, const_int(63), "amt");
+        amt = LLVMBuildAnd(cur_fn().bd, amt, const_int(63), "amt");
     } else {
         amt = LLVMBuildSelect(
-            bd_,
-            LLVMBuildICmp(bd_, LLVMIntULT, amt, const_int(uint64_t(bits)), "lt"), amt,
+            cur_fn().bd,
+            LLVMBuildICmp(cur_fn().bd, LLVMIntULT, amt, const_int(uint64_t(bits)), "lt"), amt,
             const_int(uint64_t(bits - 1)), "sat");
     }
-    LLVMValueRef ll = LLVMBuildAShr(bd_, sext64(llv(x), bits), amt, "asr");
+    LLVMValueRef ll = LLVMBuildAShr(cur_fn().bd, sext64(llv(x), bits), amt, "asr");
     return V::instr(mask_ll(ll, bits), x.ty);
 }
 
@@ -1983,7 +1920,7 @@ V Lower::builtin_clz(const CallExpr& node) {
     LLVMValueRef zero = LLVMConstInt(LLVMInt1TypeInContext(ctx()), 0, 0);
     LLVMValueRef call = emit_call(ensure_clz_fn(), {v, zero});
     if (bits == 64) return V::instr(call, x.ty);
-    return V::instr(LLVMBuildSub(bd_, call, const_int(uint64_t(64 - bits)), "clz"), x.ty);
+    return V::instr(LLVMBuildSub(cur_fn().bd, call, const_int(uint64_t(64 - bits)), "clz"), x.ty);
 }
 
 V Lower::builtin_ror(const CallExpr& node) {
@@ -2020,12 +1957,12 @@ V Lower::builtin_ror(const CallExpr& node) {
     }
     const uint64_t sm = uint64_t(bits - 1);
     LLVMValueRef v = mask_ll(llv(x), bits);
-    LLVMValueRef amt = LLVMBuildAnd(bd_, llv(n), const_int(sm), "amt");
+    LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, llv(n), const_int(sm), "amt");
     LLVMValueRef inv = LLVMBuildAnd(
-        bd_, LLVMBuildSub(bd_, const_int(uint64_t(bits)), amt, "amtc"), const_int(sm), "amti");
-    LLVMValueRef lo = LLVMBuildLShr(bd_, v, amt, "rr");
-    LLVMValueRef hi = LLVMBuildShl(bd_, v, inv, "rl");
-    return V::instr(mask_ll(LLVMBuildOr(bd_, lo, hi, "ror"), bits), x.ty);
+        cur_fn().bd, LLVMBuildSub(cur_fn().bd, const_int(uint64_t(bits)), amt, "amtc"), const_int(sm), "amti");
+    LLVMValueRef lo = LLVMBuildLShr(cur_fn().bd, v, amt, "rr");
+    LLVMValueRef hi = LLVMBuildShl(cur_fn().bd, v, inv, "rl");
+    return V::instr(mask_ll(LLVMBuildOr(cur_fn().bd, lo, hi, "ror"), bits), x.ty);
 }
 
 V Lower::builtin_minmax(const std::string& name, const CallExpr& node) {
@@ -2052,8 +1989,8 @@ V Lower::builtin_minmax(const std::string& name, const CallExpr& node) {
         x = sext64(x, ty->bits);
         y = sext64(y, ty->bits);
     }
-    LLVMValueRef cnd = LLVMBuildICmp(bd_, pred, x, y, "mm");
-    LLVMValueRef ll = LLVMBuildSelect(bd_, cnd, llv(a), llv(b), "mmv");
+    LLVMValueRef cnd = LLVMBuildICmp(cur_fn().bd, pred, x, y, "mm");
+    LLVMValueRef ll = LLVMBuildSelect(cur_fn().bd, cnd, llv(a), llv(b), "mmv");
     return V::instr(mask_ll(ll, ty->bits), ty);
 }
 
@@ -2132,10 +2069,10 @@ V Lower::builtin_random(const CallExpr& node) {
     auto sg = seed_global(node.src_line);
     const TyRef& ty = sg.second;
     LLVMValueRef old = llv(load_addr(sg.first, ty));
-    LLVMValueRef x = LLVMBuildXor(bd_, old, LLVMBuildShl(bd_, old, const_int(12), "l"), "x1");
-    x = LLVMBuildXor(bd_, x, LLVMBuildLShr(bd_, x, const_int(25), "s"), "x2");
-    x = LLVMBuildXor(bd_, x, LLVMBuildLShr(bd_, x, const_int(27), "s"), "x3");
-    LLVMValueRef next = LLVMBuildMul(bd_, x, const_int(kSeedMul), "seed");
+    LLVMValueRef x = LLVMBuildXor(cur_fn().bd, old, LLVMBuildShl(cur_fn().bd, old, const_int(12), "l"), "x1");
+    x = LLVMBuildXor(cur_fn().bd, x, LLVMBuildLShr(cur_fn().bd, x, const_int(25), "s"), "x2");
+    x = LLVMBuildXor(cur_fn().bd, x, LLVMBuildLShr(cur_fn().bd, x, const_int(27), "s"), "x3");
+    LLVMValueRef next = LLVMBuildMul(cur_fn().bd, x, const_int(kSeedMul), "seed");
     store_addr(sg.first, V::instr(next, ty), ty, node.src_line);
     V out = V::instr(next, ty);
     if (node.args.empty()) return out;
@@ -2160,7 +2097,7 @@ V Lower::call_method(const MemberExpr& callee, const CallExpr& node) {
         }
         auto c = pat_const(obj);
         if (c) return V::konst(ty_time(), (*c * kNsPerMs) & kMask64);
-        return V::instr(LLVMBuildMul(bd_, llv(obj), const_int(kNsPerMs), "ns"), ty_time());
+        return V::instr(LLVMBuildMul(cur_fn().bd, llv(obj), const_int(kNsPerMs), "ns"), ty_time());
     }
     throw Unsupported("方法 ." + callee.name + "()", node.src_line);
 }
@@ -2223,16 +2160,16 @@ void Lower::body_get_time() {
     LLVMValueRef ext = get_extern("GetSystemTimePreciseAsFileTime", ty_void(), {ty_ptr()});
     emit_call(ext, {slot});
     V ft = load_addr(slot, make_int(64, false));
-    LLVMValueRef d = LLVMBuildSub(bd_, llv(ft), const_int(kFileTimeUnix), "d");
-    LLVMBuildRet(bd_, LLVMBuildMul(bd_, d, const_int(100), "ns"));
+    LLVMValueRef d = LLVMBuildSub(cur_fn().bd, llv(ft), const_int(kFileTimeUnix), "d");
+    LLVMBuildRet(cur_fn().bd, LLVMBuildMul(cur_fn().bd, d, const_int(100), "ns"));
 }
 
 void Lower::body_sleep() {
     LLVMValueRef ms =
-        LLVMBuildUDiv(bd_, LLVMGetParam(fnref_, 0), const_int(kNsPerMs), "ms");
+        LLVMBuildUDiv(cur_fn().bd, LLVMGetParam(cur_fn().fnref, 0), const_int(kNsPerMs), "ms");
     LLVMValueRef ext = get_extern("Sleep", ty_void(), {make_int(32, false)});
-    emit_call(ext, {LLVMBuildTrunc(bd_, ms, storage_ll(*make_int(32, false)), "m")});
-    LLVMBuildRetVoid(bd_);
+    emit_call(ext, {LLVMBuildTrunc(cur_fn().bd, ms, storage_ll(*make_int(32, false)), "m")});
+    LLVMBuildRetVoid(cur_fn().bd);
 }
 
 LLVMValueRef Lower::byte_loop_prologue(unsigned n_param, LLVMBasicBlockRef* head_out,
@@ -2244,65 +2181,65 @@ LLVMValueRef Lower::byte_loop_prologue(unsigned n_param, LLVMBasicBlockRef* head
     zero.c = 0;
     store_addr(slot, zero, ty_i64(), 0);
     *head_out = br_new_block("lp");
-    *n_out = LLVMGetParam(fnref_, n_param);
+    *n_out = LLVMGetParam(cur_fn().fnref, n_param);
     return slot;
 }
 
 void Lower::body_memory_clear() {
-    LLVMValueRef addr = LLVMBuildIntToPtr(bd_, LLVMGetParam(fnref_, 0), ptr_, "ap");
+    LLVMValueRef addr = LLVMBuildIntToPtr(cur_fn().bd, LLVMGetParam(cur_fn().fnref, 0), ptr_, "ap");
     LLVMBasicBlockRef head = nullptr;
     LLVMValueRef n = nullptr;
     LLVMValueRef slot = byte_loop_prologue(1, &head, &n);
     V i = load_addr(slot, ty_i64());
-    LLVMValueRef cnd = LLVMBuildICmp(bd_, LLVMIntULT, llv(i), n, "lt");
-    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fnref_, "lpb");
-    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fnref_, "lpd");
-    LLVMBuildCondBr(bd_, cnd, body, done);
-    LLVMPositionBuilderAtEnd(bd_, body);
-    cur_block_ = body;
+    LLVMValueRef cnd = LLVMBuildICmp(cur_fn().bd, LLVMIntULT, llv(i), n, "lt");
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "lpb");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "lpd");
+    LLVMBuildCondBr(cur_fn().bd, cnd, body, done);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body);
+    cur_fn().block = body;
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     std::vector<LLVMValueRef> gi{llv(i)};
-    LLVMValueRef p = LLVMBuildGEP2(bd_, i8, addr, gi.data(), 1, "p");
-    LLVMValueRef st = LLVMBuildStore(bd_, LLVMConstInt(i8, 0, 0), p);
+    LLVMValueRef p = LLVMBuildGEP2(cur_fn().bd, i8, addr, gi.data(), 1, "p");
+    LLVMValueRef st = LLVMBuildStore(cur_fn().bd, LLVMConstInt(i8, 0, 0), p);
     LLVMSetAlignment(st, 1);
     LLVMSetVolatile(st, 1);
-    store_addr(slot, V::instr(LLVMBuildAdd(bd_, llv(i), const_int(1), "i1"), ty_i64()), ty_i64(),
+    store_addr(slot, V::instr(LLVMBuildAdd(cur_fn().bd, llv(i), const_int(1), "i1"), ty_i64()), ty_i64(),
                0);
-    LLVMBuildBr(bd_, head);
-    LLVMPositionBuilderAtEnd(bd_, done);
-    cur_block_ = done;
-    LLVMBuildRetVoid(bd_);
+    LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, done);
+    cur_fn().block = done;
+    LLVMBuildRetVoid(cur_fn().bd);
 }
 
 void Lower::body_memory_copy() {
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
-    LLVMValueRef src = LLVMBuildIntToPtr(bd_, LLVMGetParam(fnref_, 0), ptr_, "sp0");
-    LLVMValueRef dst = LLVMBuildIntToPtr(bd_, LLVMGetParam(fnref_, 1), ptr_, "dp0");
+    LLVMValueRef src = LLVMBuildIntToPtr(cur_fn().bd, LLVMGetParam(cur_fn().fnref, 0), ptr_, "sp0");
+    LLVMValueRef dst = LLVMBuildIntToPtr(cur_fn().bd, LLVMGetParam(cur_fn().fnref, 1), ptr_, "dp0");
     LLVMBasicBlockRef head = nullptr;
     LLVMValueRef n = nullptr;
     LLVMValueRef slot = byte_loop_prologue(2, &head, &n);
     V i = load_addr(slot, ty_i64());
-    LLVMValueRef cnd = LLVMBuildICmp(bd_, LLVMIntULT, llv(i), n, "lt");
-    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fnref_, "lpb");
-    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fnref_, "lpd");
-    LLVMBuildCondBr(bd_, cnd, body, done);
-    LLVMPositionBuilderAtEnd(bd_, body);
-    cur_block_ = body;
+    LLVMValueRef cnd = LLVMBuildICmp(cur_fn().bd, LLVMIntULT, llv(i), n, "lt");
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "lpb");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "lpd");
+    LLVMBuildCondBr(cur_fn().bd, cnd, body, done);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body);
+    cur_fn().block = body;
     std::vector<LLVMValueRef> gi{llv(i)};
-    LLVMValueRef s = LLVMBuildGEP2(bd_, i8, src, gi.data(), 1, "sp");
-    LLVMValueRef d = LLVMBuildGEP2(bd_, i8, dst, gi.data(), 1, "dp");
-    LLVMValueRef ld = LLVMBuildLoad2(bd_, i8, s, "b");
+    LLVMValueRef s = LLVMBuildGEP2(cur_fn().bd, i8, src, gi.data(), 1, "sp");
+    LLVMValueRef d = LLVMBuildGEP2(cur_fn().bd, i8, dst, gi.data(), 1, "dp");
+    LLVMValueRef ld = LLVMBuildLoad2(cur_fn().bd, i8, s, "b");
     LLVMSetAlignment(ld, 1);
     LLVMSetVolatile(ld, 1);
-    LLVMValueRef st = LLVMBuildStore(bd_, ld, d);
+    LLVMValueRef st = LLVMBuildStore(cur_fn().bd, ld, d);
     LLVMSetAlignment(st, 1);
     LLVMSetVolatile(st, 1);
-    store_addr(slot, V::instr(LLVMBuildAdd(bd_, llv(i), const_int(1), "i1"), ty_i64()), ty_i64(),
+    store_addr(slot, V::instr(LLVMBuildAdd(cur_fn().bd, llv(i), const_int(1), "i1"), ty_i64()), ty_i64(),
                0);
-    LLVMBuildBr(bd_, head);
-    LLVMPositionBuilderAtEnd(bd_, done);
-    cur_block_ = done;
-    LLVMBuildRetVoid(bd_);
+    LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, done);
+    cur_fn().block = done;
+    LLVMBuildRetVoid(cur_fn().bd);
 }
 
 LLVMValueRef Lower::ensure_prefix_fn(const std::string& name, const TyRef& ret_ty,
@@ -2319,16 +2256,14 @@ LLVMValueRef Lower::ensure_prefix_fn(const std::string& name, const TyRef& ret_t
     LLVMSetLinkage(fnref, LLVMInternalLinkage);
     fns_[key] = Fn{fnref, ret_ty, param_tys, {}};
     fn_seen_++;
-    FnState saved = save_state();
-    cur_name_ = name;
-    begin_function(fnref, ret_ty);
+    FnCtx& f = begin_function(fnref, ret_ty);
+    f.name = name;
     if (name == "get_time") body_get_time();
     else if (name == "sleep") body_sleep();
     else if (name == "memory_clear") body_memory_clear();
     else if (name == "memory_copy") body_memory_copy();
     else throw Unsupported("前缀函数 " + name, 0);
     finish_function();
-    restore_state(saved);
     return fnref;
 }
 
@@ -2377,13 +2312,12 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
     LLVMSetLinkage(fnref, LLVMInternalLinkage);
     fns_[key] = Fn{fnref, ret_ty, param_tys, caps};
     fn_seen_++;
-    FnState saved = save_state();
-    /* 嵌套 def 的键与名字都靠 `cur_name_` 分开（同名 def 的不同捕获实例里，同一个嵌套 def
+    FnCtx& f = begin_function(fnref, ret_ty);
+    /* 嵌套 def 的键与名字都靠上下文的名字分开（同名 def 的不同捕获实例里，同一个嵌套 def
      * 的捕获表不同，不能合并）；无捕获时与改前一致（就是 def 名）。 */
-    cur_name_ = sig.empty() ? name : gname;
-    cur_def_ = &d;
-    ty_binds_ = inst.binds;
-    begin_function(fnref, ret_ty);
+    f.name = sig.empty() ? name : gname;
+    f.def = &d;
+    f.ty_binds = inst.binds;
     for (size_t i = 0; i < param_tys.size(); ++i) {
         const std::string& pname = inst.rt_params[i]->name;
         const TyRef& ty = param_tys[i];
@@ -2404,7 +2338,6 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
     }
     lower_block(*d.body);
     finish_function();
-    restore_state(saved);
     return fnref;
 }
 
@@ -2412,8 +2345,8 @@ LLVMValueRef Lower::ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
                                      const std::vector<TyRef>& param_tys,
                                      const Closure& closure) {
     const std::vector<Capture>& caps = closure.caps;
-    const std::string owner = cur_def_ != nullptr ? cur_name_ : std::string("closure");
-    auto key = std::make_tuple(static_cast<int>(2), cur_name_, int64_t(st.src_line), st.name);
+    const std::string owner = cur_fn().def != nullptr ? cur_fn().name : std::string("closure");
+    auto key = std::make_tuple(static_cast<int>(2), cur_fn().name, int64_t(st.src_line), st.name);
     auto hit = fns_.find(key);
     if (hit != fns_.end()) return hit->second.fnref;
     std::vector<LLVMTypeRef> ptypes;
@@ -2427,9 +2360,8 @@ LLVMValueRef Lower::ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
     LLVMSetLinkage(fnref, LLVMInternalLinkage);
     fns_[key] = Fn{fnref, ret_ty, param_tys, caps};
     fn_seen_++;
-    FnState saved = save_state();
-    cur_name_ = owner + "$" + st.name;
-    begin_function(fnref, ret_ty);
+    FnCtx& f = begin_function(fnref, ret_ty);
+    f.name = owner + "$" + st.name;
     /* 先绑外部嵌套 def 的名字，再绑参数与捕获：同名时**变量优先**（调用仍能按名查到 def ——
      * `call_named` 在捕获上找不到 Def 时会走 root_defs_）。 */
     for (const DefStmt* d : closure.defs) bind_root_scope(d->name, Binding::nested(d));
@@ -2452,7 +2384,6 @@ LLVMValueRef Lower::ensure_nested_fn(const DefStmt& st, const TyRef& ret_ty,
     }
     lower_block(*st.body);
     finish_function();
-    restore_state(saved);
     return fnref;
 }
 
@@ -2610,10 +2541,10 @@ LLVMValueRef Lower::len_of(const V& obj, int line) {
         throw Unsupported("长度用在 " + std::string(ty_kind_name(obj.ty->kind)), line);
     }
     std::vector<LLVMValueRef> gi{const_int(static_cast<uint64_t>(-8))};
-    LLVMValueRef lp = LLVMBuildGEP2(bd_, storage_ll(*make_int(8, false)), to_ptr(obj), gi.data(), 1,
+    LLVMValueRef lp = LLVMBuildGEP2(cur_fn().bd, storage_ll(*make_int(8, false)), to_ptr(obj), gi.data(), 1,
                                     "lp");
     V raw = load_addr(lp, make_int(64, false));
-    return LLVMBuildLShr(bd_, llv(raw), const_int(16), "len");
+    return LLVMBuildLShr(cur_fn().bd, llv(raw), const_int(16), "len");
 }
 
 /* 栈上一块带头的串缓冲：`buf[0..8)` 是头、payload = `buf+8`。 */
@@ -2621,18 +2552,18 @@ V Lower::str_concat(const V& a, const V& b, int line) {
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     LLVMValueRef la = len_of(a, line);
     LLVMValueRef lb = len_of(b, line);
-    LLVMValueRef total = LLVMBuildAdd(bd_, la, lb, "sl");
-    LLVMValueRef buf = LLVMBuildArrayAlloca(bd_, i8, LLVMBuildAdd(bd_, total, const_int(8), "sb"),
+    LLVMValueRef total = LLVMBuildAdd(cur_fn().bd, la, lb, "sl");
+    LLVMValueRef buf = LLVMBuildArrayAlloca(cur_fn().bd, i8, LLVMBuildAdd(cur_fn().bd, total, const_int(8), "sb"),
                                             "sbuf");
     LLVMSetAlignment(buf, 8);
     std::vector<LLVMValueRef> g8{const_int(8)};
-    LLVMValueRef payload = LLVMBuildGEP2(bd_, i8, buf, g8.data(), 1, "sp");
+    LLVMValueRef payload = LLVMBuildGEP2(cur_fn().bd, i8, buf, g8.data(), 1, "sp");
     LLVMValueRef copy = ensure_copy_fn();
     LLVMValueRef cur = emit_call(copy, {payload, to_ptr(a), la});
     emit_call(copy, {cur, to_ptr(b), lb});
     std::vector<LLVMValueRef> g0{const_int(0)};
-    LLVMValueRef head = LLVMBuildGEP2(bd_, i8, buf, g0.data(), 1, "shdr");
-    store_addr(head, V::instr(LLVMBuildShl(bd_, total, const_int(16), "shl"), ty_i64()), ty_i64(),
+    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, buf, g0.data(), 1, "shdr");
+    store_addr(head, V::instr(LLVMBuildShl(cur_fn().bd, total, const_int(16), "shl"), ty_i64()), ty_i64(),
                line);
     return V::instr(payload, ty_str());
 }
@@ -2680,24 +2611,24 @@ V Lower::template_expr(const TemplateExpr& node) {
     } else {
         LLVMValueRef size = const_int(fixed);
         for (const V& v : vals) {
-            if (v.ty->kind == TyKind::Str) size = LLVMBuildAdd(bd_, size, len_of(v, node.src_line), "ts");
+            if (v.ty->kind == TyKind::Str) size = LLVMBuildAdd(cur_fn().bd, size, len_of(v, node.src_line), "ts");
         }
-        buf = LLVMBuildArrayAlloca(bd_, i8, size, "tbuf");
+        buf = LLVMBuildArrayAlloca(cur_fn().bd, i8, size, "tbuf");
         LLVMSetAlignment(buf, 8);
     }
     std::vector<LLVMValueRef> g8{const_int(8)};
-    LLVMValueRef payload = LLVMBuildGEP2(bd_, i8, buf, g8.data(), 1, "tpl");
+    LLVMValueRef payload = LLVMBuildGEP2(cur_fn().bd, i8, buf, g8.data(), 1, "tpl");
     LLVMValueRef cur = payload;
     for (std::size_t i = 0; i < node.texts.size(); ++i) {
         cur = write_literal(cur, node.texts[i], node.src_line);
         if (i < vals.size()) cur = render_part(cur, vals[i], node.src_line);
     }
     /* 长度按**实际游标**算，不按缓冲尺寸 —— 所以尺寸只是个上界，不需要预先知道十进制位数。 */
-    LLVMValueRef len = LLVMBuildSub(bd_, LLVMBuildPtrToInt(bd_, cur, i64_, "tce"),
-                                    LLVMBuildPtrToInt(bd_, payload, i64_, "tpe"), "tlen");
+    LLVMValueRef len = LLVMBuildSub(cur_fn().bd, LLVMBuildPtrToInt(cur_fn().bd, cur, i64_, "tce"),
+                                    LLVMBuildPtrToInt(cur_fn().bd, payload, i64_, "tpe"), "tlen");
     std::vector<LLVMValueRef> g0{const_int(0)};
-    LLVMValueRef head = LLVMBuildGEP2(bd_, i8, buf, g0.data(), 1, "thdr");
-    store_addr(head, V::instr(LLVMBuildShl(bd_, len, const_int(16), "thl"), ty_i64()), ty_i64(),
+    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, buf, g0.data(), 1, "thdr");
+    store_addr(head, V::instr(LLVMBuildShl(cur_fn().bd, len, const_int(16), "thl"), ty_i64()), ty_i64(),
                node.src_line);
     return V::instr(payload, ty_str());
 }
@@ -2720,13 +2651,13 @@ LLVMValueRef Lower::write_literal(LLVMValueRef cur, const std::string& text, int
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     for (std::size_t k = 0; k < text.size(); ++k) {
         std::vector<LLVMValueRef> gi{const_int(k)};
-        LLVMValueRef p = LLVMBuildGEP2(bd_, i8, cur, gi.data(), 1, "lp");
+        LLVMValueRef p = LLVMBuildGEP2(cur_fn().bd, i8, cur, gi.data(), 1, "lp");
         LLVMValueRef st =
-            LLVMBuildStore(bd_, LLVMConstInt(i8, static_cast<unsigned char>(text[k]), 0), p);
+            LLVMBuildStore(cur_fn().bd, LLVMConstInt(i8, static_cast<unsigned char>(text[k]), 0), p);
         LLVMSetAlignment(st, 1);
     }
     std::vector<LLVMValueRef> gn{const_int(text.size())};
-    return LLVMBuildGEP2(bd_, i8, cur, gn.data(), 1, "lc");
+    return LLVMBuildGEP2(cur_fn().bd, i8, cur, gn.data(), 1, "lc");
 }
 
 LLVMValueRef Lower::render_part(LLVMValueRef cur, const V& v, int line) {
@@ -2738,23 +2669,23 @@ LLVMValueRef Lower::render_part(LLVMValueRef cur, const V& v, int line) {
         /* `true` / `false`：前 4 个字节按条件选，第 5 个恒为 'e'，长度 4/5。 */
         const char* yes = "true";
         const char* no = "false";
-        LLVMValueRef nz = LLVMBuildICmp(bd_, LLVMIntNE, llv(v), const_int(0), "bn");
+        LLVMValueRef nz = LLVMBuildICmp(cur_fn().bd, LLVMIntNE, llv(v), const_int(0), "bn");
         for (std::size_t k = 0; k < 4; ++k) {
             std::vector<LLVMValueRef> gi{const_int(k)};
-            LLVMValueRef p = LLVMBuildGEP2(bd_, i8, cur, gi.data(), 1, "bp");
+            LLVMValueRef p = LLVMBuildGEP2(cur_fn().bd, i8, cur, gi.data(), 1, "bp");
             LLVMValueRef ch = LLVMBuildSelect(
-                bd_, nz, const_int(static_cast<unsigned char>(yes[k])),
+                cur_fn().bd, nz, const_int(static_cast<unsigned char>(yes[k])),
                 const_int(static_cast<unsigned char>(no[k])), "bc");
-            LLVMValueRef st = LLVMBuildStore(bd_, LLVMBuildTrunc(bd_, ch, i8, "bt"), p);
+            LLVMValueRef st = LLVMBuildStore(cur_fn().bd, LLVMBuildTrunc(cur_fn().bd, ch, i8, "bt"), p);
             LLVMSetAlignment(st, 1);
         }
         std::vector<LLVMValueRef> g4{const_int(4)};
-        LLVMValueRef p4 = LLVMBuildGEP2(bd_, i8, cur, g4.data(), 1, "bp");
-        LLVMValueRef st4 = LLVMBuildStore(bd_, LLVMConstInt(i8, 'e', 0), p4);
+        LLVMValueRef p4 = LLVMBuildGEP2(cur_fn().bd, i8, cur, g4.data(), 1, "bp");
+        LLVMValueRef st4 = LLVMBuildStore(cur_fn().bd, LLVMConstInt(i8, 'e', 0), p4);
         LLVMSetAlignment(st4, 1);
         std::vector<LLVMValueRef> gn{
-            LLVMBuildSelect(bd_, nz, const_int(4), const_int(5), "bl")};
-        return LLVMBuildGEP2(bd_, i8, cur, gn.data(), 1, "bend");
+            LLVMBuildSelect(cur_fn().bd, nz, const_int(4), const_int(5), "bl")};
+        return LLVMBuildGEP2(cur_fn().bd, i8, cur, gn.data(), 1, "bend");
     }
     if (v.ty->kind == TyKind::Int || v.ty->kind == TyKind::Ptr) {
         LLVMValueRef x = llv(v);
@@ -2763,10 +2694,10 @@ LLVMValueRef Lower::render_part(LLVMValueRef cur, const V& v, int line) {
             x = mask_ll(x, v.ty->bits);
             if (v.ty->is_signed) {
                 x = sext64(x, v.ty->bits);
-                LLVMValueRef neg = LLVMBuildICmp(bd_, LLVMIntSLT, x, const_int(0), "dneg");
-                minus = LLVMBuildZExt(bd_, neg, i64_, "dm");
+                LLVMValueRef neg = LLVMBuildICmp(cur_fn().bd, LLVMIntSLT, x, const_int(0), "dneg");
+                minus = LLVMBuildZExt(cur_fn().bd, neg, i64_, "dm");
                 /* 幅度按**无符号取负**算 —— 这样 S64 最小值也对（实测：`-9223372036854775808`）。 */
-                x = LLVMBuildSelect(bd_, neg, LLVMBuildSub(bd_, const_int(0), x, "dmg"), x, "dv");
+                x = LLVMBuildSelect(cur_fn().bd, neg, LLVMBuildSub(cur_fn().bd, const_int(0), x, "dmg"), x, "dv");
             }
         }
         return emit_call(ensure_dec_fn(), {cur, x, minus});
@@ -2784,9 +2715,8 @@ LLVMValueRef Lower::ensure_copy_fn() {
     LLVMSetLinkage(fn, LLVMInternalLinkage);
     helpers_["copy"] = fn;
     fn_seen_++;
-    FnState saved = save_state();
-    cur_name_ = "__simplexc_copy";
-    begin_function(fn, ty_ptr());
+    FnCtx& f = begin_function(fn, ty_ptr());
+    f.name = "__simplexc_copy";
     LLVMValueRef dst = LLVMGetParam(fn, 0);
     LLVMValueRef src = LLVMGetParam(fn, 1);
     LLVMValueRef n = LLVMGetParam(fn, 2);
@@ -2794,27 +2724,26 @@ LLVMValueRef Lower::ensure_copy_fn() {
     store_addr(slot, V::instr(const_int(0), ty_i64()), ty_i64(), 0);
     LLVMBasicBlockRef head = br_new_block("ch");
     LLVMValueRef i = llv(load_addr(slot, ty_i64()));
-    LLVMValueRef lt = LLVMBuildICmp(bd_, LLVMIntULT, i, n, "clt");
+    LLVMValueRef lt = LLVMBuildICmp(cur_fn().bd, LLVMIntULT, i, n, "clt");
     LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fn, "cb");
     LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fn, "cd");
-    LLVMBuildCondBr(bd_, lt, body, done);
-    LLVMPositionBuilderAtEnd(bd_, body);
-    cur_block_ = body;
+    LLVMBuildCondBr(cur_fn().bd, lt, body, done);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body);
+    cur_fn().block = body;
     std::vector<LLVMValueRef> gi{i};
-    LLVMValueRef sp = LLVMBuildGEP2(bd_, i8, src, gi.data(), 1, "csp");
-    LLVMValueRef dp = LLVMBuildGEP2(bd_, i8, dst, gi.data(), 1, "cdp");
-    LLVMValueRef b = LLVMBuildLoad2(bd_, i8, sp, "cb0");
+    LLVMValueRef sp = LLVMBuildGEP2(cur_fn().bd, i8, src, gi.data(), 1, "csp");
+    LLVMValueRef dp = LLVMBuildGEP2(cur_fn().bd, i8, dst, gi.data(), 1, "cdp");
+    LLVMValueRef b = LLVMBuildLoad2(cur_fn().bd, i8, sp, "cb0");
     LLVMSetAlignment(b, 1);
-    LLVMValueRef st = LLVMBuildStore(bd_, b, dp);
+    LLVMValueRef st = LLVMBuildStore(cur_fn().bd, b, dp);
     LLVMSetAlignment(st, 1);
-    store_addr(slot, V::instr(LLVMBuildAdd(bd_, i, const_int(1), "ci1"), ty_i64()), ty_i64(), 0);
-    LLVMBuildBr(bd_, head);
-    LLVMPositionBuilderAtEnd(bd_, done);
-    cur_block_ = done;
+    store_addr(slot, V::instr(LLVMBuildAdd(cur_fn().bd, i, const_int(1), "ci1"), ty_i64()), ty_i64(), 0);
+    LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, done);
+    cur_fn().block = done;
     std::vector<LLVMValueRef> gn{n};
-    LLVMBuildRet(bd_, LLVMBuildGEP2(bd_, i8, dst, gn.data(), 1, "cr"));
+    LLVMBuildRet(cur_fn().bd, LLVMBuildGEP2(cur_fn().bd, i8, dst, gn.data(), 1, "cr"));
     finish_function();
-    restore_state(saved);
     return fn;
 }
 
@@ -2828,9 +2757,8 @@ LLVMValueRef Lower::ensure_streq_fn() {
     LLVMSetLinkage(fn, LLVMInternalLinkage);
     helpers_["streq"] = fn;
     fn_seen_++;
-    FnState saved = save_state();
-    cur_name_ = "__simplexc_streq";
-    begin_function(fn, ty_i64());
+    FnCtx& f = begin_function(fn, ty_i64());
+    f.name = "__simplexc_streq";
     LLVMValueRef a = LLVMGetParam(fn, 0);
     LLVMValueRef b = LLVMGetParam(fn, 1);
     LLVMValueRef n = LLVMGetParam(fn, 2);
@@ -2838,35 +2766,34 @@ LLVMValueRef Lower::ensure_streq_fn() {
     store_addr(slot, V::instr(const_int(0), ty_i64()), ty_i64(), 0);
     LLVMBasicBlockRef head = br_new_block("qh");
     LLVMValueRef i = llv(load_addr(slot, ty_i64()));
-    LLVMValueRef lt = LLVMBuildICmp(bd_, LLVMIntULT, i, n, "qlt");
+    LLVMValueRef lt = LLVMBuildICmp(cur_fn().bd, LLVMIntULT, i, n, "qlt");
     LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fn, "qb");
     LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fn, "qd");
-    LLVMBuildCondBr(bd_, lt, body, done);
-    LLVMPositionBuilderAtEnd(bd_, body);
-    cur_block_ = body;
+    LLVMBuildCondBr(cur_fn().bd, lt, body, done);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body);
+    cur_fn().block = body;
     std::vector<LLVMValueRef> gi{i};
-    LLVMValueRef ap = LLVMBuildGEP2(bd_, i8, a, gi.data(), 1, "qap");
-    LLVMValueRef bp = LLVMBuildGEP2(bd_, i8, b, gi.data(), 1, "qbp");
-    LLVMValueRef av = LLVMBuildLoad2(bd_, i8, ap, "qa0");
+    LLVMValueRef ap = LLVMBuildGEP2(cur_fn().bd, i8, a, gi.data(), 1, "qap");
+    LLVMValueRef bp = LLVMBuildGEP2(cur_fn().bd, i8, b, gi.data(), 1, "qbp");
+    LLVMValueRef av = LLVMBuildLoad2(cur_fn().bd, i8, ap, "qa0");
     LLVMSetAlignment(av, 1);
-    LLVMValueRef bv = LLVMBuildLoad2(bd_, i8, bp, "qb0");
+    LLVMValueRef bv = LLVMBuildLoad2(cur_fn().bd, i8, bp, "qb0");
     LLVMSetAlignment(bv, 1);
-    LLVMValueRef ne = LLVMBuildICmp(bd_, LLVMIntNE, av, bv, "qne");
+    LLVMValueRef ne = LLVMBuildICmp(cur_fn().bd, LLVMIntNE, av, bv, "qne");
     LLVMBasicBlockRef cont = LLVMAppendBasicBlockInContext(ctx(), fn, "qc");
     LLVMBasicBlockRef diff = LLVMAppendBasicBlockInContext(ctx(), fn, "qx");
-    LLVMBuildCondBr(bd_, ne, diff, cont);
-    LLVMPositionBuilderAtEnd(bd_, cont);
-    cur_block_ = cont;
-    store_addr(slot, V::instr(LLVMBuildAdd(bd_, i, const_int(1), "qi1"), ty_i64()), ty_i64(), 0);
-    LLVMBuildBr(bd_, head);
-    LLVMPositionBuilderAtEnd(bd_, diff);
-    cur_block_ = diff;
-    LLVMBuildRet(bd_, const_int(0));
-    LLVMPositionBuilderAtEnd(bd_, done);
-    cur_block_ = done;
-    LLVMBuildRet(bd_, const_int(1));
+    LLVMBuildCondBr(cur_fn().bd, ne, diff, cont);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, cont);
+    cur_fn().block = cont;
+    store_addr(slot, V::instr(LLVMBuildAdd(cur_fn().bd, i, const_int(1), "qi1"), ty_i64()), ty_i64(), 0);
+    LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, diff);
+    cur_fn().block = diff;
+    LLVMBuildRet(cur_fn().bd, const_int(0));
+    LLVMPositionBuilderAtEnd(cur_fn().bd, done);
+    cur_fn().block = done;
+    LLVMBuildRet(cur_fn().bd, const_int(1));
     finish_function();
-    restore_state(saved);
     return fn;
 }
 
@@ -2880,9 +2807,8 @@ LLVMValueRef Lower::ensure_dec_fn() {
     LLVMSetLinkage(fn, LLVMInternalLinkage);
     helpers_["dec"] = fn;
     fn_seen_++;
-    FnState saved = save_state();
-    cur_name_ = "__simplexc_dec";
-    begin_function(fn, ty_ptr());
+    FnCtx& f = begin_function(fn, ty_ptr());
+    f.name = "__simplexc_dec";
     LLVMValueRef p = LLVMGetParam(fn, 0);
     LLVMValueRef v = LLVMGetParam(fn, 1);
     LLVMValueRef minus = LLVMGetParam(fn, 2);
@@ -2891,25 +2817,25 @@ LLVMValueRef Lower::ensure_dec_fn() {
     uint64_t thr = 1;
     for (int d = 1; d <= 19; ++d) {
         thr *= 10;
-        LLVMValueRef ge = LLVMBuildICmp(bd_, LLVMIntUGE, v, const_int(thr), "dge");
-        n = LLVMBuildSelect(bd_, ge, const_int(static_cast<uint64_t>(d + 1)), n, "dn");
+        LLVMValueRef ge = LLVMBuildICmp(cur_fn().bd, LLVMIntUGE, v, const_int(thr), "dge");
+        n = LLVMBuildSelect(cur_fn().bd, ge, const_int(static_cast<uint64_t>(d + 1)), n, "dn");
     }
-    LLVMValueRef total = LLVMBuildAdd(bd_, n, minus, "dtot");
+    LLVMValueRef total = LLVMBuildAdd(cur_fn().bd, n, minus, "dtot");
     std::vector<LLVMValueRef> gt{total};
-    LLVMValueRef end = LLVMBuildGEP2(bd_, i8, p, gt.data(), 1, "dend");
-    LLVMValueRef has_minus = LLVMBuildICmp(bd_, LLVMIntNE, minus, const_int(0), "dhm");
+    LLVMValueRef end = LLVMBuildGEP2(cur_fn().bd, i8, p, gt.data(), 1, "dend");
+    LLVMValueRef has_minus = LLVMBuildICmp(cur_fn().bd, LLVMIntNE, minus, const_int(0), "dhm");
     LLVMBasicBlockRef neg = LLVMAppendBasicBlockInContext(ctx(), fn, "dneg");
     LLVMBasicBlockRef head = LLVMAppendBasicBlockInContext(ctx(), fn, "dh");
-    LLVMBuildCondBr(bd_, has_minus, neg, head);
-    LLVMPositionBuilderAtEnd(bd_, neg);
-    cur_block_ = neg;
+    LLVMBuildCondBr(cur_fn().bd, has_minus, neg, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, neg);
+    cur_fn().block = neg;
     std::vector<LLVMValueRef> g0{const_int(0)};
-    LLVMValueRef p0 = LLVMBuildGEP2(bd_, i8, p, g0.data(), 1, "dp0");
-    LLVMValueRef sm = LLVMBuildStore(bd_, LLVMConstInt(i8, '-', 0), p0);
+    LLVMValueRef p0 = LLVMBuildGEP2(cur_fn().bd, i8, p, g0.data(), 1, "dp0");
+    LLVMValueRef sm = LLVMBuildStore(cur_fn().bd, LLVMConstInt(i8, '-', 0), p0);
     LLVMSetAlignment(sm, 1);
-    LLVMBuildBr(bd_, head);
-    LLVMPositionBuilderAtEnd(bd_, head);
-    cur_block_ = head;
+    LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, head);
+    cur_fn().block = head;
     /* 从末尾往前填：先算长度，所以 `i` 初值是总长，每轮先减再写。 */
     LLVMValueRef slot_i = alloca_slot(ty_i64(), "di");
     store_addr(slot_i, V::instr(total, ty_i64()), ty_i64(), 0);
@@ -2917,27 +2843,26 @@ LLVMValueRef Lower::ensure_dec_fn() {
     store_addr(slot_x, V::instr(v, ty_i64()), ty_i64(), 0);
     LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), fn, "db");
     LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), fn, "dd");
-    LLVMBuildBr(bd_, body);
-    LLVMPositionBuilderAtEnd(bd_, body);
-    cur_block_ = body;
-    LLVMValueRef i2 = LLVMBuildSub(bd_, llv(load_addr(slot_i, ty_i64())), const_int(1), "di2");
+    LLVMBuildBr(cur_fn().bd, body);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body);
+    cur_fn().block = body;
+    LLVMValueRef i2 = LLVMBuildSub(cur_fn().bd, llv(load_addr(slot_i, ty_i64())), const_int(1), "di2");
     store_addr(slot_i, V::instr(i2, ty_i64()), ty_i64(), 0);
     LLVMValueRef x = llv(load_addr(slot_x, ty_i64()));
-    LLVMValueRef dg = LLVMBuildURem(bd_, x, const_int(10), "ddg");
-    LLVMValueRef ch = LLVMBuildAdd(bd_, dg, const_int('0'), "dch");
+    LLVMValueRef dg = LLVMBuildURem(cur_fn().bd, x, const_int(10), "ddg");
+    LLVMValueRef ch = LLVMBuildAdd(cur_fn().bd, dg, const_int('0'), "dch");
     std::vector<LLVMValueRef> gi{i2};
-    LLVMValueRef dp = LLVMBuildGEP2(bd_, i8, p, gi.data(), 1, "ddp");
-    LLVMValueRef st = LLVMBuildStore(bd_, LLVMBuildTrunc(bd_, ch, i8, "dbt"), dp);
+    LLVMValueRef dp = LLVMBuildGEP2(cur_fn().bd, i8, p, gi.data(), 1, "ddp");
+    LLVMValueRef st = LLVMBuildStore(cur_fn().bd, LLVMBuildTrunc(cur_fn().bd, ch, i8, "dbt"), dp);
     LLVMSetAlignment(st, 1);
-    LLVMValueRef x2 = LLVMBuildUDiv(bd_, x, const_int(10), "dqx");
+    LLVMValueRef x2 = LLVMBuildUDiv(cur_fn().bd, x, const_int(10), "dqx");
     store_addr(slot_x, V::instr(x2, ty_i64()), ty_i64(), 0);
-    LLVMValueRef more = LLVMBuildICmp(bd_, LLVMIntNE, x2, const_int(0), "dmr");
-    LLVMBuildCondBr(bd_, more, body, done);
-    LLVMPositionBuilderAtEnd(bd_, done);
-    cur_block_ = done;
-    LLVMBuildRet(bd_, end);
+    LLVMValueRef more = LLVMBuildICmp(cur_fn().bd, LLVMIntNE, x2, const_int(0), "dmr");
+    LLVMBuildCondBr(cur_fn().bd, more, body, done);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, done);
+    cur_fn().block = done;
+    LLVMBuildRet(cur_fn().bd, end);
     finish_function();
-    restore_state(saved);
     return fn;
 }
 
@@ -2980,7 +2905,7 @@ LLVMValueRef Lower::field_storage_value(const V& v, const TyRef& ty, int line) {
     V conv = convert(v, ty, line);
     LLVMTypeRef st = storage_ll(*ty);
     LLVMValueRef ll = llv(conv);
-    if (st != i64_) ll = LLVMBuildTrunc(bd_, ll, st, "t");
+    if (st != i64_) ll = LLVMBuildTrunc(cur_fn().bd, ll, st, "t");
     return ll;
 }
 
@@ -3003,7 +2928,7 @@ V Lower::composite_literal(const CompositeLitExpr& node) {
     /* 不在函数体里（顶层 `var x = T {…}`）就只能求常量：这时**不能**走 `e()` —— 它按「有
      * builder」的前提发指令，碰到字段值里的函数调用会在 `nullptr` 上摊（实测 0xC0000005）。
      * `const_value()` 遇运行期表达式返回 `nullopt`，于是下面报一句可读的错。 */
-    const bool in_function = bd_ != nullptr && cur_block_ != nullptr;
+    const bool in_function = cur_fn().bd != nullptr && cur_fn().block != nullptr;
     for (const auto& f : node.fields) {
         size_t idx = ty->fields.size();
         for (size_t i = 0; i < ty->fields.size(); ++i) {
@@ -3038,19 +2963,19 @@ V Lower::composite_literal(const CompositeLitExpr& node) {
                                                     static_cast<unsigned>(elems.size()), 1);
         return V::instr(agg, ty);
     }
-    if (bd_ == nullptr || cur_block_ == nullptr) {
+    if (cur_fn().bd == nullptr || cur_fn().block == nullptr) {
         /* 常量环境里出现**没有常量值**的字段（数组字面量那种「有 ll、无 c」）：不许在 nullptr
          * 上发指令。 */
         throw Unsupported("复合字面量里的字段值不是编译期常量", node.src_line);
     }
-    LLVMPositionBuilderAtEnd(bd_, cur_block_);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().block);
     LLVMValueRef agg = LLVMConstNull(it->second);
     for (const FieldVal& fv : vals) {
         const TyRef& fty = ty->fields[fv.idx].second;
         unsigned pos = static_cast<unsigned>(fv.idx);
         LLVMValueRef el = fv.v.c ? const_for_storage(fv.v)
                                  : field_storage_value(fv.v, fty, node.src_line);
-        agg = LLVMBuildInsertValue(bd_, agg, el, pos, "cl");
+        agg = LLVMBuildInsertValue(cur_fn().bd, agg, el, pos, "cl");
     }
     return V::instr(agg, ty);
 }
@@ -3192,17 +3117,15 @@ void Program::build() {
 void Program::emit_main(const FunctionDef& label) {
     LLVMValueRef fnref = LLVMAddFunction(
         module(), "tc_main", LLVMFunctionType(void_ty_, nullptr, 0, 0));
-    FnState saved = save_state();
-    cur_name_ = "tc_main";
-    cur_def_ = nullptr;
-    begin_function(fnref, ty_void());
+    FnCtx& f = begin_function(fnref, ty_void());
+    f.name = "tc_main";
+    f.def = nullptr;   /* 程序根不属于任何 def（基座的 `def` 本来就是空，这里写死意图） */
     lower_block(*label.body);
     /* 程序根末尾隐式 thread_exit（接口 §1「程序根」）。 */
     LLVMValueRef ext = get_extern("thread_exit", ty_void(), {});
     emit_call(ext, {});
-    LLVMBuildRetVoid(bd_);
+    LLVMBuildRetVoid(cur_fn().bd);
     finish_function();
-    restore_state(saved);
 }
 
 std::string Program::ir_text() const { return print_module(module()); }

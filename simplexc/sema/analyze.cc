@@ -1103,7 +1103,14 @@ HNode Analyzer::e_cast(const CastExpr& node) {
             return expr_node(HKind::ArrayLit, target, node.src_line);
         }
     }
-    return convert(e(*node.expr), target, node.src_line);
+    HNode inner = e(*node.expr);
+    /* 旧的 `convert` 对**显式** cast 无条件补掩码 —— 目标类型与源相同时也不例外
+     * （`repro_mask5.si`：旧 3 道 `and`、不补时 2 道，blob 长度跟着变）。`same_val_ty` 早退
+     * 只属于隐式转换那一侧，所以这里自己发 `Trunc`（同宽 → 只出一道掩码）。 */
+    if (is_int(*target) && same_val_ty(inner.ty, target)) {
+        return cast_node(HCastKind::Trunc, std::move(inner), target, node.src_line);
+    }
+    return convert(std::move(inner), target, node.src_line);
 }
 
 HNode Analyzer::e_unary(const UnaryExpr& node) {

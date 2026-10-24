@@ -40,7 +40,8 @@ Hir funcs=1 globals=1 externs=0 consts=0 strings=0 structs=0
             Index ty=U8 span=25:0
               Local ty=Arr[U8] name="t" span=25:0
               Const ty=S64 const=0x1 span=25:0
-            Local ty=U8 name="d" span=25:0
+            Cast ty=U8 cast=trunc span=25:0
+              Local ty=U8 name="d" span=25:0
   func[0] key="pick" name="pick" inst_sig="" pre_body=none cap_index=-1 decl_line=8 line_suffix=0 ret=U8 params=2 caps=0
     param[0] name="x" ty=U8
     param[1] name="y" ty=U8

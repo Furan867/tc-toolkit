@@ -49,6 +49,7 @@ using sema::kMask64;
 using sema::make_array;
 using sema::make_int;
 using sema::mask_of;
+using sema::shift_amount_mask;
 using sema::storage_bytes;
 using sema::ty_bool;
 using sema::ty_i64;

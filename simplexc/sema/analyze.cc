@@ -588,7 +588,7 @@ private:
     TyRef ty_of_name(const std::string& name, int line);
     TyRef ty_of_ref(const TypeRef& ref, int line);
     TyRef unify(const TyRef& a, const TyRef& b, int line);
-    TyRef arith_ty(const HNode& a, const HNode& b, const std::string& op, int line);
+    TyRef arith_ty(const HNode& a, const HNode& b, int line);
 
     /* ---- 表达式 */
     HNode e(const Expr& node);
@@ -962,9 +962,12 @@ TyRef Analyzer::unify(const TyRef& a, const TyRef& b, int line) {
                           ty_kind_name(b->kind) + " 混用"};
 }
 
-/* `lower.cc` 的 `arith_ty`：整型**字面量**取窄的那一侧的位宽（字面量多态），只铺给 `+`。 */
-TyRef Analyzer::arith_ty(const HNode& a, const HNode& b, const std::string& op, int line) {
-    if (op == "+" && is_int(*a.ty) && is_int(*b.ty) && a.ty->bits != b.ty->bits) {
+/* `lower.cc` 的 `arith_ty`：整型**字面量**取窄的那一侧的位宽（字面量多态）。
+ * 规则不按运算符分叉：参考实测 `U32 x >> 32` / `U32 x << 32` 的移位量按 W=32 取模、
+ * `U32 x * 65537` 截回 32 位 —— 三者的结果类型都必须是 `U32` 而不是 `Int(64)`
+ * （见 `work/tmp/sbmips/findings.tsv`）。只给 `+` 是当时没逐 op 验时的收窄，不是参考分叉。 */
+TyRef Analyzer::arith_ty(const HNode& a, const HNode& b, int line) {
+    if (is_int(*a.ty) && is_int(*b.ty) && a.ty->bits != b.ty->bits) {
         const bool narrow_is_a = a.ty->bits < b.ty->bits;
         const TyRef& narrow = narrow_is_a ? a.ty : b.ty;
         const HNode& literal = narrow_is_a ? b : a;
@@ -1198,7 +1201,7 @@ HNode Analyzer::str_compare(const std::string& op, const HNode& a, const HNode& 
 /* `lower.cc` 的 `binop`：`arith_ty` → 两侧 `convert` → 常量则 `fold_arith`（截断在运算结果上）。 */
 HNode Analyzer::binop(const std::string& op, const HNode& a, const HNode& b, int line) {
     if (!is_arith(op)) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "运算符 " + op};
-    const TyRef ty = arith_ty(a, b, op, line);
+    const TyRef ty = arith_ty(a, b, line);
     const HNode av = convert(a, ty, line);
     const HNode bv = convert(b, ty, line);
     if (ty->kind == TyKind::Str) {

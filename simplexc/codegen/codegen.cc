@@ -1010,12 +1010,12 @@ V Codegen::binop(const sema::HNode& node) {
         return V::instr(div(kind, x, y, *ty), ty);
     }
     if (node.bin_op == sema::HBinOp::Shl) {
-        LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, y, const_int(uint64_t(bits - 1)), "amt");
+        LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, y, const_int(shift_amount_mask(*ty, Span{line})), "amt");
         return V::instr(mask_ll(LLVMBuildShl(cur_fn().bd, x, amt, "shl"), bits), ty);
     }
     if (node.bin_op == sema::HBinOp::Shr) {
         /* U-L8：**永远 lshr**（不是 ashr），左操作数走 `pattern_of`（常量按符号性扩），再截回 W。 */
-        LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, y, const_int(uint64_t(bits - 1)), "amt");
+        LLVMValueRef amt = LLVMBuildAnd(cur_fn().bd, y, const_int(shift_amount_mask(*ty, Span{line})), "amt");
         LLVMValueRef ll = LLVMBuildLShr(cur_fn().bd, pattern_of(a), amt, "shr");
         return V::instr(mask_ll(ll, bits), ty);
     }

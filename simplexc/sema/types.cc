@@ -128,7 +128,10 @@ int storage_bytes(const Ty& ty, Span span) {
         case TyKind::Enum:
             return 8;
         case TyKind::Int:
-            return (ty.bits + 7) / 8;   /* U-L7 指示 4：写宽度 = 值类型的字节宽度 */
+            /* 分段（`docs/facts/semantics.md` §U-L1）：`N ≤ 32` → `ceil(N/8)` 字节，`N > 32` → **8** 字节。
+             * `N > 32` 不能按 `ceil(N/8)` 算：参考对 `U33..U63` 的访存一律动 8 字节，改成 5/6 字节
+             * （`store iN`）产物就与参考不一致（实测见 `simplexc/dossier/ul_access_width.md` §7）。 */
+            return ty.bits <= 32 ? (ty.bits + 7) / 8 : 8;
         default:
             throw CompileError{Responsibility::Unimplemented, Stage::Sema, span,
                                "类型 " + std::string(ty_kind_name(ty.kind)) + " 没有字节宽度"};
@@ -153,14 +156,23 @@ std::string ty_key(const Ty& ty) {
     return "?";
 }
 
-/* `size(x)` 的单位是**位**（`docs/facts/semantics.md` 的泛型一条），宽度来源与 `storage_bytes`
- * 同一处。Enum 是唯一例外（U-L5：只有 1/2 字节两档，而它的存储宽度是 1 个机器字），所以它在
- * 这里报掉，不静默给一个错的 64。 */
+/* `size(x)` 的单位是**位**（`docs/facts/semantics.md` 的泛型一条）。整型给的是**声明位宽**
+ * （实测 `U5`→5、`U33`→33、`U40`→40，复现见 `work/tmp/fix2/notes2.md` 阶段 B），不是
+ * `storage_bytes*8`（那会给 8/64/64）。其余种类与 `storage_bytes` 同一处。Enum 是例外（U-L5：
+ * 只有 1/2 字节两档，而它的存储宽度是 1 个机器字），所以它在这里报掉，不静默给一个错的 64。 */
 int size_bits(const Ty& ty, Span span) {
     if (ty.kind == TyKind::Enum) {
         throw CompileError{Responsibility::Unimplemented, Stage::Sema, span, "size() 用在枚举上"};
     }
+    if (ty.kind == TyKind::Int) return ty.bits;
     return storage_bytes(ty, span) * 8;
+}
+
+uint64_t shift_amount_mask(const Ty& ty, Span span) {
+    const int bytes = ty.kind == TyKind::Int ? storage_bytes(ty, span) : 8;
+    int round = 1;
+    while (round < bytes) round *= 2;
+    return uint64_t(round) * 8 - 1;
 }
 
 /* ================================================================ 常量折叠 */
@@ -183,11 +195,11 @@ uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty,
     if (op == "&") return a & b;
     if (op == "|") return a | b;
     if (op == "^") return a ^ b;
-    if (op == "<<") return (a << (b & uint64_t(bits - 1))) & mask_of(bits);
+    if (op == "<<") return (a << (b & shift_amount_mask(ty, span))) & mask_of(bits);
     if (op == ">>") {
-        /* U-L8 指示 1：`trunc_W(lshr(ext64(a), n & (W-1)))`，常量按符号性 sext。 */
+        /* U-L8 指示 1：`trunc_W(lshr(ext64(a), n & shift_amount_mask))`，常量按符号性 sext。 */
         const uint64_t ext = ty.is_signed ? static_cast<uint64_t>(as_signed(a, bits)) : a;
-        return (ext >> (b & uint64_t(bits - 1))) & mask_of(bits);
+        return (ext >> (b & shift_amount_mask(ty, span))) & mask_of(bits);
     }
     if (op == "/" || op == "%") {
         if (b == 0) return op == "/" ? 0 : a;   /* U-L8：除零不 trap，商 0、余数 = 被除数 */

@@ -59,6 +59,10 @@ int storage_bytes(const Ty& ty, Span span);   /* 内存字节宽度；Void / 未
 std::string ty_key(const Ty& ty);
 /* `size(x)` 的返回值，单位 = 位（`docs/facts/semantics.md` 的泛型一条）。 */
 int size_bits(const Ty& ty, Span span);
+/* `<<` / `>>` 移位量的掩码（编译期折叠与运行期 codegen 共用这一处）。实测见 `docs/facts/semantics.md`
+ * 的移位一条，复现见 `work/tmp/fix2/notes2.md` 阶段 A：按**存储宽度向上取到 2 的幂**再减 1，
+ * 不是 `W-1` —— 两者只在 2 的幂宽度上相同。 */
+uint64_t shift_amount_mask(const Ty& ty, Span span);
 const char* ty_kind_name(TyKind k);
 inline bool is_int(const Ty& ty) { return ty.kind == TyKind::Int; }
 

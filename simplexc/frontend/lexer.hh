@@ -23,13 +23,18 @@ struct Tok {
   bool interp = false; /* 模板里是否有 `{…}` 插值 */
 };
 
+/* 词法错**抛的是** `sema/errors.hh` 的 `CompileError{UserSource, Stage::Lex, Span{行, 列}, detail}`
+ * （三轴从第一层带全，壳按责任轴决定回不回退）。
+ *
+ * `LexError` 只剩一个读者：`cli/simplexc_cli.cc` 的 catch（本批不改 `cli/`），所以类型留在
+ * 这里，但**没有抛出点**了 —— 新写的代码不要再用它。 */
 struct LexError {
   int line = 0;
   int col = 0;
   std::string msg;
 };
 
-/* 末尾补一个 eof token。未闭合字面量 / 不认识的字符 → 抛 LexError。 */
+/* 末尾补一个 eof token。未闭合字面量 / 不认识的字符 → 抛 `CompileError{UserSource, Lex}`。 */
 std::vector<Tok> tokenize(std::string_view text);
 
 /* 词法器内部的两个小工具，公开给 parser 拆模板插值用：模板 token 的文本是**原文**

@@ -5,9 +5,16 @@
 #include <fstream>
 #include <sstream>
 
+#include "../sema/errors.hh"
 #include "parser.hh"
 
 namespace simplexc {
+
+using sema::CompileError;
+using sema::Responsibility;
+using sema::Span;
+using sema::Stage;
+
 namespace {
 
 bool is_py_space(char c) {
@@ -374,8 +381,8 @@ ParsedDef Frontend::parse_def(int decl_idx) const {
     eof.line = d.lo;
     eof.col = 1;
     eof.gap = true;
-    throw ParseError{d.lo, 0, "L" + std::to_string(d.lo) + "-" + std::to_string(d.hi) +
-                                  " 里没有 token"};
+    throw CompileError{Responsibility::UserSource, Stage::Parse, Span{d.lo, 0},
+                       "L" + std::to_string(d.lo) + "-" + std::to_string(d.hi) + " 里没有 token"};
   }
   {
     Tok eof;
@@ -414,7 +421,8 @@ ParsedDef Frontend::parse_def(int decl_idx) const {
   }
   const Tok tail = p.peek();
   if (tail.kind != "eof") {
-    throw ParseError{tail.line, tail.col, "体已经闭合，这里还剩 " + describe(tail)};
+    throw CompileError{Responsibility::UserSource, Stage::Parse, Span{tail.line, tail.col},
+                       "体已经闭合，这里还剩 " + describe(tail)};
   }
   if (out.fn->body->close_line != d.hi) {
     p.notes.push_back("体收口在第 " + std::to_string(out.fn->body->close_line) +

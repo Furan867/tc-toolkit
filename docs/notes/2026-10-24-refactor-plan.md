@@ -65,15 +65,41 @@
 顶层：
 
 ```text
-Hir { HirFunc main; funcs[]; globals[]; externs[]; strings[]; consts[] }
+Hir { main: HirFunc; funcs[]; globals[]; externs[]; strings[]; consts[]; structs[] }
 HirFunc { key(规范化实例键); name(产物符号名); params[]; caps[]{name,ty,index}; body; ret }
+HirGlobal { name; ty; init_bits: optional<u64> }   // 初值必须是编译期常量，sema 折好
+HirStruct { name; bits; fields[]{name,ty,offset} }
 ```
+
+**三处规格补漏（2026-10-24 由 S2c 切割清单查出，不加就产物会变）：**
+
+1. `Hir.funcs[].name` 必须**逐字复现**现状的产物符号名规则：`_f`、`_f$<sig>`、`$c<n>`、`#L<lo>`，
+   包括 `cap_instances_` 的 64 上限与其报错。internal linkage 不代表名字可改。
+2. `HirGlobal.init_bits` 与 `Hir.structs[]` 是硬缺口：`make_globals` 要求全局初值是编译期常量，
+   `make_types` 今天从 `ast_.structs` 建。缺了就只能把初值降级成 `main` 里的 store，产物会变。
+3. **`in_scope(...)` 是编译期谓词，不限于 `#if`**：它也出现在裸 `if` 里。判定与剪枝都在 sema
+   （剪掉不成立的那一支），HIR 里**不出现** `in_scope` 调用，也不靠 `Const` 回传给 codegen 去区分
+   （否则 `if 1` 这种真常量条件会被误剪，行为就变了）。
 
 **六条不变量，每条一个 `assert`**：I1 每节点 `ty` 非空（除 Void 语句）I2 `Local`/`Global`/`Capture` 指向已解析声明
 I3 `Call` 的 callee 一定已在 `funcs` 里（实例闭包已收敛）I4 无隐式转换（宽度/符号变化必经 `Cast`）
 I5 每节点带 span I6 `funcs[].key` 唯一。
 
 **接缝判据**：`hirdump` 把 HIR 打成前缀式一行一节点，可直接 diff；sema 单独喂 AST 即可产出它，不碰 LLVM。
+
+## 2c. S2c 切割底数（`work/tmp/codegen-cut/`，HEAD=8af9d21）
+
+- `ast_dep.tsv` 802 行（AST 引用逐处判决：改吃 HIR 297 / 迁 sema 288 / 删除 97 / 接口改造 88 / 拆 32）。
+- `reasoning.tsv` 44 行（14 个推理函数的每个调用点，与 `grep -c` 逐函数对账一致）。
+- `keep_list.md` 81 条（纯 IR 发射成员函数，按函数给理由）。
+
+三个最高风险（S2c 前必须处理）：
+
+1. **实例闭包 + 符号名**：现状是「发函数体时又发现新实例」的按需递归；名字带 `$<sig>`/`$c<n>`/`#L<lo>`，
+   还有 64 上限。sema 必须先把闭包算完，并逐字复现这些名字。
+2. **HIR 字段缺口**：见 §2b 补漏 1、2。
+3. **隐式转换的粒度**：`convert` 今天自己按 `TyKind` 决定 `trunc/zext/sext/Raw`，窄常量加宽还走 `pattern_of`；
+   只要与 sema 插 `Cast` 的粒度差一点（尤其 `Ptr`↔`Int` 的 `Raw` 与 `is_bool` 名义位），产物会**静默**变。
 
 ## 3. 分步与提交边界
 

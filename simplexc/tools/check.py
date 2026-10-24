@@ -9,7 +9,7 @@
 | `host_selftest` | `python simplexc/tools/host/selftest.py --src …006.si --bin …006.bin --ticks 3`（M2 宿主自比对）|
 | `lower_equiv`   | `build/simplexc_cli.exe`（**C++ 产品路径**）出 rv32im 产物 → 宿主与参考逐 tick 比对（10 tick，灌 RESET_DATA）|
 | `blob_baseline` | `simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline`（98 份语料的装配产物逐字段比，重构前后必须等价）|
-| `hook_offline`  | `hook_offline.run_all()`：壳的四种情形 + refcmp + 超时（8 个 case）|
+| `hook_offline`  | `hook_offline.run_all()`：壳的四种情形 + refcmp + 超时（case 数见摘要 cases=N/M）|
 | `probe_006`     | `simplexc/tools/probe_006.py`（M1.5 探针，**可选**：缺依赖/脚本在改 → SKIP）|
 
 游戏内的部分（部署转发层、主频采样）一律 manual/slow，不在这里 —— 判据里任何一步都不
@@ -292,7 +292,7 @@ def step_blob_baseline(ctx):
     return {**r, "summary": summary}
 
 
-@step("hook_offline", "壳的失败路径/熔断/回退/超时（hook_offline.run_all，8 个 case）")
+@step("hook_offline", "壳的失败路径/熔断/回退/超时（hook_offline.run_all，case 数见摘要）")
 def step_hook_offline(ctx):
     t0 = time.perf_counter()
     try:

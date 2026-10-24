@@ -97,6 +97,22 @@ HirFunc { key(规范化实例键); name(产物符号名); params[]; caps[]{name,
 - ②b（sema）与 ②c（codegen）可以在 `hir.hh` 冻结后**并行**，前提是 hir.hh 只由主程改。
 - `docs/` 只由主程写；子 agent 的过程写 `docs/notes/<agent>-<topic>.md`。
 
+## 4b. §3.4 勘误与两个决策（依据 `work/tmp/silent/paths.md`，HEAD=b5d90c9）
+
+设计 §3.4 列的六条静默路径，两处引文不准、一处定性错。specs 只读，所以勘误记这里，③ 执行时按此办：
+
+| 条 | 设计原文 | 实测 |
+| --- | --- | --- |
+| ⑤ | `parser.cc:292-311`「顶层未知行被解析成合法表达式」 | 引错位置：那是 `parse_block`。顶层未知行在声明扫描 `decls.cc:479-484` 就被丢进只写不读的 `top_unsupported`，**从未进解析器**；rc=0 照出 blob 是真的 |
+| ⑥ | 「不可达 def 里的语法错不报」列为静默降级 | **定性错**：参考实现同样不报（`bad.si` 死代码多一个 `)` → rc=0、8581 B）。判定点是 `module_build.cc:165` 的唯一闸门。反向：不可达 def 里的**词法**错照样拦（rc=1） |
+| ① | `parser.cc:344` | 兜底在 341-352，344 是中间行 |
+| ④ | 「对 struct 字段只 catch 并继续」 | 位置对（3313-3329），但错在**位置**：它把错误记进 `record`（518-521）而不是抛 `Unsupported`，所以后续流程当它「已处理」 |
+
+**D1（⑥ 怎么处理）：显式记录，不改行为。** 差分是唯一正确性判据（§7.1），「不可达 def 里不报」是与参考一致的保真行为，不是缺陷。
+所以「禁止静默降级」= 不能**悄悄**，不等于必须变行为：记为 `responsibility=用户源码错 / stage=语法 / span 有` 的可查条目，行为照旧。
+
+**D2（② 的 notes）：先给 warnings 加消费者（sidecar + hook.log），不升级成错误。** 只有当某条 note 表示「我们跳过了某个语义」时才升成 `UnsupportedConstruct` —— 那才叫降级。
+
 ## 5. 已知风险
 
 - ②c 一次性切换若产物变化，定位靠三件：`ir_text()` 逐函数 diff、单份语料 CLI 重编、git bisect 到块级。

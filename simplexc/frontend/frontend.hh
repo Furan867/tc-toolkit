@@ -8,7 +8,7 @@
 //   * `LexError`  —— 整文件分词失败（构造 Frontend 时就抛，**不可达 def 里的词法错也会拦下来**，
 //                    这是原型的行为：`self.toks = tokenize(raw_text)` 在构造期做）；
 //   * `ParseError` —— 某个 def 的语法错（CLI 退出码 1）。
-// 冻结接口 §1 的 `CompileError`（ast.hh）留给将来的 `parse_and_typecheck` 做映射，
+// 冻结接口 §1 的 `CompileError`（ast.hh）留给将来的 `analyze` 做映射，
 // 这一层不预先造一套错误码 —— 判据要的是与原型逐字一致的报错文本。
 #pragma once
 

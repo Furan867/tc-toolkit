@@ -202,7 +202,7 @@ def step_host_selftest(ctx):
 
 @step("lower_equiv", "M4.5：C++ 产物 vs 参考产物逐 tick 等价（rv32im，10 tick，灌 RESET_DATA）")
 def step_lower_equiv(ctx):
-    """生产者是**我们自己的**编译器（`build/simplexc_cli.exe`，C++17），不是参考实现 ——
+    """生产者是**我们自己的**编译器（`build/simplexc_cli.exe`，C++17），不是原版编译器 ——
     这一步才是「C++ 前端 + lowering 能独立产出等价产物」的判据。
 
     没有 CLI 就是 SKIP（不是 FAIL）：它要先 `python simplexc/tools/build.py simplexc_cli`。

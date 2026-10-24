@@ -1,6 +1,6 @@
 # 重构方案（M5.5）：lower/ → sema/ + codegen/
 
-状态：方案定稿，待执行。负责人 2026-10-24 确认「按 A（分两步），① 可以弱，终态必须满足设计文件」。
+状态：方案定稿，待执行。负责人 2026-10-24 确认「按 A（分两步），S1 可以弱，终态必须满足设计文件」。
 上游：`docs/specs/2026-10-15-simplex-llvm-compiler-design.md` §3.2–§3.4 / §7.6，
 `docs/specs/2026-10-15-simplexc-interfaces.md` §1b（HIR 目标形态）。
 
@@ -69,9 +69,9 @@ Hir { HirFunc main; funcs[]; globals[]; externs[]; strings[]; consts[] }
 HirFunc { key(规范化实例键); name(产物符号名); params[]; caps[]{name,ty,index}; body; ret }
 ```
 
-**六条不变量，每条一个 `assert`**：① 每节点 `ty` 非空（除 Void 语句）② `Local`/`Global`/`Capture` 指向已解析声明
-③ `Call` 的 callee 一定已在 `funcs` 里（实例闭包已收敛）④ 无隐式转换（宽度/符号变化必经 `Cast`）
-⑤ 每节点带 span ⑥ `funcs[].key` 唯一。
+**六条不变量，每条一个 `assert`**：I1 每节点 `ty` 非空（除 Void 语句）I2 `Local`/`Global`/`Capture` 指向已解析声明
+I3 `Call` 的 callee 一定已在 `funcs` 里（实例闭包已收敛）I4 无隐式转换（宽度/符号变化必经 `Cast`）
+I5 每节点带 span I6 `funcs[].key` 唯一。
 
 **接缝判据**：`hirdump` 把 HIR 打成前缀式一行一节点，可直接 diff；sema 单独喂 AST 即可产出它，不碰 LLVM。
 
@@ -79,43 +79,43 @@ HirFunc { key(规范化实例键); name(产物符号名); params[]; caps[]{name,
 
 | 步 | 内容 | 判据 | 提交 |
 | --- | --- | --- | --- |
-| **①** | 搬 `lower.cc` 的 31 个自由函数 + `module_build.cc` 到 `sema/`（不动类定义、不改一行逻辑） | `blob_baseline --verify` 98/98 一致 + check.py 全 PASS | 1 个 |
-| **①b** | 搬类型系统 + 常量折叠到 `sema/types.hh`；搬 19 个干净成员函数；`class Lower` 按语义侧/LLVM 侧拆成员 | 同上 | 1 个 |
-| **②a** | 新增 `sema/hir.hh` + HIR dump（`hirdump`，不进产品），不接线 | 编译过、check.py 全 PASS、dump 能出 98 份 | 1 个 |
-| **②b** | sema 生成 HIR：类型/常量/绑定/实例闭包（sema 侧完整） | 最小用例 + dump 抽样核对；不接线 | 1–2 个 |
-| **②c** | codegen 改吃 HIR（一次性切换），删 `static_type`/`cv`/`unify` 等推导 | 98/98 逐字节一致 + check.py 全 PASS | 1 个 |
-| **②d** | 拆 `V`/`Binding`/`Capture`/`FnState`：消 save/restore，递归改子上下文 | 同上 + `grep save_state` == 0 | 1 个 |
-| **③** | 错误三轴 + 消除 §3.4 的 6 条静默降级 | 失败用例表 + 回退率按三轴 | 1–2 个 |
-| **④** | §7.6：最小用例、assert、接缝；重跑 M5 判据重记账 | check.py 含新步骤 | 1–2 个 |
+| **S1** | 搬 `lower.cc` 的 31 个自由函数 + `module_build.cc` 到 `sema/`（不动类定义、不改一行逻辑） | `blob_baseline --verify` 98/98 一致 + check.py 全 PASS | 1 个 |
+| **S1b** | 搬类型系统 + 常量折叠到 `sema/types.hh`；搬 19 个干净成员函数；`class Lower` 按语义侧/LLVM 侧拆成员 | 同上 | 1 个 |
+| **S2a** | 新增 `sema/hir.hh` + HIR dump（`hirdump`，不进产品），不接线 | 编译过、check.py 全 PASS、dump 能出 98 份 | 1 个 |
+| **S2b** | sema 生成 HIR：类型/常量/绑定/实例闭包（sema 侧完整） | 最小用例 + dump 抽样核对；不接线 | 1–2 个 |
+| **S2c** | codegen 改吃 HIR（一次性切换），删 `static_type`/`cv`/`unify` 等推导 | 98/98 逐字节一致 + check.py 全 PASS | 1 个 |
+| **S2d** | 拆 `V`/`Binding`/`Capture`/`FnState`：消 save/restore，递归改子上下文 | 同上 + `grep save_state` == 0 | 1 个 |
+| **S3** | 错误三轴 + 消除 §3.4 的 6 条静默降级 | 失败用例表 + 回退率按三轴 | 1–2 个 |
+| **S4** | §7.6：最小用例、assert、接缝；重跑 M5 判据重记账 | check.py 含新步骤 | 1–2 个 |
 
-① 与 ①b 是「纯搬」，产物必须逐字节相同；②c 起也要求逐字节相同（纯语义保持），
-唯一允许改变产物的是 ③（错误路径）与 ④ 之后的优化。
+S1 与 S1b 是「纯搬」，产物必须逐字节相同；S2c 起也要求逐字节相同（纯语义保持），
+唯一允许改变产物的是 S3（错误路径）与 S4 之后的优化。
 
 ## 4. 写者分区（并行度）
 
 - 同一时刻：`sema/` 一个写者、`codegen/`（原 `lower/`）一个写者、`tools/` 一个写者。
-- ②b（sema）与 ②c（codegen）可以在 `hir.hh` 冻结后**并行**，前提是 hir.hh 只由主程改。
+- S2b（sema）与 S2c（codegen）可以在 `hir.hh` 冻结后**并行**，前提是 hir.hh 只由主程改。
 - `docs/` 只由主程写；子 agent 的过程写 `docs/notes/<agent>-<topic>.md`。
 
 ## 4b. §3.4 勘误与两个决策（依据 `work/tmp/silent/paths.md`，HEAD=b5d90c9）
 
-设计 §3.4 列的六条静默路径，两处引文不准、一处定性错。specs 只读，所以勘误记这里，③ 执行时按此办：
+设计 §3.4 列的六条静默路径，两处引文不准、一处定性错。specs 只读，所以勘误记这里，S3 执行时按此办：
 
 | 条 | 设计原文 | 实测 |
 | --- | --- | --- |
-| ⑤ | `parser.cc:292-311`「顶层未知行被解析成合法表达式」 | 引错位置：那是 `parse_block`。顶层未知行在声明扫描 `decls.cc:479-484` 就被丢进只写不读的 `top_unsupported`，**从未进解析器**；rc=0 照出 blob 是真的 |
-| ⑥ | 「不可达 def 里的语法错不报」列为静默降级 | **定性错**：参考实现同样不报（`bad.si` 死代码多一个 `)` → rc=0、8581 B）。判定点是 `module_build.cc:165` 的唯一闸门。反向：不可达 def 里的**词法**错照样拦（rc=1） |
-| ① | `parser.cc:344` | 兜底在 341-352，344 是中间行 |
-| ④ | 「对 struct 字段只 catch 并继续」 | 位置对（3313-3329），但错在**位置**：它把错误记进 `record`（518-521）而不是抛 `Unsupported`，所以后续流程当它「已处理」 |
+| P5 | `parser.cc:292-311`「顶层未知行被解析成合法表达式」 | 引错位置：那是 `parse_block`。顶层未知行在声明扫描 `decls.cc:479-484` 就被丢进只写不读的 `top_unsupported`，**从未进解析器**；rc=0 照出 blob 是真的 |
+| P6 | 「不可达 def 里的语法错不报」列为静默降级 | **定性错**：原版编译器同样不报（`bad.si` 死代码多一个 `)` → rc=0、8581 B）。判定点是 `module_build.cc:165` 的唯一闸门。反向：不可达 def 里的**词法**错照样拦（rc=1） |
+| P1 | `parser.cc:344` | 兜底在 341-352，344 是中间行 |
+| P4 | 「对 struct 字段只 catch 并继续」 | 位置对（3313-3329），但错在**位置**：它把错误记进 `record`（518-521）而不是抛 `Unsupported`，所以后续流程当它「已处理」 |
 
-**D1（⑥ 怎么处理）：显式记录，不改行为。** 差分是唯一正确性判据（§7.1），「不可达 def 里不报」是与参考一致的保真行为，不是缺陷。
+**D1（P6 怎么处理）：显式记录，不改行为。** 差分是唯一正确性判据（§7.1），「不可达 def 里不报」是与参考一致的保真行为，不是缺陷。
 所以「禁止静默降级」= 不能**悄悄**，不等于必须变行为：记为 `responsibility=用户源码错 / stage=语法 / span 有` 的可查条目，行为照旧。
 
-**D2（② 的 notes）：先给 warnings 加消费者（sidecar + hook.log），不升级成错误。** 只有当某条 note 表示「我们跳过了某个语义」时才升成 `UnsupportedConstruct` —— 那才叫降级。
+**D2（P2 的 notes）：先给 warnings 加消费者（sidecar + hook.log），不升级成错误。** 只有当某条 note 表示「我们跳过了某个语义」时才升成 `UnsupportedConstruct` —— 那才叫降级。
 
 ## 5. 已知风险
 
-- ②c 一次性切换若产物变化，定位靠三件：`ir_text()` 逐函数 diff、单份语料 CLI 重编、git bisect 到块级。
+- S2c 一次性切换若产物变化，定位靠三件：`ir_text()` 逐函数 diff、单份语料 CLI 重编、git bisect 到块级。
 - `ensure_def_fn`（75 行，换侧 10 次）是「发函数体时又发现新实例」的按需生成；分层后必须改成
-  sema 先算闭包。它是 ②b 的最难点，先做它再谈其他。
-- 传 `Ty` 的 `is_bool` 名义位不能丢（插值渲染 `true`/`false` vs `1`/`0`），否则 ② 会静默改行为。
+  sema 先算闭包。它是 S2b 的最难点，先做它再谈其他。
+- 传 `Ty` 的 `is_bool` 名义位不能丢（插值渲染 `true`/`false` vs `1`/`0`），否则 S2 会静默改行为。

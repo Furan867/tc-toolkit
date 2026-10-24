@@ -10,7 +10,7 @@
 | case | 判据 |
 |---|---|
 | `ours-nosrc`       | mode=ours + **空源码** → 壳自己判 `InternalError`：失败串 `ours: InternalError`、manifest `impl=ours_failed`、hook.log 的 `error`(stage=ours/kind=InternalError) + `impl` 两条都在 |
-| `fallback-nosrc`   | mode=ours_with_fallback + 空源码 → 整单转交参考实现：产物与**同一进程里**参考实现的产物逐字节相同、manifest `impl=fallback` |
+| `fallback-nosrc`   | mode=ours_with_fallback + 空源码 → 整单转交原版编译器：产物与**同一进程里**原版编译器的产物逐字节相同、manifest `impl=fallback` |
 | `ref`              | mode=reference → manifest `impl=reference`、hook.log 有 `impl` 行（回退率的分母） |
 | `ours-ok`          | mode=ours + 真源码（`SRC` = 176.si）→ 产物是**我们的**（头 bit62=1）、`impl=ours`、无 `error` 行、同进程重复编译逐字节相同、manifest 记的 out_len/out_sha256 与产物一致 |
 | `refcmp`           | reference 不回归：新壳与「改动前」的产物逐字节相同 |

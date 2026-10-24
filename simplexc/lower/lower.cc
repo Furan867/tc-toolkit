@@ -11,7 +11,7 @@ namespace simplexc {
 namespace lower {
 namespace {
 
-/* 前缀（stdlib）里定义、生成源码当作「已存在」用的名字：只登记参考实现里出现过的几个。
+/* 前缀（stdlib）里定义、生成源码当作「已存在」用的名字：只登记原版编译器里出现过的几个。
  * **这不是内建表** —— 内建表的唯一来源是接口 §2 的 `builtins.def`。 */
 struct PrefixGlobal {
     TyRef ty;
@@ -390,7 +390,7 @@ void Lower::restore_state(const FnState& s) {
 }
 
 void Lower::mark_no_builtin(LLVMValueRef fnref) {
-    /* 参考实现给每个函数挂 `nobuiltin`（否则 LLVM 会把 `memory_copy` 之类的名字当内建去认）。 */
+    /* 原版编译器给每个函数挂 `nobuiltin`（否则 LLVM 会把 `memory_copy` 之类的名字当内建去认）。 */
     const unsigned kind = LLVMGetEnumAttributeKindForName("nobuiltin", 9);
     if (kind != 0) {
         LLVMAddAttributeAtIndex(fnref, LLVMAttributeFunctionIndex,
@@ -776,7 +776,7 @@ void Lower::s_VarDeclStmt(const VarDeclStmt& st) {
         throw Unsupported(st.name + " 的初始化式没有值", st.src_line);
     }
     if ((st.kw == "let" || st.kw == "const") && v.c) {
-        /* 参考实现把「常量变量」当常量（`ul7_narrow_var.md` 的 fE +304）→ 保真。 */
+        /* 原版编译器把「常量变量」当常量（`ul7_narrow_var.md` 的 fE +304）→ 保真。 */
         bind(st.name, Binding::constant(v));
         return;
     }
@@ -804,7 +804,7 @@ void Lower::s_ExprStmt(const ExprStmt& st) { e(*st.expr); }
 
 void Lower::s_IfStmt(const IfStmt& st) {
     /* `in_scope("…")` 是**编译期谓词**，哪怕写在裸 `if` 里也一样：判定为假的块**整块丢掉**，
-     * 连里面的名字都不解析 —— 与参考实现一致（facts.md §006 的语义）。 */
+     * 连里面的名字都不解析 —— 与原版编译器一致（facts.md §006 的语义）。 */
     std::vector<const IfCase*> cases;
     for (const auto& case_ : st.cases) {
         auto decided = in_scope_const(*case_->cond);
@@ -1027,7 +1027,7 @@ void Lower::collect_captures(const Block& body, const std::vector<std::string>& 
      * `let`/内层 `def` 都算「自己的」，同名遮蔽外层 —— 不往内层 `DefStmt` 的体里钻：内层 def 真被
      * 调用时再算它自己的捕获，那时本函数的参数/局部/捕获都已经在作用域里。
      *
-     * 但**兄弟 def**（本函数体里按名调用、定义在外面的嵌套 def）必须在这里就摊平：参考实现按
+     * 但**兄弟 def**（本函数体里按名调用、定义在外面的嵌套 def）必须在这里就摊平：原版编译器按
      * **最外层调用点**解析 free variable（`docs/notes/2026-10-18-in-scope-fix.md` §6 第 1 条 ——
      * L/M 片段里被查的 def 体直接出现在调用者代码里），而我们把它生成成一个真函数，它的捕获
      * 只能由**调用它的那一层**带进来。006：`handle_test_result` 调 `halt`，`halt` 用
@@ -1471,7 +1471,7 @@ V Lower::binop(const std::string& op, const V& a, const V& b, int line) {
 LLVMValueRef Lower::div(const std::string& op, LLVMValueRef x, LLVMValueRef y, const Ty& ty) {
     /* opcode 跟**被除数**的符号性（facts.md §`/`、`%`），零除数不 trap（商 0、余数 = 被除数），
      * 有符号再避开 `INT_MIN / -1`。注意操作数**没有**过 `pattern_of`：常量在这里用的是
-     * W 位掩码后的裸位模式 —— 参考实现那个「窄常量零扩展成 64 位再送有符号除法」的不自洽
+     * W 位掩码后的裸位模式 —— 原版编译器那个「窄常量零扩展成 64 位再送有符号除法」的不自洽
      * 就是从这个形状出来的，别顺手改成 pattern_of。 */
     const int bits = ty.bits;
     LLVMValueRef zero = const_int(0);
@@ -1861,7 +1861,7 @@ LLVMValueRef Lower::emit_call(LLVMValueRef fnref, const std::vector<LLVMValueRef
 V Lower::call_user(const FunctionDef& d, const CallExpr& node) {
     Inst inst = resolve_inst(d.params, node, d.lo);
     TyRef ret_ty = inst_ret_type(d.ret.get(), inst, d.lo);
-    /* 捕获**在调用点**算（参考实现也是在调用点解析自由名），声明参数只是它的一部分。 */
+    /* 捕获**在调用点**算（原版编译器也是在调用点解析自由名），声明参数只是它的一部分。 */
     Closure cl = def_captures(d);
     LLVMValueRef fnref = ensure_def_fn(d.name, d.lo, d, ret_ty, inst, cl);
     std::vector<LLVMValueRef> vals;
@@ -2357,7 +2357,7 @@ LLVMValueRef Lower::ensure_def_fn(const std::string& name, int64_t lo, const Fun
     /* 互调的顶层 def 按捕获签名各发一份实例，理论上签名集是有限的，但代价可能会长（名字集合
      * 的幂集）；超过这个数就报掉 —— 报错会回退到参考产物，比在这里无界发函数安全。 */
     if (!cap_sig.empty() && instances >= 64) {
-        throw Unsupported(name + " 的闭包实例数不收剑（" + cap_sig + "）", d.lo);
+        throw Unsupported(name + " 的闭包实例数不收敛（" + cap_sig + "）", d.lo);
     }
     std::vector<LLVMTypeRef> ptypes;
     for (const auto& t : param_tys) ptypes.push_back(val_ll(*t));

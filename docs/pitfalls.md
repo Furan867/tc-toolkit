@@ -124,3 +124,7 @@
 - 别拿默认参数跑 `simplexc/tools/m5/coverage.py` 的子集验证 —— `--report` 默认就指向仓库里的
   `docs/notes/2026-10-18-m5-coverage.md`，一次 `--ids 100,…` 就把 **98 份的全量报告覆盖成 17 份子集**
   （实测：154 行差异）。子集跑必须显式 `--report work/tmp/…`（`--tsv`/`--summary-json` 同理）。
+- 别让子 agent 在代码或回答里**手写大段期望值字面量**（dump golden、期望输出、长基准文本）——
+  生成这类长文本时被 provider 的 content_filter 掐断过两次，且每次都是「文件已落盘、未接线、未验证」
+  的半成品。期望值一律用**重定向从程序输出生成**（给程序加 `--dump-only` 之类的开关，
+  `./exe --dump-only > testdata/x.txt`），再人工核对 golden 的每一行是否合规格。

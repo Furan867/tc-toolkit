@@ -51,6 +51,7 @@ using simplexc::Parser;
 using simplexc::ReadError;
 using simplexc::Stmt;
 using simplexc::Tok;
+using simplexc::TypeRef;
 using simplexc::VarDeclStmt;
 
 namespace {
@@ -74,12 +75,119 @@ std::filesystem::path cases_dir() {
     return std::filesystem::path(self) / "testdata" / "cases";
 }
 
-/* `.si` → `sema::ModuleSource`。AST 节点由本结构持有（`ModuleSource` 只持裸指针）。 */
+/* `.si` → `sema::ModuleSource`。AST 节点与类型拼写由本结构持有（`ModuleSource` 只持裸指针）。 */
 struct CaseSource {
     std::vector<std::unique_ptr<FunctionDef>> fns;
     std::vector<std::unique_ptr<VarDeclStmt>> vars;
+    std::vector<std::unique_ptr<TypeRef>> types; /* `type` 声明里的字段类型拼写 */
+    std::vector<sema::EnumSource> enums;
+    std::vector<sema::StructSource> structs;
     sema::ModuleSource src;
 };
+
+std::string join_lines(const std::vector<std::string>& lines, int lo, int hi) {
+    std::string out;
+    for (int i = lo - 1; i < hi && i < static_cast<int>(lines.size()); ++i) {
+        if (i < 0) continue;
+        if (!out.empty()) out += ' ';
+        out += lines[static_cast<std::size_t>(i)];
+    }
+    return out;
+}
+
+bool is_ident_start(char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0 || c == '_'; }
+bool is_ident_char(char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; }
+
+std::size_t skip_ws(const std::string& s, std::size_t i) {
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])) != 0) ++i;
+    return i;
+}
+
+std::string read_ident(const std::string& s, std::size_t& i) {
+    const std::size_t b = i;
+    if (i < s.size() && is_ident_start(s[i])) {
+        ++i;
+        while (i < s.size() && is_ident_char(s[i])) ++i;
+    }
+    return s.substr(b, i - b);
+}
+
+std::unique_ptr<TypeRef> make_type_ref(const std::string& word) {
+    auto t = std::make_unique<TypeRef>();
+    if (!word.empty() && word[0] == '@') {
+        t->at = true;
+        t->name = word.substr(1);
+    } else {
+        t->name = word;
+    }
+    return t;
+}
+
+/* `type X Enum [A, B]` / `type X Struct { f: T, g: U }` → `EnumSource` / `StructSource`。
+ * 切法与 `lower/module_build.cc` 的 `scan_type` 同形（改一处要同时改另一处）：这里是**判据侧的
+ * 粘合**，与 `parse_top_var` 同一个位置 —— 接线（②c）之后它属于壳/CLI，不属于 sema。 */
+void add_type_decl(const Frontend& fe, const Decl& d, CaseSource* out) {
+    const std::string text = join_lines(fe.code_lines, d.lo, d.hi);
+    if (d.note == "Enum") {
+        const std::size_t lb = text.find("Enum");
+        const std::size_t l = lb == std::string::npos ? std::string::npos : text.find('[', lb);
+        const std::size_t r = text.rfind(']');
+        if (l == std::string::npos || r == std::string::npos || r < l) {
+            throw sema::CompileFail("第 " + std::to_string(d.lo) + " 行：枚举声明看不懂：" + text);
+        }
+        sema::EnumSource e;
+        e.name = d.name;
+        std::stringstream ss(text.substr(l + 1, r - l - 1));
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            const std::size_t i = skip_ws(item, 0);
+            std::size_t j = i;
+            std::string member = read_ident(item, j);
+            if (!member.empty()) e.members.push_back(std::move(member));
+        }
+        out->enums.push_back(std::move(e));
+        out->src.enums = out->enums; /* 下面是最后一步，见 load_case 的收尾 */
+        return;
+    }
+    if (d.note == "Struct") {
+        const std::size_t l = text.find('{');
+        const std::size_t r = text.rfind('}');
+        if (l == std::string::npos || r == std::string::npos || r < l) {
+            throw sema::CompileFail("第 " + std::to_string(d.lo) + " 行：结构声明看不懂：" + text);
+        }
+        sema::StructSource s;
+        s.name = d.name;
+        const std::string body = text.substr(l + 1, r - l - 1);
+        std::size_t pos = 0;
+        while (pos < body.size()) {
+            const std::size_t comma = body.find(',', pos);
+            const std::string part =
+                body.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            std::size_t i = skip_ws(part, 0);
+            const std::string fname = read_ident(part, i);
+            if (!fname.empty()) {
+                i = skip_ws(part, i);
+                if (i < part.size() && part[i] == ':') {
+                    i = skip_ws(part, i + 1);
+                    std::size_t j = i;
+                    if (j < part.size() && part[j] == '@') ++j;
+                    const std::string tname = read_ident(part, j);
+                    if (!tname.empty()) {
+                        const bool at = i < part.size() && part[i] == '@';
+                        out->types.push_back(make_type_ref(at ? "@" + tname : tname));
+                        s.fields.emplace_back(fname, out->types.back().get());
+                    }
+                }
+            }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        out->structs.push_back(std::move(s));
+        out->src.structs = out->structs;
+        return;
+    }
+    throw sema::CompileFail("第 " + std::to_string(d.lo) + " 行：type 声明形态（" + d.note + "）");
+}
 
 /* 顶层 `var`/`const` 的切法照 `module_build.cc` 的 `parse_top_var`：切出这条声明占的行上
  * 的 token，交给 parser 当一条**语句**解析 —— 不另写一份声明解析。 */
@@ -120,6 +228,8 @@ bool load_case(const std::string& path, CaseSource* out, std::string* err) {
             } else if ((d.kind == "var" || d.kind == "const") && d.depth == 0) {
                 out->vars.push_back(parse_top_var(fe, d));
                 out->src.top_vars.push_back(out->vars.back().get());
+            } else if (d.kind == "type" && d.depth == 0) {
+                add_type_decl(fe, d, out);
             } else if (d.kind == "def" && d.depth == 0) {
                 /* 顶层 def 本步**不接**：解析好传进去，让 `analyze` 自己抛 `Unsupported`
                    （用例里真出现时的报错才来自被测代码，而不是这段粘合）。 */

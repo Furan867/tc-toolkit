@@ -1,4 +1,4 @@
-Hir funcs=1 globals=0 externs=0 consts=0 strings=0
+Hir funcs=1 globals=0 externs=0 consts=0 strings=0 structs=0
   main key="main" name="main" ret=U64 params=1 caps=0
     param[0] name="n" ty=U64
     Block span=1:0

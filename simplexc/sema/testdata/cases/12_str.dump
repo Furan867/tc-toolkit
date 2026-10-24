@@ -1,0 +1,18 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=2 structs=0
+  string[0] bytes="abc" cstring=false
+  string[1] bytes="abd" cstring=false
+  main key="main" name="main" ret=Void params=0 caps=0
+    Block span=4:0
+      While label="run_sim" span=4:0
+        Const ty=Bool const=0x1 span=4:0
+        Block span=4:0
+          VarDecl ty=Str name="s" span=5:0
+            StrLit ty=Str string=0 span=5:0
+          VarDecl ty=Bool name="same" span=6:0
+            Binary ty=Bool op=streq span=6:0
+              Local ty=Str name="s" span=6:0
+              StrLit ty=Str string=0 span=6:0
+          VarDecl ty=Bool name="diff" span=7:0
+            Binary ty=Bool op=strne span=7:0
+              Local ty=Str name="s" span=7:0
+              StrLit ty=Str string=1 span=7:0

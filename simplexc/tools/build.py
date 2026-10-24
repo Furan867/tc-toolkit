@@ -258,6 +258,7 @@ def step_analyze_selftest() -> None:
          "-I", "simplexc/sema",
          "simplexc/sema/analyze_selftest.cc",
          "simplexc/sema/analyze.cc",
+         "simplexc/sema/layout.cc",
          "simplexc/sema/hir_dump.cc",
          "simplexc/sema/types.cc",
          "simplexc/frontend/decls.cc",

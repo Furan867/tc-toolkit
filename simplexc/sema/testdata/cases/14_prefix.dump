@@ -1,0 +1,14 @@
+Hir funcs=0 globals=1 externs=0 consts=0 strings=0 structs=0
+  global[0] name="global_seed" ty=U64
+  main key="main" name="main" ret=Void params=0 caps=0
+    Block span=3:0
+      While label="run_sim" span=3:0
+        Const ty=Bool const=0x1 span=3:0
+        Block span=3:0
+          Assign span=4:0
+            Global ty=U64 global=0 span=4:0
+            Const ty=U64 const=0x5 span=4:0
+          VarDecl ty=U64 name="s" span=5:0
+            Binary ty=U64 op=add span=5:0
+              Global ty=U64 global=0 span=5:0
+              Const ty=U64 const=0x1 span=5:0

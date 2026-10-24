@@ -1,0 +1,35 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=1 structs=0
+  string[0] bytes="b" cstring=false
+  main key="main" name="main" ret=Void params=0 caps=0
+    Block span=5:0
+      While label="run_sim" span=5:0
+        Const ty=Bool const=0x1 span=5:0
+        Block span=5:0
+          VarDecl ty=S64 name="x" span=6:0
+            Const ty=S64 const=0x2 span=6:0
+          Switch span=7:0
+            Local ty=S64 name="x" span=7:0
+            Const ty=S64 const=0x1 span=8:0
+            Block span=8:0
+              Assign span=8:0
+                Local ty=S64 name="x" span=8:0
+                Const ty=S64 const=0xa span=8:0
+            Const ty=S64 const=0x2 span=9:0
+            Block span=9:0
+              Assign span=10:0
+                Local ty=S64 name="x" span=10:0
+                Const ty=S64 const=0x14 span=10:0
+              Break label="run_sim" span=11:0
+            Block span=13:0
+              Assign span=13:0
+                Local ty=S64 name="x" span=13:0
+                Const ty=S64 const=0x1e span=13:0
+          VarDecl ty=Str name="s" span=14:0
+            StrLit ty=Str string=0 span=14:0
+          Switch span=15:0
+            Local ty=Str name="s" span=15:0
+            StrLit ty=Str string=0 span=16:0
+            Block span=16:0
+              Assign span=16:0
+                Local ty=S64 name="x" span=16:0
+                Const ty=S64 const=0x1 span=16:0

@@ -1,0 +1,17 @@
+// 运行期 `if`：条件不是编译期谓词 → 一条 `If` 节点（条件 / then 块 / else 块）。
+// `elif` 是链：HIR 里压成嵌套 —— `If` 只有三个位，所以后面的 case 那一支是一条**只装着里层
+// `If`** 的 Block（不声明任何名字，作用域与 `lower` 里「每个 case 自己一层块」一致）。
+// 最后一个 `if 1` 是反面判据：真常量条件**不许**被剪（只有 `in_scope` 才是编译期谓词）。
+run_sim: while true {
+  var x = 1
+  if x < 3 {
+    var a = 1
+  } elif x < 5 {
+    var b = 2
+  } else {
+    var c = 3
+  }
+  if 1 {
+    var d = 4
+  }
+}

@@ -1,0 +1,29 @@
+// `in_scope("名字")` 是**编译期谓词**，裸 `if` 与 `#if` 都算（方案 §2b 补漏 3）：
+//   · 判假的块**整块丢掉** —— 连里面的名字都不解析，所以 `nope`/`nope2` 从未声明也不报错；
+//   · 判真的块原样内联成一条 Block 语句，**HIR 里没有 If 节点**，也没有 in_scope 调用；
+//   · 三档各用一个名字：`x` 是词法作用域（②）、`Point` 是整单元预扫的类型名（①）、
+//     `global_seed` 是前缀（③）；`nope` 三档都不在 → 假。`if 1` 不算谓词（见 06_if）。
+type Point Struct { x: U8 }
+
+run_sim: while true {
+  var x = 1
+  if in_scope("nope") {
+    nope = 1
+  } else {
+    var kept = 2
+  }
+  if in_scope("x") {
+    var here = 3
+  }
+  if in_scope("Point") {
+    var typed = 4
+  }
+  if in_scope("global_seed") {
+    var seeded = 5
+  }
+#if in_scope("nope") {
+  nope2 = 1
+} else {
+  var pp = 6
+}
+}

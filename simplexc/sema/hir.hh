@@ -86,10 +86,16 @@ inline bool is_expr(HKind k) {
  * 操作数按「非零为真」看，见 `lower.cc` 的 `as_cond`）。 */
 enum class HUnOp { Neg, Not, BitNot };
 
-/* 二元：算术/位运算/移位 + 比较 + 短路逻辑。查到这一步就不再是源码字符串（决策 6 同一条理由）。 */
+/* 二元：算术/位运算/移位 + 比较 + 短路逻辑 + 按字节内容比较。查到这一步就不再是源码字符串
+ * （决策 6 同一条理由）。
+ *
+ * `StrEq` / `StrNe` 是 `Str` 的 `==` / `!=`：它**不是** `Eq` 的一个参数，而是一种独立的语义
+ * （参考实现走 `__simplexc_streq(ptr, ptr, n)`，先比长度再逐字节比；`lower.cc` 的 `str_compare`）。
+ * 保留成独立的 op 就是为了让「按内容比」这个事实留在 HIR 里 —— codegen 见到 `StrEq` 不必再去
+ * 查操作数类型猜该发哪条指令。`Str` 的 `<` 比大小参考自己就报错，所以没有对应的 op。 */
 enum class HBinOp {
     Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Shl, Shr,
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Eq, Ne, Lt, Le, Gt, Ge, StrEq, StrNe,
     LogAnd, LogOr,
 };
 
@@ -116,10 +122,17 @@ struct HCallee {
  *   If                                                    2 或 3（条件, then 块[, else 块]）
  *   VarDecl / Return                                      0 或 1（初始化式 / 返回值）
  *   Block / ArrayLit                                      语句 / 元素按序
- *   CompositeLit                                          字段初值按声明序（偏移由 `ty` 的字段表算）
+ *   CompositeLit                                          字段按**声明序**每个字段一个 kid（字面量里
+ *                                                         没写的字段是它的零值 `Const`），所以
+ *                                                         kids.size() == 字段数。为什么不按源码
+ *                                                         书写序：那是**求值**顺序（U-L4），由
+ *                                                         sema 在求值时保证，HIR 只描述聚合的形状
  *   Call                                                  实参按序（被调者在 `callee`，不在 kids 里）
  *   Template                                              文字段与插值**交替**：偶数下标是 StrLit 段
- *                                                         （允许空串）、奇数下标是表达式
+ *                                                         （允许空串）、奇数下标是表达式。文字段比
+ *                                                         插值多一个，所以 kid 个数是**奇数**
+ *                                                         （2×插值数 + 1）—— 末段文字不能省，
+ *                                                         否则最后一个 `}` 之后的字节就丢了
  *   Switch                                                主体 + 各 case 的「[值表达式]? Block」：
  *                                                         紧跟一个表达式再跟 Block = `case 值:`，
  *                                                         直接出现 Block = `default:`（参考把
@@ -195,6 +208,21 @@ struct HirString {
     bool cstring = false; /* 是不是 `c'…'` 那条「末尾补 0」的形态 */
 };
 
+/* 一个 struct 的布局：`bits` 是整个聚合的位宽、`offset` 是字段的**字节**偏移。
+ * 规则唯一实现是 `sema/layout.cc` 的 `layout_struct()`（`lower.cc` 原先自己算一份，②c 收口），
+ * 依据 `docs/facts/semantics.md` 的 U-L4。codegen 不再算偏移，只查这张表。 */
+struct HirField {
+    std::string name;
+    TyRef ty;
+    int offset = 0;
+};
+
+struct HirStruct {
+    std::string name;
+    int bits = 0;
+    std::vector<HirField> fields; /* 声明序 */
+};
+
 /* 已折叠的具名编译期常量（`const #SIMULATION_STATE = …`）：值已经在用到它的 `Const` 节点里，
  * 这张表只为「按名查值/诊断」活着。 */
 struct HirConst {
@@ -210,6 +238,7 @@ struct Hir {
     std::vector<HirExtern> externs;
     std::vector<HirString> strings;
     std::vector<HirConst> consts;
+    std::vector<HirStruct> structs;
 };
 
 /* 六条不变量全查一遍：成立返回 true；否则返回 false 并把「第几条 + 出问题的路径」写进 `err`

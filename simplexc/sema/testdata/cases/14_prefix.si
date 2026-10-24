@@ -1,0 +1,6 @@
+// 前缀（stdlib）里的全局 `var global_seed = Seed 1`：**按需**建 —— 第一次被引用才进
+// `Hir.globals`，所以它的下标排在顶层全局之后，`init_bits` 就是前缀那一行给的 1。
+run_sim: while true {
+  global_seed = Seed 5
+  var s = global_seed + 1
+}

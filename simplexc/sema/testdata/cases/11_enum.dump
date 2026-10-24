@@ -1,0 +1,14 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=0
+  main key="main" name="main" ret=Void params=0 caps=0
+    Block span=8:0
+      While label="run_sim" span=8:0
+        Const ty=Bool const=0x1 span=8:0
+        Block span=8:0
+          VarDecl ty=Enum.Light/8 name="a" span=9:0
+            Const ty=Enum.Light/8 const=0x1 span=9:0
+          VarDecl ty=Enum.Big/16 name="b" span=10:0
+            Const ty=Enum.Big/16 const=0x100 span=10:0
+          VarDecl ty=U16 name="c" span=11:0
+            Const ty=U16 const=0x2 span=11:0
+          VarDecl ty=U8 name="d" span=12:0
+            Const ty=U8 const=0x0 span=12:0

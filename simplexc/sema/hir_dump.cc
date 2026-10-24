@@ -5,11 +5,13 @@
  *
  * dump 的字段形状（改它 = 改判据，改之前跟 ②c 的写者对齐）：
  *
- *   Hir funcs=… globals=… externs=… consts=… strings=…
+ *   Hir funcs=… globals=… externs=… consts=… strings=… structs=…
  *     string[i] bytes="…" cstring=…
  *     global[i] name="…" ty=…
  *     extern[i] name="…" ty=…
  *     const[i] name="…" ty=… value=0x…
+ *     struct[i] name="…" bits=…
+ *       field[j] name="…" ty=… offset=…
  *     main key="…" name="…" ret=… params=N caps=N
  *       param[i] name="…" ty=…
  *       capture[i] name="…" ty=… index=…
@@ -20,8 +22,10 @@
  * 每个节点一行 `Kind 字段… span=行:列`，字段顺序固定、缩进 2 空格/层、子树跟在父行之后。
  * 不打印指针、地址、容量 —— dump 只能随语义变化。
  *
- * 类型拼写（`U32`/`S8`/`Bool`/`Arr[U8]`/`Struct.名字`）**只给 dump 看**，不是决策 7 的实例键
- * 规范化串（那个唯一一处是 `lower.cc` 的 `ty_key`，②b 搬进 sema 时一并收口）。
+ * 类型拼写（`U32`/`S8`/`Bool`/`Arr[U8]`/`Struct.名字`/`Enum.名字/位宽`）**只给 dump 看**，不是
+ * 决策 7 的实例键规范化串（那个唯一一处是 `lower.cc` 的 `ty_key`，②b 搬进 sema 时一并收口）。
+ * 枚举带上 `/位宽`：那是 U-L5 的**底层存储宽度**（8 / 16 位），不是值表示的机器字宽
+ * （`storage_bytes(Enum)` = 8）—— 两者不同，判据要看得见前者。
  */
 #include "hir_dump.hh"
 
@@ -93,6 +97,8 @@ const char* hbinop_name(HBinOp op) {
         case HBinOp::Le: return "le";
         case HBinOp::Gt: return "gt";
         case HBinOp::Ge: return "ge";
+        case HBinOp::StrEq: return "streq";
+        case HBinOp::StrNe: return "strne";
         case HBinOp::LogAnd: return "logand";
         case HBinOp::LogOr: return "logor";
     }
@@ -160,7 +166,7 @@ std::string ty_text(const TyRef& ty) {
             return std::string(ty->is_signed ? "S" : "U") + std::to_string(ty->bits);
         case TyKind::Ptr: return "Ptr";
         case TyKind::Str: return "Str";
-        case TyKind::Enum: return "Enum." + ty->name;
+        case TyKind::Enum: return "Enum." + ty->name + "/" + std::to_string(ty->bits);
         case TyKind::Struct: return "Struct." + ty->name;
         case TyKind::Array: return "Arr[" + ty_text(ty->elem) + "]";
     }
@@ -293,6 +299,8 @@ bool same_ty(const TyRef& a, const TyRef& b) {
 bool is_bool_ty(const TyRef& ty) {
     return ty != nullptr && ty->kind == TyKind::Int && ty->is_bool;
 }
+
+bool is_str_ty(const TyRef& ty) { return ty != nullptr && ty->kind == TyKind::Str; }
 
 /* ① 类型位：表达式有值类型、语句没有 —— 唯一例外是 `VarDecl`，它的 `ty` 是被声明者的类型
  *    （语句没有值，但 alloca 的宽度得有个地方放，见 `hir.hh` 的形状决定 2）。
@@ -477,6 +485,14 @@ bool check_conv_node(const HNode& n, const TyRef& ret, const std::string& where,
                                     "比较两侧的类型不一致（隐式转换必须已经是 Cast）");
                     }
                     break;
+                case HBinOp::StrEq:
+                case HBinOp::StrNe:
+                    /* 按内容比：两侧必须都是 `Str`（不能是整数位模式）。 */
+                    if (!is_bool_ty(n.ty)) return fail(err, 4, where, "Str 比较的结果类型必须是 Bool");
+                    if (!is_str_ty(n.kids[0].ty) || !is_str_ty(n.kids[1].ty)) {
+                        return fail(err, 4, where, "Str 比较的两侧必须都是 Str");
+                    }
+                    break;
                 default:
                     if (!same_ty(n.kids[0].ty, n.kids[1].ty) || !same_ty(n.kids[0].ty, n.ty)) {
                         return fail(err, 4, where,
@@ -505,12 +521,32 @@ bool check_conv_node(const HNode& n, const TyRef& ret, const std::string& where,
             if (!expect_kids(n, 1, 1, where, err)) return false;
             break;
         case HKind::ArrayLit:
-        case HKind::CompositeLit:
-            break;
-        case HKind::Template:
-            if (n.kids.size() % 2 != 0) {
+            break; /* 元素不要求同类型：数组字面量的元素类型取第一个（`lower.cc` 同形） */
+        case HKind::CompositeLit: {
+            /* kids = 字段按声明序、**每个**字段一个（未列的字段是零值 `Const`），所以个数与
+             * 类型上的字段数必须相等，且第 i 个 kid 的类型就是第 i 个字段的类型。 */
+            if (n.ty == nullptr || n.ty->kind != TyKind::Struct) {
+                return fail(err, 4, where, "CompositeLit 的类型必须是 struct");
+            }
+            if (n.kids.size() != n.ty->fields.size()) {
                 return fail(err, 4, where,
-                            "Template 的操作数是（文字段, 表达式）交替，个数必须是偶数，现在是 " +
+                            "CompositeLit 的字段初值个数是 " + std::to_string(n.kids.size()) +
+                                "，应为类型上的字段数 " + std::to_string(n.ty->fields.size()));
+            }
+            for (std::size_t i = 0; i < n.kids.size(); ++i) {
+                if (!same_ty(n.kids[i].ty, n.ty->fields[i].second)) {
+                    return fail(err, 4, kid_path(where, i),
+                                "字段 " + quoted(n.ty->fields[i].first) +
+                                    " 的初值类型与字段类型不一致");
+                }
+            }
+            break;
+        }
+        case HKind::Template:
+            /* 文字段与插值交替、文字段多一个 ⇒ kid 个数是**奇数**（2×插值数 + 1）。 */
+            if (n.kids.empty() || n.kids.size() % 2 == 0) {
+                return fail(err, 4, where,
+                            "Template 的操作数是（文字段, 表达式）交替，文字段多一个，个数必须是奇数，现在是 " +
                                 std::to_string(n.kids.size()));
             }
             for (std::size_t i = 0; i < n.kids.size(); i += 2) {
@@ -590,7 +626,8 @@ std::string dump(const Hir& hir) {
     out += "Hir funcs=" + std::to_string(hir.funcs.size()) + " globals=" +
            std::to_string(hir.globals.size()) + " externs=" + std::to_string(hir.externs.size()) +
            " consts=" + std::to_string(hir.consts.size()) +
-           " strings=" + std::to_string(hir.strings.size()) + "\n";
+           " strings=" + std::to_string(hir.strings.size()) +
+           " structs=" + std::to_string(hir.structs.size()) + "\n";
     for (std::size_t i = 0; i < hir.strings.size(); ++i) {
         out += indent_of(1) + "string[" + std::to_string(i) + "] bytes=" +
                quoted(hir.strings[i].bytes) +
@@ -608,6 +645,16 @@ std::string dump(const Hir& hir) {
         out += indent_of(1) + "const[" + std::to_string(i) + "] name=" +
                quoted(hir.consts[i].name) + " ty=" + ty_text(hir.consts[i].ty) +
                " value=" + hex64(hir.consts[i].bits) + "\n";
+    }
+    for (std::size_t i = 0; i < hir.structs.size(); ++i) {
+        const HirStruct& st = hir.structs[i];
+        out += indent_of(1) + "struct[" + std::to_string(i) + "] name=" + quoted(st.name) +
+               " bits=" + std::to_string(st.bits) + "\n";
+        for (std::size_t j = 0; j < st.fields.size(); ++j) {
+            out += indent_of(2) + "field[" + std::to_string(j) + "] name=" +
+                   quoted(st.fields[j].name) + " ty=" + ty_text(st.fields[j].ty) +
+                   " offset=" + std::to_string(st.fields[j].offset) + "\n";
+        }
     }
     dump_func(out, "main", hir.main, 1);
     for (std::size_t i = 0; i < hir.funcs.size(); ++i) {

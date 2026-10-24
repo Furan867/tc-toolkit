@@ -1,0 +1,22 @@
+Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=1
+  struct[0] name="Point" bits=56
+    field[0] name="x" ty=U8 offset=0
+    field[1] name="y" ty=U32 offset=1
+    field[2] name="z" ty=U16 offset=5
+  main key="main" name="main" ret=Void params=0 caps=0
+    Block span=7:0
+      While label="run_sim" span=7:0
+        Const ty=Bool const=0x1 span=7:0
+        Block span=7:0
+          VarDecl ty=Struct.Point name="p" span=8:0
+            CompositeLit ty=Struct.Point span=8:0
+              Const ty=U8 const=0x1 span=8:0
+              Const ty=U32 const=0x7 span=8:0
+              Const ty=U16 const=0x0 span=8:0
+          Assign span=9:0
+            Member ty=U16 field=2 offset=5 span=9:0
+              Local ty=Struct.Point name="p" span=9:0
+            Const ty=U16 const=0x2 span=9:0
+          VarDecl ty=U32 name="w" span=10:0
+            Member ty=U32 field=1 offset=1 span=10:0
+              Local ty=Struct.Point name="p" span=10:0

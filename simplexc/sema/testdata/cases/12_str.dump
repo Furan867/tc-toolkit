@@ -1,7 +1,7 @@
 Hir funcs=0 globals=0 externs=0 consts=0 strings=2 structs=0
   string[0] bytes="abc" cstring=false
   string[1] bytes="abd" cstring=false
-  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
     Block span=4:0
       While label="run_sim" span=4:0
         Const ty=Bool const=0x1 span=4:0

@@ -2093,11 +2093,16 @@ int Analyzer::instantiate_top(const FunctionDef& d, const Inst& inst, const Clos
 
     HirFunc fn;
     fn.key = key;
-    /* 逻辑名照 §2b：`main` / `f$u64`。`$c<n>` / `#L<lo>` / `tc_main` 是 codegen 派生的符号名，
-     * sema 不拼（拼了等于把产物细节钉进 HIR）；`cap_index` 只给编号。 */
+    /* `name` 只给纯 def 名：`$<sig>` / `$c<n>` / `#L<行>` / `tc_main` 都是 codegen 派生的
+     * 产物符号名（方案 §2b 补漏 1），sema 只交出拼它们要用的三个事实
+     * （`inst_sig` / `cap_index` / `decl_line` / `line_suffix`）。 */
     fn.name = d.name;
-    if (!inst.sig.empty()) fn.name += "$" + inst.sig;
+    fn.inst_sig = inst.sig;
     fn.cap_index = cap_index;
+    fn.decl_line = d.lo;
+    /* 旧 `lower.cc`：同名顶层 def 多于一个时产物名挂 `#L<行>`，否则就是裸名字。 */
+    const auto same = mod_->defs.find(d.name);
+    fn.line_suffix = same != mod_->defs.end() && same->second.size() > 1;
     fn.ret = inst_ret_type(d.ret.get(), inst, d.lo);
     for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
         fn.params.push_back(HParam{inst.rt_params[i]->name, inst.rt_types[i]});
@@ -2135,9 +2140,10 @@ int Analyzer::instantiate_nested(const DefStmt& st, const std::vector<TyRef>& pa
 
     HirFunc fn;
     fn.key = key;
-    /* 逻辑名只给 def 自己的名字：`owner + "$" + name + "#L<line>"` 是 codegen 按 §2b 补漏 1
-     * 派的符号名，这里再拼一遍就把 owner 前缀叠两次了。 */
+    /* `name` 只给 def 自己的名字：`owner + "$" + name + "#L<line>"` 是 codegen 按 §2b 补漏 1
+     * 派的符号名（`owner` 还取决于调用点），这里再拼一遍就把 owner 前缀叠两次了。 */
     fn.name = st.name;
+    fn.decl_line = st.src_line;
     fn.ret = defstmt_ret(st);
     for (std::size_t i = 0; i < st.params.size() && i < param_tys.size(); ++i) {
         fn.params.push_back(HParam{st.params[i]->name, param_tys[i]});

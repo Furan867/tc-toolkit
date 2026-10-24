@@ -1,6 +1,6 @@
 Hir funcs=5 globals=0 externs=0 consts=1 strings=0 structs=0
   const[0] name="#SIMULATION_STATE" ty=Ptr value=0x232a9f50000
-  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
     Block span=7:0
       While label="run_sim" span=7:0
         Const ty=Bool const=0x1 span=7:0
@@ -28,19 +28,19 @@ Hir funcs=5 globals=0 externs=0 consts=1 strings=0 structs=0
                 Call ty=Void callee=func:4 span=13:0
           VarDecl ty=U64 name="again" span=15:0
             Call ty=U64 callee=func:0 span=15:0
-  func[0] key="get_time" name="get_time" pre_body=get_time cap_index=-1 ret=U64 params=0 caps=0
+  func[0] key="get_time" name="get_time" inst_sig="" pre_body=get_time cap_index=-1 decl_line=0 line_suffix=0 ret=U64 params=0 caps=0
     Block span=8:0
-  func[1] key="sleep" name="sleep" pre_body=sleep cap_index=-1 ret=Void params=1 caps=0
+  func[1] key="sleep" name="sleep" inst_sig="" pre_body=sleep cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=1 caps=0
     param[0] name="duration" ty=U64
     Block span=9:0
-  func[2] key="memory_clear" name="memory_clear" pre_body=memory_clear cap_index=-1 ret=Void params=2 caps=0
+  func[2] key="memory_clear" name="memory_clear" inst_sig="" pre_body=memory_clear cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=2 caps=0
     param[0] name="source" ty=Ptr
     param[1] name="length" ty=S64
     Block span=10:0
-  func[3] key="memory_copy" name="memory_copy" pre_body=memory_copy cap_index=-1 ret=Void params=3 caps=0
+  func[3] key="memory_copy" name="memory_copy" inst_sig="" pre_body=memory_copy cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=3 caps=0
     param[0] name="source" ty=Ptr
     param[1] name="destination" ty=Ptr
     param[2] name="length" ty=S64
     Block span=11:0
-  func[4] key="thread_exit" name="thread_exit" pre_body=thread_exit cap_index=-1 ret=Void params=0 caps=0
+  func[4] key="thread_exit" name="thread_exit" inst_sig="" pre_body=thread_exit cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
     Block span=13:0

@@ -3,7 +3,7 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=1
     field[0] name="x" ty=U8 offset=0
     field[1] name="y" ty=U32 offset=1
     field[2] name="z" ty=U16 offset=5
-  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
     Block span=7:0
       While label="run_sim" span=7:0
         Const ty=Bool const=0x1 span=7:0

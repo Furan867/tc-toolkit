@@ -14,7 +14,7 @@ Hir funcs=1 globals=0 externs=0 consts=3 strings=1 structs=1
   struct[0] name="Pair" bits=16
     field[0] name="lo" ty=U8 offset=0
     field[1] name="hi" ty=U8 offset=1
-  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
     Block span=16:0
       While label="run_sim" span=16:0
         Const ty=Bool const=0x1 span=16:0
@@ -39,7 +39,7 @@ Hir funcs=1 globals=0 externs=0 consts=3 strings=1 structs=1
                 Local ty=U1 name="b" span=23:0
             Block span=23:0
               Break label="" span=23:0
-  func[0] key="pick" name="pick" pre_body=none cap_index=-1 ret=U8 params=1 caps=0
+  func[0] key="pick" name="pick" inst_sig="" pre_body=none cap_index=-1 decl_line=12 line_suffix=0 ret=U8 params=1 caps=0
     param[0] name="i" ty=S64
     Block span=12:0
       Return span=13:0

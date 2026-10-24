@@ -6,7 +6,7 @@ Hir funcs=0 globals=2 externs=0 consts=2 strings=0 structs=1
   struct[0] name="Pair" bits=64
     field[0] name="lo" ty=U32 offset=0
     field[1] name="hi" ty=U32 offset=4
-  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
     Block span=14:0
       While label="run_sim" span=14:0
         Const ty=Bool const=0x1 span=14:0

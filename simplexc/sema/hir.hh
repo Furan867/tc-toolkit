@@ -196,7 +196,13 @@ struct HCapture {
 
 struct HirFunc {
     std::string key;
+    /* 纯 def 名（顶层 = `FunctionDef` 的名字、嵌套 = `DefStmt` 的名字）：**不含** `$<sig>`、
+     * 不含 `#L<行>` —— 那两段是产物符号名，按方案 §2b 补漏 1 由 codegen 派生。 */
     std::string name;
+    /* 泛型实例的实参规范化串（旧 `lower.cc` 的 `inst.sig`）：产物名 `$<sig>` 段就是它。
+     * 空 = 非泛型。重载消歧用的声明参数类型**不进这里** —— 它只在 sema 内部挑 def，
+     * 旧路径的产物名也不含它（只给泛型挂 `$sig`）。 */
+    std::string inst_sig;
     /* 非 `None` = 这是个前缀函数实例：codegen 不编译 `body`，改发对应 `body_*`。
      * 放在 `key`/`name` 之后的原因只有一个：dump 的 `func[i] …` 行按字段声明序排。 */
     HPreBody pre_body = HPreBody::None;
@@ -206,6 +212,13 @@ struct HirFunc {
      * （同一 def 的多个捕获实例只能靠这个序号区分）。
      * 嵌套 def 恒为 `-1`：现状给嵌套 def 起的产物名本来就不挂 `$c`。 */
     int cap_index = -1;
+    /* def 的声明行（顶层 = `FunctionDef::lo`、嵌套 = `DefStmt::src_line`）：产物名的 `#L<行>`
+     * 段就是它（旧 `lower.cc` 的 `ensure_*_fn` 用的也是这两个值）。 */
+    int decl_line = 0;
+    /* 顶层实例的产物名里挂不挂 `#L<行>`：旧路径的条件是「同名顶层 def 多于一个」（那才需要在
+     * 名字上区分两个同名的 def）。这是**文件级**事实，codegen 从 HIR 里数不出来（它只看得见
+     * 已实例化的那些），所以在 sema 算好。嵌套 def 恒为 false：它们的名字永远带 `#L<decl_line>`。 */
+    bool line_suffix = false;
     std::vector<HParam> params;
     std::vector<HCapture> caps;
     HNode body; /* 恒为 Block */

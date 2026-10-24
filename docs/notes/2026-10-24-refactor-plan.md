@@ -209,3 +209,36 @@ S2b-3 完成：19 个 case 全过（`analyze_selftest`），`sema` 侧不再有�
 3. **`$` 参数（别名语义）HIR 仍无表示**，继续报未实现。S2c 不许为了「覆盖更多语料」去补这条——它是独立语义缺口，与分层无关。
 
 目录改名（`lower/` → `codegen/`）单独一步做，不与内容切换混在一个提交里：改名会让 git 的 rename 检测吃掉 diff 可读性，混在一起就找不到「哪一行逻辑变了」。
+
+## 2f. 内建与前缀函数的 HIR 表示（2026-10-24 冻结，供 S2b-4 与 S2c 并行）
+
+起因：S2c 开工时实测 **`sema::analyze` 对 98 份语料 0 份成功**。第一道墙是顶层 `var` 的
+`raw_cast(<Arr[U64]>, <常量地址>)`（常量求值不认 `raw_cast`），后面是内建、前缀函数、方法调用、
+运行期全局初值。这四样在 98 份里每份都有，所以 S2c 不能等，也不能靠改判据绕过。
+
+**`HBuiltin` 只许追加**（现有 `Load=0 / Store=1 / RawCast=2` 不动，改号等于悄悄改掉所有 dump 的含义）：
+
+| 编号 | 名字 | 备注 |
+| --- | --- | --- |
+| 3 | `asr` | 算术右移；有符号性影响语义 |
+| 4 | `clz` | `llvm.ctlz.i64`；返回类型照现状 |
+| 5 | `ror` | 循环右移 |
+| 6 | `min` | 取窄侧类型规则照 `builtin_minmax` |
+| 7 | `max` | 同上 |
+| 8 | `array` | `<T>, n` 每次调用点一枚私有全局 |
+| 9 | `random` | 递推是**顺序赋值**（`x^=x<<12; x^=x>>25; x^=x>>27; x*=C`），别展平 |
+
+**前缀函数不是内建**：`get_time` / `sleep` / `memory_clear` / `memory_copy` / `thread_exit` 是源码里定义在
+前缀中的普通 `def`，语义上走 `Call{FnId}`。但 codegen 有优化过的 IR 实现（`body_*`），所以：
+
+> `HirFunc` 加 `pre_body { None, GetTime, Sleep, MemoryClear, MemoryCopy, ThreadExit }`。
+> sema 判定「这个实例的 def 来自前缀且名字是这五个之一」时设置；codegen 见到非 `None` **不编译 body**，
+> 改走对应 `body_*`，产物符号名与现状一致。
+
+**顶层 var 的运行期初始化**：语料形态是 `raw_cast(<Arr[U64]>, <常量地址>)`——它**是**编译期常量，
+缺的只是常量求值不认识 `raw_cast`。先把 `cv` 扩到认 `raw_cast(<T>, 常量)`，**不要**为此引入
+「运行期初始化」这个新概念（那会改 `HirGlobal` 的语义，波及 codegen 的 `make_globals`）。
+
+**方法糖**（`.len/.push/.pop/.contains/.next/.min/.size/.write/.array/.cstring` 与时间单位
+`.ms/.ns/.us/.sec/.day/.hour/.min`）：糖消解归 sema，照 `lower.cc` 的 `call_method` 逐条对应；
+HIR 里只留消解后的结果，不留方法名。

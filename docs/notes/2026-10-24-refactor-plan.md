@@ -174,3 +174,22 @@ S1 与 S1b 是「纯搬」，产物必须逐字节相同；S2c 起也要求逐�
 - `ensure_def_fn`（75 行，换侧 10 次）是「发函数体时又发现新实例」的按需生成；分层后必须改成
   sema 先算闭包。它是 S2b 的最难点，先做它再谈其他。
 - 传 `Ty` 的 `is_bool` 名义位不能丢（插值渲染 `true`/`false` vs `1`/`0`），否则 S2 会静默改行为。
+
+## 4c. S3 工单底数（`work/tmp/errors-cut/`，HEAD=59a0297）
+
+- 错误产生点 **252**（218 抛点 + 34 非异常通道：装配 12 / C 边界 6 / 引用出参 6 / decl_errors 2 / top_unsupported 1 / notes 2 / warnings 2 / Diagnostic 1 / GetLastError 2）。
+- 捕获点 **50**（35 catch + 10 引用出参 + 5 非 catch 静默），其中 `catch (...)` 2 处、`GetLastError` 2 处、`errno` 0。
+- **23 个位置必须全覆盖**（2 个 `catch(...)`、10 个引用出参、6 个 catch 内静默吞、5 个非 catch 静默），逐条清单在 `work/tmp/errors-cut/README.md` 第③节，脚本断言一个不缺。
+
+**boundary 的答案：位置（span）这一轴现在完全过不去。** 返回值只有 5 个类别名；失败时三个出参不动；
+detail 只进 `std::cerr`，而游戏是 GUI 进程、壳只重定向改写子进程的 stderr。"阶段"连定义都没有；
+"责任"只剩类别名（`CompileFail`/`std::exception`/`catch(...)` 全折成 `InternalError`）。
+
+三个坑与处置：
+
+1. `frontend/ast.hh:35` 有个**零使用**的 `CompileError`（`ErrKind` + `message` + `Span`），字段与 §2d 不同。
+   **决定：删掉这个死代码，统一用 `sema/errors.hh`**（与接口冻结版 §1 的字段一致）。不删的话谁先去 ast.hh 拿它，字段就对不上。
+2. `hook.log` 的 `stage=ours|ours_timeout|ours_fault` 与 `CompileError::Stage` 同名不同义（实现模式 vs 编译阶段）。
+   **决定：hook.log 那个字段改名**（如 `impl=`），否则"回退率按三轴统计"会串味。
+3. `Unsupported` 只有行号，且 **10 处传 `0`**。三轴改完了，失败用例表照样分不出版。
+   **决定：S3 逐个补真实 span**，不许留 0（「第 0 行」不会自己消失）。

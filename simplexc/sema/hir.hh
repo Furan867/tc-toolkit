@@ -169,6 +169,15 @@ struct HNode {
 /* ---------------------------------------------------------------- 顶层
  * `HirFunc.key` 是规范化实例键（决策 7）、`name` 是产物里的符号名；`main` 是程序根那个块
  * （没有实参也没有实例键，所以它的 key/name 可以是空串，不变量 ⑥ 只查 `funcs[]`）。 */
+/* 前缀函数的**标记**（方案 §2f 冻结）：这五个名字是源码里定义在前缀中的普通 `def`，语义上走
+ * `Call{FnId}`（**不是**内建）；但 codegen 有优化过的 IR 实现（`lower.cc` 的 `body_*`），所以
+ * HIR 只带一标记 —— codegen 见到非 `None` **不编译 body**，改走对应 `body_*`，产物符号名与
+ * 现状一致。
+ *
+ * 判定发生在 sema：调用一个**用户 def 没盖住**的这五个名字时，sema 合成一个实例（名字 + 固定
+ * 签名），把这个标记置上；body 是一个空 `Block`。 */
+enum class HPreBody { None, GetTime, Sleep, MemoryClear, MemoryCopy, ThreadExit };
+
 struct HParam {
     std::string name;
     TyRef ty;
@@ -183,6 +192,9 @@ struct HCapture {
 struct HirFunc {
     std::string key;
     std::string name;
+    /* 非 `None` = 这是个前缀函数实例：codegen 不编译 `body`，改发对应 `body_*`。
+     * 放在 `key`/`name` 之后的原因只有一个：dump 的 `func[i] …` 行按字段声明序排。 */
+    HPreBody pre_body = HPreBody::None;
     /* 有捕获时的实例序号：现状产物名里 `$c<n>` 的 n（`lower.cc` 的 `cap_instances_` 计数，按**首次
      * 遇到**的顺序递增），`-1` = 无捕获。sema 不拼 `$c<n>`（那是 codegen 派生符号名的活，
      * 方案 §2b 补漏 1），但把编号放在这里 —— 它是产物的一部分，而 codegen 无法自己数出来

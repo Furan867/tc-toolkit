@@ -257,3 +257,30 @@ HIR 里只留消解后的结果，不留方法名。
    样本是那 19 个能产出 HIR 的 case。
 3. **产品入口不跟着切**。HIR 入口先只由 `work/tmp/s2c/` 的双跑工具调用，产品路径仍是 `ModuleAst`
    —— 于是 `check.py` 与 98/98 在整个 S2c 期间保持绿，护栏不丢。入口切换等 sema 覆盖达标后单独做，那时是个位数行的改动。
+
+### §2f 追加段（2026-10-24，S2b-4 落地时定的三件事 + 实测底数）
+
+1. **方法糖落到内建 10/11**（`HBuiltin::Len` / `HBuiltin::Ms`，0..9 一字不动）：
+   `Call{Builtin::Len, ty=I64, kids=[obj]}`、`Call{Builtin::Ms, ty=Time, kids=[obj]}`。
+   为什么不消解成已有节点：`.len()` 拆开就是 `inttoptr/ptrtoint` 算术（`load p[-8] >> 16`），
+   `gep -8` 的 IR 形状就没了 —— 语义等价但产物能不能逐字节相同变成「靠 O2 折叠」的赌注，
+   而那是唯一的主判据；IR 形状的选择本来也不该藏在 sema 里（sema 定语义，codegen 定怎么发指令）。
+   `.ms()` 同理：常量折不折由 codegen 定（折法只有一处，还要按 `pat_const` 的符号性扩展口径）。
+   实测底数：98 份语料里 `.len()` **212 处**、`.ms()` **294 处**，其余方法名
+   （`.push/.pop/.contains/.next/.min/.size/.write/.array/.cstring` 与 `.ns/.us/.sec/.day/.hour`）
+   **0 处** —— 它们继续按「未实现」报，别以为要支持十几个方法。
+
+2. **`HirGlobal.init_bits` 只承载全零聚合**：语料里的顶层聚合初值只有
+   `var level_input = Input {}` / `Output {}`（98/98 份，每个字段都是零值），位模式记 0；
+   codegen 按 `ty` 的**整宽**写 `zeroinitializer`。非全零的聚合常量显式报未实现 —— 不许挑一个
+   字段代替整个聚合（那是静默错值）。
+
+3. **`random` 的种子全局进 kids**：`Call{Builtin::Random, kids=[Global 种子, m?]}`。HIR 的引用
+   一律是**已解析的编号**（§2b 形状决定 3），所以不许 codegen 按名字 `global_seed` 去查表。
+
+**S2b-4 之后的覆盖底数**：98 份语料 OK **66** / Unimplemented **32** / 崩溃 **0**；基线里出产物的
+那 75 份中 OK **61** 份。剩余失败按 detail 归类：
+`const #X = "<串>"`（字符串常量，`HirConst` 只有 `bits`、没有串池 id）**15 份**，其中 14 份在
+那 75 份里 —— 也就是那 75 份里剩下的**全部**缺口；前缀里的字符串格式化函数 `hex`/`bin`（14 份）
+与 `str`（2 份）、`ui_set_instruction()` 的重载解析（1 份），这三类 16 份在基线里本来就不出产物
+（`status=fail:rc=1`），不影响 75 份那条判据。

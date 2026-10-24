@@ -5,7 +5,7 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=6 structs=0
   string[3] bytes="x\\by\\x42z" cstring=false
   string[4] bytes="" cstring=false
   string[5] bytes="=\x08" cstring=false
-  main key="main" name="main" cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
     Block span=4:0
       While label="run_sim" span=4:0
         Const ty=Bool const=0x1 span=4:0

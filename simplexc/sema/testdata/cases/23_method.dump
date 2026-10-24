@@ -1,0 +1,40 @@
+Hir funcs=1 globals=0 externs=0 consts=1 strings=1 structs=0
+  string[0] bytes="abcd" cstring=false
+  const[0] name="#CYCLE" ty=S64 value=0x7
+  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+    Block span=9:0
+      While label="run_sim" span=9:0
+        Const ty=Bool const=0x1 span=9:0
+        Block span=9:0
+          VarDecl ty=Str name="s" span=10:0
+            StrLit ty=Str string=0 span=10:0
+          VarDecl ty=S64 name="n" span=11:0
+            Call ty=S64 callee=builtin:10 span=11:0
+              Local ty=Str name="s" span=11:0
+          VarDecl ty=Arr[S64] name="a" span=12:0
+            ArrayLit ty=Arr[S64] span=12:0
+              Const ty=S64 const=0x1 span=12:0
+              Const ty=S64 const=0x2 span=12:0
+              Const ty=S64 const=0x3 span=12:0
+          VarDecl ty=S64 name="m" span=13:0
+            Call ty=S64 callee=builtin:10 span=13:0
+              Local ty=Arr[S64] name="a" span=13:0
+          VarDecl ty=U32 name="cycles" span=14:0
+            Const ty=U32 const=0x5 span=14:0
+          VarDecl ty=U64 name="t" span=15:0
+            Call ty=U64 callee=builtin:11 span=15:0
+              Local ty=U32 name="cycles" span=15:0
+          ExprStmt span=16:0
+            Call ty=Void callee=func:0 span=16:0
+              Local ty=U64 name="t" span=16:0
+          VarDecl ty=Arr[U8] name="e" span=17:0
+            ArrayLit ty=Arr[U8] span=17:0
+          VarDecl ty=S64 name="z" span=18:0
+            Call ty=S64 callee=builtin:10 span=18:0
+              Local ty=Arr[U8] name="e" span=18:0
+          VarDecl ty=U64 name="w" span=19:0
+            Call ty=U64 callee=builtin:11 span=19:0
+              Const ty=S64 const=0x7 span=19:0
+  func[0] key="sleep" name="sleep" pre_body=sleep cap_index=-1 ret=Void params=1 caps=0
+    param[0] name="duration" ty=U64
+    Block span=16:0

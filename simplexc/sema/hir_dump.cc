@@ -12,11 +12,11 @@
  *     const[i] name="…" ty=… value=0x…
  *     struct[i] name="…" bits=…
  *       field[j] name="…" ty=… offset=…
- *     main key="…" name="…" cap_index=-1 ret=… params=N caps=N
+ *     main key="…" name="…" pre_body=… cap_index=-1 ret=… params=N caps=N
  *       param[i] name="…" ty=…
  *       capture[i] name="…" ty=… index=…
  *       <body 那棵树的根>
- *     func[i] key="…" name="…" cap_index=… ret=… params=N caps=N
+ *     func[i] key="…" name="…" pre_body=… cap_index=… ret=… params=N caps=N
  *       …
  *
  * 每个节点一行 `Kind 字段… span=行:列`，字段顺序固定、缩进 2 空格/层、子树跟在父行之后。
@@ -66,6 +66,18 @@ const char* hkind_name(HKind k) {
         case HKind::Switch: return "Switch";
         case HKind::Break: return "Break";
         case HKind::Return: return "Return";
+    }
+    return "?";
+}
+
+const char* hprebody_name(HPreBody k) {
+    switch (k) {
+        case HPreBody::None: return "none";
+        case HPreBody::GetTime: return "get_time";
+        case HPreBody::Sleep: return "sleep";
+        case HPreBody::MemoryClear: return "memory_clear";
+        case HPreBody::MemoryCopy: return "memory_copy";
+        case HPreBody::ThreadExit: return "thread_exit";
     }
     return "?";
 }
@@ -236,6 +248,7 @@ void dump_node(std::string& out, const HNode& n, int depth) {
 
 void dump_func(std::string& out, const char* tag, const HirFunc& fn, int depth) {
     out += indent_of(depth) + tag + " key=" + quoted(fn.key) + " name=" + quoted(fn.name) +
+           " pre_body=" + hprebody_name(fn.pre_body) +
            " cap_index=" + std::to_string(fn.cap_index) + " ret=" + ty_text(fn.ret) +
            " params=" + std::to_string(fn.params.size()) +
            " caps=" + std::to_string(fn.caps.size()) + "\n";

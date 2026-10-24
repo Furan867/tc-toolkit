@@ -1,7 +1,7 @@
 Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=1
   struct[0] name="Point" bits=8
     field[0] name="x" ty=U8 offset=0
-  main key="main" name="main" cap_index=-1 ret=Void params=0 caps=0
+  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
     Block span=8:0
       While label="run_sim" span=8:0
         Const ty=Bool const=0x1 span=8:0

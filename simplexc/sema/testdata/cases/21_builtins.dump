@@ -1,0 +1,53 @@
+Hir funcs=1 globals=1 externs=0 consts=0 strings=0 structs=0
+  global[0] name="global_seed" ty=U64
+  main key="main" name="main" pre_body=none cap_index=-1 ret=Void params=0 caps=0
+    Block span=12:0
+      While label="run_sim" span=12:0
+        Const ty=Bool const=0x1 span=12:0
+        Block span=12:0
+          VarDecl ty=S32 name="a" span=13:0
+            Const ty=S32 const=0xfffffffc span=13:0
+          VarDecl ty=S32 name="b" span=14:0
+            Const ty=S32 const=0xfffffffe span=14:0
+          VarDecl ty=U8 name="c" span=15:0
+            Call ty=U8 callee=builtin:4 span=15:0
+              Const ty=U8 const=0x1 span=15:0
+          VarDecl ty=U8 name="d" span=16:0
+            Const ty=U8 const=0x40 span=16:0
+          VarDecl ty=U8 name="m" span=17:0
+            Const ty=U8 const=0x7 span=17:0
+          VarDecl ty=S32 name="n" span=18:0
+            Const ty=S32 const=0x3 span=18:0
+          VarDecl ty=Arr[U8] name="t" span=19:0
+            Call ty=Arr[U8] callee=builtin:8 span=19:0
+              Const ty=S64 const=0x4 span=19:0
+          VarDecl ty=U64 name="s" span=20:0
+            Call ty=U64 callee=builtin:9 span=20:0
+              Global ty=U64 global=0 span=20:0
+          VarDecl ty=U64 name="q" span=21:0
+            Call ty=U64 callee=builtin:9 span=21:0
+              Global ty=U64 global=0 span=21:0
+              Const ty=U64 const=0x64 span=21:0
+          VarDecl ty=U8 name="p" span=22:0
+            Call ty=U8 callee=func:0 span=22:0
+              Const ty=U8 const=0x5 span=22:0
+              Const ty=U8 const=0x7 span=22:0
+          VarDecl ty=S32 name="r" span=23:0
+            Const ty=S32 const=0xffffffff span=23:0
+          VarDecl ty=U8 name="u" span=24:0
+            Const ty=U8 const=0x1 span=24:0
+          Assign span=25:0
+            Index ty=U8 span=25:0
+              Local ty=Arr[U8] name="t" span=25:0
+              Const ty=S64 const=0x1 span=25:0
+            Local ty=U8 name="d" span=25:0
+  func[0] key="pick" name="pick" pre_body=none cap_index=-1 ret=U8 params=2 caps=0
+    param[0] name="x" ty=U8
+    param[1] name="y" ty=U8
+    Block span=8:0
+      Return span=9:0
+        Call ty=U8 callee=builtin:6 span=9:0
+          Local ty=U8 name="x" span=9:0
+          Call ty=U8 callee=builtin:7 span=9:0
+            Local ty=U8 name="y" span=9:0
+            Const ty=U8 const=0x3 span=9:0

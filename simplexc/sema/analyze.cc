@@ -406,6 +406,26 @@ uint64_t need_const(const HNode& n, int line) {
     return n.const_bits;
 }
 
+/* 顶层全局初值的位模式（`HirGlobal.init_bits` 只有一个 u64 —— 方案 §2b 的冻结形状）。
+ * 语料里非整型/非指针的顶层初值只有 `Input {}` / `Output {}` 这一种：每个字段都是零值，所以
+ * 位模式就是 0（codegen 按 `ty` 的完整宽度写 `zeroinitializer`）。别的聚合常量没有表示位，
+ * 显式报未实现 —— 不许挑一个字段代替整个聚合（那是静默错值）。 */
+uint64_t global_init_bits(const HNode& v, int line) {
+    if (v.kind == HKind::Const) return v.const_bits;
+    if (v.kind == HKind::CompositeLit) {
+        for (const HNode& field : v.kids) {
+            if (field.kind != HKind::Const || field.const_bits != 0) {
+                throw Unsupported("顶层 var 的复合字面量初值不是全零", line);
+            }
+        }
+        return 0;
+    }
+    /* 串/数组初始化式折出来的是 `StrLit` / `ArrayLit` 节点（串池 id / 载荷），而 `init_bits` 只能放
+     * 位模式 —— 所以这里显式报，不拿 0 充数（那就是静默的空指针/空数组）。语料里没有这种顶层
+     * 初始化式（98/98 份只有整型、指针、`raw_cast` 与空聚合）。 */
+    throw Unsupported("顶层 var 的初值不是位模式（字符串/数组初值未接）", line);
+}
+
 /* ---------------------------------------------------------------- 新代码的报错（方案 §2d）
  *
  * 两个薄封装：调用点写出来就是「哪一轴轴」而不是一个裸构造。三个责任档的判定见 `errors.hh`：
@@ -560,7 +580,7 @@ private:
     HNode e_cond(const CondExpr& node);
     HNode string_literal(const std::string& text, int line);
     HNode array_lit_node(const ArrayLitExpr& node);
-    HNode composite_lit_node(const CompositeLitExpr& node);
+    HNode composite_lit_node(const CompositeLitExpr& node, bool const_ctx = false);
     HNode template_expr(const TemplateExpr& node);
     HNode convert(HNode v, const TyRef& target, int line);
     HNode binop(const std::string& op, const HNode& a, const HNode& b, int line);
@@ -588,7 +608,15 @@ private:
     HNode call_nested(const DefStmt& st, const CallExpr& node, const std::string& owner_lex);    HNode call_load(const CallExpr& node);
     HNode call_store(const CallExpr& node);
     HNode call_raw_cast(const CallExpr& node);
+    HNode call_asr(const CallExpr& node);
+    HNode call_clz(const CallExpr& node);
+    HNode call_ror(const CallExpr& node);
+    HNode call_minmax(HBuiltin id, const CallExpr& node);
+    HNode call_array(const CallExpr& node);
+    HNode call_random(const CallExpr& node);
+    HNode call_method(const MemberExpr& callee, const CallExpr& node);
     HNode call_size(const CallExpr& node);
+    HNode call_prefix(const std::string& name, const CallExpr& node);
     HNode builtin_node(HBuiltin id, TyRef ty, std::vector<HNode> kids, int line);
     void def_stmt(HNode& parent, const DefStmt& st);
 
@@ -771,7 +799,7 @@ void Analyzer::make_top_level(const std::vector<const VarDeclStmt*>& top_vars) {
         HirGlobal g;
         g.name = st->name;
         g.ty = v->ty;
-        g.init_bits = v->const_bits;
+        g.init_bits = global_init_bits(*v, st->src_line);
         mod_->globals[g.name] = GlobalRef{static_cast<int>(mod_->hir.globals.size()), g.ty};
         mod_->hir.globals.push_back(std::move(g));
     }
@@ -1220,8 +1248,12 @@ HNode Analyzer::array_lit_node(const ArrayLitExpr& node) {
  *     `node.fields` 的顺序求值；
  *   · HIR 里的 kid 顺序 = **声明序**（方案 §2b 冻结），字面量里没写的字段是它的零值 `Const`。
  *     于是 `kids[i]` 恒对应 `ty->fields[i]`，codegen 不必再处理「哪些字段没写」。
- * 字段按**名字**匹配（与书写顺序无关），未列字段默认 0。 */
-HNode Analyzer::composite_lit_node(const CompositeLitExpr& node) {
+ * 字段按**名字**匹配（与书写顺序无关），未列字段默认 0。
+ *
+ * `const_ctx` = 从 `cv` 进来（顶层 `var level_input = Input {}` 那种）：字段值只能常量求值。
+ * 与 `lower.cc` 的 `in_function` 分支同一个分叉：常量上下文里走 `e()` 会把运行期表达式带进一个
+ * 「没有地方放指令」的位置。 */
+HNode Analyzer::composite_lit_node(const CompositeLitExpr& node, bool const_ctx) {
     const TyRef ty = ty_of_ref(*node.typ, node.src_line);
     if (ty->kind != TyKind::Struct) {
         unimplemented("复合字面量类型 " + std::string(ty_kind_name(ty->kind)), node.src_line);
@@ -1239,6 +1271,14 @@ HNode Analyzer::composite_lit_node(const CompositeLitExpr& node) {
         }
         if (idx == ty->fields.size()) {
             unimplemented("struct " + ty->name + " 没有字段 " + init->name, init->src_line);
+        }
+        if (const_ctx) {
+            std::optional<HNode> raw = const_value(*init->value);
+            if (!raw.has_value()) {
+                unimplemented("复合字面量的字段 " + init->name + " 不是编译期常量", init->src_line);
+            }
+            kids[idx] = convert(std::move(*raw), ty->fields[idx].second, init->src_line);
+            continue;
         }
         HNode v = e(*init->value);
         kids[idx] = convert(std::move(v), ty->fields[idx].second, init->src_line);
@@ -1320,11 +1360,7 @@ HNode Analyzer::convert(HNode v, const TyRef& target, int line) {
 
 HNode Analyzer::e_call(const CallExpr& node) {
     if (const auto* callee = as<IdentExpr>(node.callee.get())) return call_named(callee->name, node);
-    if (const auto* mem = as<MemberExpr>(node.callee.get())) {
-        /* `.len()` / `.ms()` 是「读串头 / 时间单位」的两种真成员调用，HIR 没有对应节点
-         * （§2b 的节点集里没有 Len/Ms）—— 要做就得先给规格加节点，不在这里猜。 */
-        unimplemented("方法调用 ." + mem->name + "()（HIR 没有对应节点）", node.src_line);
-    }
+    if (const auto* mem = as<MemberExpr>(node.callee.get())) return call_method(*mem, node);
     throw Unsupported("被调者形态 " + std::string(ast_kind_name(node.callee->kind)), node.src_line);
 }
 
@@ -1341,19 +1377,18 @@ HNode Analyzer::call_named(const std::string& name, const CallExpr& node) {
     if (name == "load") return call_load(node);
     if (name == "store") return call_store(node);
     if (name == "raw_cast") return call_raw_cast(node);
+    if (name == "asr") return call_asr(node);
+    if (name == "clz") return call_clz(node);
+    if (name == "ror") return call_ror(node);
+    if (name == "min") return call_minmax(HBuiltin::Min, node);
+    if (name == "max") return call_minmax(HBuiltin::Max, node);
+    if (name == "array") return call_array(node);
+    if (name == "random") return call_random(node);
     if (name == "size") return call_size(node);
     if (name == "in_scope" || name == "type_of") {
         throw Unsupported(name + "() 只支持编译期形态", node.src_line);
     }
-    /* 其余内建与前缀函数**本步不接**（它们的体内是 codegen 的活：mask/select/ctlz/私有全局…）。
-     * 显式报「未实现」，不给一个猜出来的语义。 */
-    if (name == "asr" || name == "clz" || name == "ror" || name == "min" || name == "max" ||
-        name == "array" || name == "random") {
-        unimplemented("内建 " + name + "()（本步未接：内建体在 codegen 侧）", node.src_line);
-    }
-    if (is_prefix_func(name)) {
-        unimplemented("前缀函数 " + name + "()（本步未接：函数体在 codegen 侧）", node.src_line);
-    }
+    if (is_prefix_func(name)) return call_prefix(name, node);
     if (mod_->defs.count(name) != 0) {
         throw Unsupported(name + "() 的重载解析拿不到参数类型", node.src_line);
     }
@@ -1441,6 +1476,223 @@ HNode Analyzer::call_raw_cast(const CallExpr& node) {
     auto c = pat_const(v);
     if (c) return const_node(ty, *c & kMask64, node.src_line);
     return cast_node(HCastKind::Raw, std::move(v), ty, node.src_line);
+}
+
+/* ---------------------------------------------------------------- 内建（方案 §2f 的 3..9）
+ *
+ * 七条都逐句照 `lower/lower.cc` 的同名 `builtin_*`：能折的常量在 sema 折好（决策 4：折叠全归
+ * sema），折不了的发 `Call{Builtin}`；操作数的形状与那几条 `builtin_*` 取的一致（见
+ * `builtins.hh` 的头注释）。语义的细节（`min/max` 的窄侧规则、`clz` 数的是声明位宽、`ror` 两条
+ * 路口径不同、`array` 每调用点一枚私有全局、`random` 的顺序递推）一律照现状，不重新推导。
+ */
+
+/* `lower.cc` 的 `builtin_asr`：按 W 位符号位算术右移，与 `>>` 不同 —— n ≥ W 时**饱和**到 W-1
+ * （`>>` 是按 W 取模）。折叠用 `pat_const`（已按源类型符号性扩过的 64 位内容）。 */
+HNode Analyzer::call_asr(const CallExpr& node) {
+    if (node.args.size() != 2) unimplemented("asr(x, n) 的形态", node.src_line);
+    const HNode x = e(*node.args[0]);
+    const HNode n = e(*node.args[1]);
+    if (!is_int(*x.ty)) {
+        unimplemented(std::string("asr 用在 ") + ty_kind_name(x.ty->kind), node.src_line);
+    }
+    const int bits = x.ty->bits;
+    const auto cx = pat_const(x);
+    const auto cn = pat_const(n);
+    if (cx && cn) {
+        const int64_t amt =
+            bits == 64 ? static_cast<int64_t>(*cn & 63)
+                       : static_cast<int64_t>(std::min<uint64_t>(*cn, uint64_t(bits - 1)));
+        const uint64_t r = static_cast<uint64_t>(as_signed(*cx, bits) >> amt) & mask_of(bits);
+        return const_node(x.ty, r, node.src_line);
+    }
+    /* 移位量先 `convert` 到操作数的类型（`builtin_asr` 同）；掩码与 select 饱和是 codegen 的事。 */
+    return builtin_node(HBuiltin::Asr, x.ty, {x, convert(n, x.ty, node.src_line)}, node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_clz`：数的是**操作数声明位宽**里的前导零（`clz(U8)` 数是 8 位里的），
+ * 而且现状**不折常量**（`ctlz` 交给 codegen）—— 这里也不折，折了就把发指令变成发数字。 */
+HNode Analyzer::call_clz(const CallExpr& node) {
+    if (node.args.size() != 1) unimplemented("clz(x) 的形态", node.src_line);
+    const HNode x = e(*node.args[0]);
+    if (!is_int(*x.ty)) {
+        unimplemented(std::string("clz 用在 ") + ty_kind_name(x.ty->kind), node.src_line);
+    }
+    return builtin_node(HBuiltin::Clz, x.ty, {x}, node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_ror`：参考的两条路**口径不同**（实测，见那里的注释）——
+ *   · 两个操作数都是常量：折的是「按源类型符号性扩成 64 位的值与旋转量按 64 取模」的 64 位旋转；
+ *   · 有一个是运行期值：按**操作数位宽**算（旋转量按 W 取模）。
+ * 只写一条就会与参考分叉，所以两条各按实测：常量走上面的折叠，运行期发 `Call{Builtin::Ror}`
+ * （旋转量**不** `convert`，那一路只看低位）。 */
+HNode Analyzer::call_ror(const CallExpr& node) {
+    if (node.args.size() != 2) unimplemented("ror(x, n) 的形态", node.src_line);
+    const HNode x = e(*node.args[0]);
+    const HNode n = e(*node.args[1]);
+    if (!is_int(*x.ty)) {
+        unimplemented(std::string("ror 用在 ") + ty_kind_name(x.ty->kind), node.src_line);
+    }
+    if (!is_int(*n.ty)) {
+        unimplemented(std::string("ror 的旋转量是 ") + ty_kind_name(n.ty->kind), node.src_line);
+    }
+    const int bits = x.ty->bits;
+    const auto cx = pat_const(x);
+    const auto cn = pat_const(n);
+    if (cx && cn) {
+        const uint64_t amt = *cn & 63;
+        const uint64_t r = (*cx >> amt) | (*cx << ((64 - amt) & 63));
+        return const_node(x.ty, r & mask_of(bits), node.src_line);
+    }
+    return builtin_node(HBuiltin::Ror, x.ty, {x, n}, node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_minmax`：结果类型由**静态类型** `unify` 出来（拿不到就按 I64），两侧
+ * `convert` 过去；常量比按目标类型的符号性，运行期交给 codegen 的 `select`。 */
+HNode Analyzer::call_minmax(HBuiltin id, const CallExpr& node) {
+    const bool is_min = id == HBuiltin::Min;
+    const std::string name = hbuiltin_name(id);
+    if (node.args.size() != 2) unimplemented(name + "(a, b) 的形态", node.src_line);
+    const TyRef ta = static_type(*node.args[0]);
+    const TyRef tb = static_type(*node.args[1]);
+    const TyRef ty = unify(ta ? ta : ty_i64(), tb ? tb : ty_i64(), node.src_line);
+    const HNode a = convert(e(*node.args[0]), ty, node.src_line);
+    const HNode b = convert(e(*node.args[1]), ty, node.src_line);
+    const auto ca = pat_const(a);
+    const auto cb = pat_const(b);
+    if (ca && cb) {
+        const int64_t x = ty->is_signed ? as_signed(*ca, ty->bits) : static_cast<int64_t>(*ca);
+        const int64_t y = ty->is_signed ? as_signed(*cb, ty->bits) : static_cast<int64_t>(*cb);
+        const int64_t pick = is_min ? std::min(x, y) : std::max(x, y);
+        return const_node(ty, static_cast<uint64_t>(pick) & mask_of(ty->bits), node.src_line);
+    }
+    return builtin_node(id, ty, {a, b}, node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_array`：`array(<T>, n)` 的值是「指向载荷的指针」，载荷前 8 字节是
+ * `n << 16` 的头、载荷零初始化 —— 这些都归 codegen（每调用点一枚私有全局）。sema 只给
+ * 「元素类型 + 长度（已折成常量）」：`ty` = `Arr[T]`，kids = `[Const n]`。
+ * 长度必须是编译期常量（`builtin_array` 走 `need_const(cv(…))` 同一条口径）。 */
+HNode Analyzer::call_array(const CallExpr& node) {
+    if (node.type_args.size() != 1 || node.args.size() != 1) {
+        unimplemented("array(<T>, n) 的形态", node.src_line);
+    }
+    const TyRef elem = ty_of_ref(*node.type_args[0], node.src_line);
+    const std::optional<HNode> n = const_value(*node.args[0]);
+    if (!n.has_value() || n->kind != HKind::Const) {
+        unimplemented("array(<T>, n) 的长度不是编译期常量", node.src_line);
+    }
+    if (n->const_bits > (uint64_t{1} << 32)) {
+        unimplemented("array 的长度 " + std::to_string(n->const_bits) + " 太大", node.src_line);
+    }
+    return builtin_node(HBuiltin::Array, make_array(elem),
+                        {const_node(ty_i64(), n->const_bits, node.src_line)}, node.src_line);
+}
+
+/* `lower.cc` 的 `builtin_random`：状态就是前缀的 `var global_seed = Seed 1`（语料自己会写
+ * `global_seed = Seed (…)`，所以两边必须是**同一份**全局），递推是四步顺序赋值，全在 codegen。
+ * 种子的全局**在这里按需建**（`prefix_global`，与现状「第一次引用才进 `globals`」同），并作为
+ * 第一枚操作数带下去 —— HIR 的引用一律是已解析的编号。 */
+HNode Analyzer::call_random(const CallExpr& node) {
+    if (node.args.size() > 1) unimplemented("random 的参数个数", node.src_line);
+    const GlobalRef seed = prefix_global("global_seed", node.src_line);
+    std::vector<HNode> kids;
+    kids.push_back(global_node(seed.id, seed.ty, node.src_line));
+    if (!node.args.empty()) {
+        /* `random(n) = U64(state) % U64(n)`：取模口径照 `div`，全在 codegen。 */
+        kids.push_back(convert(e(*node.args[0]), seed.ty, node.src_line));
+    }
+    return builtin_node(HBuiltin::Random, seed.ty, std::move(kids), node.src_line);
+}
+
+/* `lower.cc` 的 `call_method`：方法糖在 sema 消解，**HIR 里不留方法名**。现状只认 `.len()` 与
+ * `.ms()`（98 份语料里 212 / 294 处；其余方法名一处也没有，`call_method` 本来也报错）——
+ * 所以其余名字继续显式报未实现。
+ *
+ * 两个都落到内建 10/11，不拆成已有节点：拆 `.len()` 会把 `gep -8` 换成 inttoptr/ptrtoint
+ * 算术，IR 形状就变了；「产物逐字节相同」是主判据，不能靠 O2 折叠去赌（方案 §2f 追加段）。
+ * 接收者先求值、再按名字分派 —— 与 `call_method` 同（实参它不看，这里也不看）。 */
+HNode Analyzer::call_method(const MemberExpr& callee, const CallExpr& node) {
+    const HNode obj = e(*callee.obj);
+    if (callee.name == "len") {
+        if (obj.ty->kind != TyKind::Str && obj.ty->kind != TyKind::Array) {
+            unimplemented(".len() 用在 " + std::string(ty_kind_name(obj.ty->kind)), node.src_line);
+        }
+        return builtin_node(HBuiltin::Len, ty_i64(), {obj}, node.src_line);
+    }
+    if (callee.name == "ms") {
+        if (!is_int(*obj.ty)) {
+            unimplemented(".ms() 用在 " + std::string(ty_kind_name(obj.ty->kind)), node.src_line);
+        }
+        /* 折不折常量是 codegen 的事（`lower` 在常量时折的是 `pat_const` 那个按源类型符号性
+         * 扩过的 64 位值，折法只该有一处）。 */
+        return builtin_node(HBuiltin::Ms, ty_time(), {obj}, node.src_line);
+    }
+    unimplemented("方法 ." + callee.name + "()", node.src_line);
+}
+
+/* 前缀函数的固定签名（方案 §2f；逐个照 `lower.cc` 的 `call_prefix` + `ensure_prefix_fn`）。 * 参数名取 `stdlib_prefix.si` 里那几个 `def` 自己写的名字 —— HIR 的形参必须带名字，而".
+ * 编不编译 body 是 codegen 看的 `pre_body` 决定的，名字只为了 dump 能读。
+ * 为什么不动 body：现状这五个的体是手写的 IR（`body_get_time` …），顺序与外部符号（
+ * `GetSystemTimePreciseAsFileTime`）都是实测出来的；在 sema 里重新展开一次只会分叉。 */
+struct PrefixFunc {
+    HPreBody tag = HPreBody::None;
+    TyRef ret;
+    std::vector<std::pair<std::string, TyRef>> params;
+};
+
+const std::map<std::string, PrefixFunc>& prefix_funcs() {
+    static const std::map<std::string, PrefixFunc> m{
+        {"get_time", {HPreBody::GetTime, ty_time(), {}}},
+        {"sleep", {HPreBody::Sleep, ty_void(), {{"duration", ty_time()}}}},
+        {"memory_clear",
+         {HPreBody::MemoryClear, ty_void(), {{"source", ty_ptr()}, {"length", ty_i64()}}}},
+        {"memory_copy",
+         {HPreBody::MemoryCopy,
+          ty_void(),
+          {{"source", ty_ptr()}, {"destination", ty_ptr()}, {"length", ty_i64()}}}},
+        {"thread_exit", {HPreBody::ThreadExit, ty_void(), {}}},
+    };
+    return m;
+}
+
+/* `lower.cc` 的 `call_prefix`：五个名字走固定的签名，实参在这里就 `convert` 到声明的形参类型。
+ * 与内建的区别就在 HIR 里：它是一条普通的 `Call{FnId}`，被调那个实例带 `pre_body`、body 是空
+ * `Block`（codegen 见到非 `None` 就不编译 body）。
+ * 实例按名字缓存（`lower.cc` 的 `fns_` 也是按名字缓存）：同一份前缀函数只发一个实例。 */
+HNode Analyzer::call_prefix(const std::string& name, const CallExpr& node) {
+    const auto sig = prefix_funcs().find(name);
+    if (sig == prefix_funcs().end()) unimplemented("前缀函数 " + name, node.src_line);
+    const PrefixFunc& fn_sig = sig->second;
+    if (node.args.size() != fn_sig.params.size()) {
+        unimplemented(name + "(…) 的参数个数", node.src_line);
+    }
+    /* 实参按源码顺序求值 + convert（与 `call_prefix` 的 emit 顺序一致）。 */
+    std::vector<HNode> args;
+    for (std::size_t i = 0; i < fn_sig.params.size(); ++i) {
+        args.push_back(convert(e(*node.args[i]), fn_sig.params[i].second, node.src_line));
+    }
+    int index = -1;
+    const auto hit = mod_->instance.find(name);
+    if (hit != mod_->instance.end()) {
+        index = hit->second;
+    } else {
+        HirFunc fn;
+        fn.key = name;
+        fn.name = name;
+        fn.pre_body = fn_sig.tag;
+        fn.ret = fn_sig.ret;
+        for (const auto& p : fn_sig.params) fn.params.push_back(HParam{p.first, p.second});
+        /* 空块：带 span（不变量 ⑤），但没有语句 —— codegen 根本不会走到它。 */
+        fn.body = stmt_node(HKind::Block, node.src_line);
+        index = static_cast<int>(mod_->hir.funcs.size());
+        mod_->hir.funcs.push_back(std::move(fn));
+        mod_->instance[name] = index;
+    }
+    HNode n = expr_node(HKind::Call, fn_sig.ret, node.src_line);
+    n.callee.kind = HCalleeKind::Func;
+    n.callee.index = index;
+    n.kids = std::move(args);
+    return n;
 }
 
 /* `lower.cc` 的 `builtin_size`：`size(x)` = 操作数**声明类型**的位宽，编译期常数（单位位）。 */
@@ -1680,6 +1932,10 @@ TyRef Analyzer::static_type(const Node& node) {
                     } catch (const Unsupported&) {
                         return nullptr;
                     }
+                }
+                /* `array(<T>, n)`：`var a = array(<U8>, 16)` 的静态类型决定 `a[i]` 的步长。 */
+                if (name == "array" && !n.type_args.empty()) {
+                    return make_array(ty_of_ref(*n.type_args[0], n.src_line));
                 }
                 if ((name == "min" || name == "max" || name == "asr" || name == "clz") &&
                     !n.args.empty()) {
@@ -2096,6 +2352,24 @@ HNode Analyzer::cv(const Node& node) {
             }
             return const_node(inner.ty, fold_unary(n.op, need_const(inner, n.src_line), *inner.ty),
                               n.src_line);
+        }
+        case NK::ArrayLit: return array_lit_node(static_cast<const ArrayLitExpr&>(node));
+        case NK::CompositeLit:
+            /* 顶层 `var level_input = Input {}`：聚合的**常量**形态（`lower.cc` 的 `cv` 也直接
+             * 转 `composite_literal`，那里靠 `in_function` 分叉）。 */
+            return composite_lit_node(static_cast<const CompositeLitExpr&>(node), true);
+        case NK::Call: {
+            /* 顶层 var 的初值在语料里就是 `raw_cast(<Arr[U64]>, <常量地址>)`：它是**编译期常量**
+             * （方案 §2f），所以常量求值要认这一个调用形态，与 `lower.cc` 的 `cv` 同一处、同一句。
+             * 别把它读成「运行期初始化」：那会改 `HirGlobal` 的语义，波及 codegen 的 `make_globals`。 */
+            const auto& n = static_cast<const CallExpr&>(node);
+            const auto* id = as<IdentExpr>(n.callee.get());
+            if (id != nullptr && id->name == "raw_cast" && !n.type_args.empty() &&
+                n.args.size() == 1) {
+                const TyRef ty = ty_of_ref(*n.type_args[0], n.src_line);
+                return const_node(ty, pat_const(cv(*n.args[0])).value_or(0) & kMask64, n.src_line);
+            }
+            throw Unsupported("常量求值遇到函数调用", n.src_line);
         }
         case NK::Binary: {
             const auto& n = static_cast<const BinaryExpr&>(node);

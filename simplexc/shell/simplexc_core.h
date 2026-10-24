@@ -49,6 +49,17 @@ const char* simplexc_compile(const char* src, long long src_len, void** out_blob
  */
 const char* simplexc_last_error(void);
 
+/* 最近一次 `simplexc_compile` 的**非致命观察**串（`; ` 分隔的人话条目：解析期 notes、
+ * 「不可达 def 被跳过」这类不改行为的记录）。
+ *
+ * 为什么要有它：这两类信息不改产物、不该报错（改了会与参考实现的差分判据分叉），
+ * 以前它们只活在 C++ 侧的局部变量里，编译路径上一个消费者都没 —— 游戏是 GUI 进程，
+ * 也看不到 stderr。壳把它写进 `hook.log` 的 `warn` 行，事后才能查到「这里曾经有话」。
+ * 调用约定与 `simplexc_last_error()` 相同：同一次调用里读完即弃，静态存储期不要 free；
+ * 每次 `simplexc_compile` 开头清空，没有观察时是空串。
+ */
+const char* simplexc_last_warnings(void);
+
 /* 释放 simplexc_compile 给出的缓冲；传 NULL 安全。 */
 void simplexc_free(void* blob);
 

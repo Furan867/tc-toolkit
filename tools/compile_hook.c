@@ -356,7 +356,13 @@ static void ours_fail_result(void* out, long long seq, const char* kind) {
     (void)seq;
 }
 
+/* `hook_log` 在下面定义（中间隔着 dump/manifest 一段）：先声明，因为「加载失败」
+   是必须留痕的事件，而痕迹只能写在 ensure_real 里 —— 只有那里拿得到 GetLastError
+   （126 = 找不到文件 / 193 = 位数不对 / 127 = 没有 compile 导出）。 */
+static void hook_log(LONG seq, const char* event, const char* kv);
+
 static void ensure_real(void) {
+    static int fail_logged = 0;
     /* 延迟加载：绝不能在 DllMain 里 LoadLibrary（loader lock 会死锁）。
        多线程首次并发时可能重复 LoadLibrary —— 无害，只是引用计数 +1。
 
@@ -382,6 +388,18 @@ static void ensure_real(void) {
     }
     if (!g_real) g_real = LoadLibraryA(REAL_DLL);      /* 兜底：当前目录 */
     if (g_real) g_compile = (compile_fn)GetProcAddress(g_real, "compile");
+    /* 加载失败以前**零记录**：`compile()` 里 `if (!g_compile) return NULL` 不给 out 写任何字段，
+       hook.log 也没有行 —— 游戏按 out[3]==0 判成功，于是「我们的部署错了」被记成「什么都没发生」
+       （P3）。这里补一行，带 Win32 错误码；只记一次 —— NimMain / NimDestroyGlobals 也会走到本函数，
+       否则每次调用都添一行。 */
+    if (!g_compile && !fail_logged) {
+        DWORD err = GetLastError();
+        char kv[160];
+        fail_logged = 1;
+        snprintf(kv, sizeof kv, "stage=ensure_real\tkind=%s\tdetail=%s err=%lu",
+                 KIND_INTERNAL, REAL_DLL, (unsigned long)err);
+        hook_log(0, "error", kv);
+    }
 }
 
 /* 返回是否真的写出了文件 —— manifest 要按它决定写文件名还是 "-"，
@@ -835,6 +853,20 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
            那几档确实是「我们不行」，让原版顶上是对的。 */
         else if (lstrcmpA(kind, KIND_USER_ERROR) == 0) { impl = "ours_failed"; result = "fail"; }
         else { impl = "fallback"; result = "reference"; need_reference = 1; }
+    }
+
+    /* 编译期的**非致命观察**（解析期 notes、「不可达 def 被跳过」）以前在编译路径上没有任何
+       消费者：C++ 侧只往一个没人读的 `stats.warnings` 里写，而游戏是 GUI 进程、看不到我们的
+       stderr —— 于是「这里被略过了什么」查不到（P2/P6）。这里落一行：事件名用 `warn`（不是
+       `error`），回退率按 `error` 行统计，不会被这些条目污染。`detail=` 与 `error` 行同形，
+       消费者忽略不认识的事件名。 */
+    if (ours_attempted) {
+        const char* warns = simplexc_last_warnings();
+        if (warns && warns[0]) {
+            char kvw[260]; /* `hook_log` 行缓冲 320 减固定前缀后的额度；超了由 snprintf 截断 */
+            snprintf(kvw, sizeof kvw, "detail=%s", warns);
+            hook_log(seq, "warn", kvw);
+        }
     }
 
     /* 失败先记账。为什么放在这里而不是各自的 return 点上：早先版本 ours 失败直接

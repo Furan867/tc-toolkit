@@ -172,6 +172,15 @@ std::unique_ptr<VarDeclStmt> parse_top_var(const Frontend& fe, const Decl& d) {
   return std::unique_ptr<VarDeclStmt>(static_cast<VarDeclStmt*>(st.release()));
 }
 
+/* 把 `ParsedDef::notes` 搬进 `OwnedModule::notes`，带上「哪一段源码」的坐标。
+ * 为什么两个分支（def / 程序根 label）都要调：生产者 `Parser::notes` 两条路径都会写，
+ * 只在 def 那条收就会把 `U8(3)` 这类藏在程序根里的 note 又静默丢掉。 */
+void take_notes(OwnedModule& out, const Decl& d, const ParsedDef& pd) {
+  for (const std::string& note : pd.notes) {
+    out.notes.push_back(d.kind + " '" + d.name + "'（第 " + std::to_string(d.lo) + " 行）：" + note);
+  }
+}
+
 }  // namespace
 
 FunctionDef* OwnedModule::keep(std::unique_ptr<FunctionDef> fn) {
@@ -201,14 +210,26 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
     if (d.kind == "type" && d.depth == 0) {
       scan_type(fe.code_lines, d, out);
     } else if (d.kind == "def" && d.depth == 0) {
-      if (fe.live.count(d.name) == 0) continue; /* 不可达：不解析、不进模块 */
+      if (fe.live.count(d.name) == 0) {
+        /* 不可达：不解析、不进模块 —— 于是它体内的语法错不会报。这是**保真行为**（参考实现同样
+         * 不报，`docs/notes/2026-10-18-m3-0-scope.md:298-305`），改成报错会与逐 tick 差分判据分叉。
+         * 但「悄悄跳过」不行：名字与行号必须留痕，否则事后无从判断某个错是没报还是不存在。 */
+        out.notes.push_back("不可达的 def '" + d.name + "'（第 " + std::to_string(d.lo) +
+                            " 行）已跳过：体内语法/语义错按参考实现不报");
+        continue;
+      }
       ParsedDef pd = fe.parse_def(idx);
+      /* 解析期 notes（`Parser::notes`：体收口行对不上、`U8(…)` 这种紧邻无空白的转换按类型转换
+       * 解析…）以前随 `pd` 析构丢掉，唯一读者是开发工具 `ast_dump`。这里收进 `out.notes`，
+       * 由壳带到 `hook.log`；不升级成错误（§4b D2：只有「我们跳过了某个语义」才算降级）。 */
+      take_notes(out, d, pd);
       out.ast.defs.push_back(out.keep(std::move(pd.fn)));
     } else if (d.kind == "label") {
       if (out.ast.label != nullptr) {
         throw CompileError{Responsibility::UserSource, Stage::Parse, Span{}, "一个文件里有两个顶层语句块（程序根只能有一个）"};
       }
       ParsedDef pd = fe.parse_def(idx);
+      take_notes(out, d, pd);
       out.ast.label = out.keep(std::move(pd.fn));
     } else if ((d.kind == "var" || d.kind == "const") && d.depth == 0) {
       out.vars.push_back(parse_top_var(fe, d));

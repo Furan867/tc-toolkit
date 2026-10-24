@@ -54,6 +54,22 @@ constexpr const char* kSymbolUndefined = "SymbolUndefined";
    壳在同一次调用里读完即弃，所以只有「下一次失败」会覆盖它 —— 不会跨调用串值。 */
 char g_last_error[512];
 
+/* 最近一次的**非致命观察**（解析期 notes、「不可达 def 被跳过」）。长度上限写在 header 里
+ * （“同一次调用里读完即弃”），这里负责拼接与显式截断 —— 内容里带用户源码的标识符，
+ * 长度不受我们控制，所以不用 `+=`，也不手算长度。 */
+char g_last_warnings[1024];
+
+/* notes 只是一行行独立事实，拼成一条串的目的是让 C 边界只多一个函数。`; ` 作分隔是因为
+ * `；` 与 `;` 在日志里都常见得让人看不出来（用户的那条 note 里就有 `U8(…)`）。 */
+void set_last_warnings(const std::vector<std::string>& notes) {
+  std::string joined;
+  for (const std::string& n : notes) {
+    if (!joined.empty()) joined += "; ";
+    joined += n;
+  }
+  std::snprintf(g_last_warnings, sizeof g_last_warnings, "%s", joined.c_str());
+}
+
 /* 产物上限（接口 §4 第 6 条，与装配器同一个数）与头后的尾部 padding（第 8 条：
  * 游戏会读到末尾之外，所以要多分配 8 字节）。上限在这里再判一次：malloc 的尺寸由本文件算。 */
 constexpr std::size_t kMaxBlobBytes = 64u << 20;
@@ -152,6 +168,7 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
   try {
     const std::string text(src, static_cast<std::size_t>(src_len));
     g_last_error[0] = '\0';
+    g_last_warnings[0] = '\0'; /* 观察串也只跟本次调用走 */
     sx::Frontend fe(sx::SrcText{text});
     /* 声明层错误（原型 `Frontend.decl_errors`）不是异常，但同样是我们不支持的源码形态。
        为什么直接判 InternalError 而不是继续 lowering：声明表不全时 lowering 只会报更离谱的错。 */
@@ -161,6 +178,9 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
     }
 
     lw::OwnedModule owned = lw::build_module(fe, fe.src_path);
+    /* notes 在 lowering **之前**就搬进静态缓冲：它们描述的是前端已经发生的事，
+       后面 sema/codegen 失败也不应该把它们弄丢（失败时用户更需要知道「这里被略过了什么」）。 */
+    set_last_warnings(owned.notes);
     const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
     cg::Program prog(hir);
     prog.build();
@@ -220,5 +240,7 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
 }
 
 extern "C" const char* simplexc_last_error(void) { return g_last_error; }
+
+extern "C" const char* simplexc_last_warnings(void) { return g_last_warnings; }
 
 extern "C" void simplexc_free(void* blob) { std::free(blob); }

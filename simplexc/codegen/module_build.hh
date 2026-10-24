@@ -44,6 +44,12 @@ struct OwnedModule {
   std::vector<std::unique_ptr<VarDeclStmt>> vars;
   std::vector<std::unique_ptr<TypeRef>> refs;
 
+  /* 编译期**不改行为**的观察，每条一句人话（谁、第几行、为什么被略过）。
+   * 为什么必须在这里收：本函数是 `ParsedDef::notes` 与「不可达 def」两条信息的**唯一**汇合点
+   * —— 再没人读它们，就等于静默。消费者是壳（`simplexc_last_warnings()` → `hook.log`），
+   * 不是错误：改了行为会与差分判据分叉（`docs/notes/2026-10-24-refactor-plan.md` §4b D1/D2）。 */
+  std::vector<std::string> notes;
+
   OwnedModule() = default;
   OwnedModule(OwnedModule&&) = default;
   OwnedModule& operator=(OwnedModule&&) = default;

@@ -2047,7 +2047,9 @@ V Codegen::composite_literal(const sema::HNode& node) {
      *
      * 但**求值与拼接的先后**是源码书写序（求值有副作用时看得见，实验见 `work/tmp/ul4/`），
      * 而书写序在 HIR 里只剩每个 kid 的 span 行号（前端不填 `col`，见 `span.hh`）。所以按行号
-     * 稳定排序：字段各占一行时正好还原书写序；同一行里几个字段的先后恢复不出来，退回声明序。
+     * 稳定排序：字段各占一行时正好还原书写序；同一行里几个字段的先后恢复不出来，退回声明序
+     * —— 这种退回**只在同一行内声明序倒置时**与旧路径不同，sema 那边已经把它改成报错
+     * （`analyze.cc` 的 `composite_lit_node`），所以这里看到同行字段就是声明序 = 书写序。
      * 补出来的零值 `Const` 带的是字面量首行的 span，排在最前，但下面会跳过它们。 */
     std::vector<std::size_t> order(node.kids.size());
     for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;

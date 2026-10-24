@@ -1293,11 +1293,38 @@ HNode Analyzer::array_lit_node(const ArrayLitExpr& node) {
  *
  * `const_ctx` = 从 `cv` 进来（顶层 `var level_input = Input {}` 那种）：字段值只能常量求值。
  * 与 `lower.cc` 的 `in_function` 分支同一个分叉：常量上下文里走 `e()` 会把运行期表达式带进一个
- * 「没有地方放指令」的位置。 */
+ * 「没有地方放指令」的位置。
+ *
+ * 书写序在 codegen 那侧是按 kid 的 `span.line` 稳定排序还原的（`col` 前端从不填，见
+ * `span.hh`），所以**同一行里的几个字段**还原不出来 —— 那一行内部退回声明序。退回本身没
+ * 问题、**只有它和书写序不同时**才有问题：同一行里出现声明序倒置（写了 `b` 再写 `a`）时，
+ * codegen 会按 `a, b` 求值，与旧路径静默地不同（字段值带副作用时产物不同）。语料里有 26 行
+ * 是「同一行按声明序写」（`Input {a: …, b: …}`），那类退回的结果就是书写序，照旧放行。 */
 HNode Analyzer::composite_lit_node(const CompositeLitExpr& node, bool const_ctx) {
     const TyRef ty = ty_of_ref(*node.typ, node.src_line);
     if (ty->kind != TyKind::Struct) {
         unimplemented("复合字面量类型 " + std::string(ty_kind_name(ty->kind)), node.src_line);
+    }
+    std::vector<std::pair<int, std::size_t>> written; /* (行号, 声明序) 按书写序 */
+    written.reserve(node.fields.size());
+    for (const auto& init : node.fields) {
+        std::size_t idx = ty->fields.size();
+        for (std::size_t i = 0; i < ty->fields.size(); ++i) {
+            if (ty->fields[i].first == init->name) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx == ty->fields.size()) {
+            unimplemented("struct " + ty->name + " 没有字段 " + init->name, init->src_line);
+        }
+        for (const auto& prev : written) {
+            if (prev.first != init->src_line || prev.second < idx) continue;
+            unimplemented("复合字面量的字段 " + init->name +
+                              " 与同行更早写的字段声明序倒置：同一行内的求值序无法从行号恢复",
+                          init->src_line);
+        }
+        written.emplace_back(init->src_line, idx);
     }
     std::vector<HNode> kids;
     kids.reserve(ty->fields.size());

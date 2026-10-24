@@ -40,9 +40,32 @@
    工单在 `work/tmp/errors-cut/`）。
 5. **S4**：codegen 侧最小用例；之后重跑 M5 判据、重记数字。
 
+## 重记账（2026-10-24，重构后实测，`docs/notes/2026-10-24-m5-recount.md`）
+
+98 份 · 10 tick · 非平凡图案（块内 `byte[i]=i&0xFF`）：
+
+| 项 | 数 |
+| --- | --- |
+| 可装配 | 75 |
+| 逐 tick 全等 | 30 |
+| 只差 extern | 31 |
+| 装配成功但 tick 不等（diff） | 14 |
+| 装不出来 | 23（sema 18 + 装配期 5） |
+
+**与重构前那组逐 id 98/98 一致，变了 0 份** —— 这比重构只比 blob 更强，它包含宿主里逐 tick 跑。
+复现：`python simplexc/tools/m5/coverage.py --out-dir work/tmp/recount --ticks 10 --seed seq && python work/tmp/recount/recount.py`。
+
+三轴分布（23 份装不出来）：stage `sema` 18 / `assemble` 5；resp 用户源码错 17 / 未实现 1 / 未实现(推断) 5。
+那 5 份是 `kernel32!memcpy` 缺符号（装配期），18 份的归属：`hex` 13 + `str` 3 + `bin` 1 + `ui_set_instruction` 1。
+
+⚠️ 重记账揪出一条真回归（已修 `4c147ef`）：`hex`/`bin`/`str` 那 17 份从「转交参考、游戏里能跑」
+退化成「`UserError` 不转交、直接报错」——**数字看不出来**，因为数字只量「我们能不能编」，
+不量「游戏里能不能跑」。根因是责任轴判错：我们分不清「用户拼错名字」与「前缀里有、我们没接」。
+
 ## 待定 / 未解
 
-- M5 的语料数字（98 份：75 可装配 / 30 全等 / 14 diff / 23 cli_fail）**全部标为不确定**，重构完成后重跑重记。
+- 壳在 `compile_real.dll` 加载失败时仍不写 `out[3]`（保留 0xCC 哨兵）。那是部署错误、不是源码错误，
+  原版无法转交，要不要自造失败 Result 待定（见 `work/tmp/s3/notes-p236.md`）。
 - 刻意不做（等重构收口）：`hex`/`bin`/`str` 前缀格式化、`ui_set_instruction()` 重载 —— 那 16 份语料基线
   本来就不出产物，现在补等于新增能力，会污染「产物逐字节相同」这条判据。
 - 未验语义：`U-L4` 偏移/padding · `$` 写回时机 · `U-L5` 显式宽度语法 · `Str == Str` 编译期折叠 · `@Type` 值形实参。

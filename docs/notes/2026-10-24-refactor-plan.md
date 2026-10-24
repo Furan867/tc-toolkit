@@ -289,3 +289,26 @@ HIR 里只留消解后的结果，不留方法名。
   实测 `grep 'const #* *= *"' simplexc/corpus/src/*.si` 为 **0 处**，语料里根本没有字符串常量。
 - 刻意不做的三类（18 份）：`hex` 13 + `str` 3 + `bin` 1 + `ui_set_instruction` 1。它们在基线里本来就
   不出产物（`status=fail:rc=1`），补了等于新增能力，会让「产物逐字节相同」混入新产物。
+
+## 2h. 产品入口的切换点（2026-10-24 摸清，供 S2c 收口后执行）
+
+调用链现在只有一处粘合：`frontend` → `lower::build_module(fe) -> OwnedModule`（含 `ModuleAst`）→
+`lower::Program(ast).build()` → `assemble()`。两个调用点：
+
+- `shell/simplexc_core.cc:152`（游戏进程内的产品入口）
+- `cli/simplexc_cli.cc`（离线 CLI，同一个 `build_module`）
+
+所以切换不是「改 codegen」，而是：
+
+1. 让 `codegen::Codegen`（`lower/hir/codegen.hh`）提供与 `lower::Program` 相同的三个出口：
+   `build()` / `ir_text()` / `emit_object()`。它已经只吃 `sema::Hir`、不 include `frontend/`。
+2. 两个调用点各改 2–3 行：`build_module` 之后走 `sema::analyze(owned.ast, …)` 拿到 `Hir`，交给
+   `Codegen`。
+3. 保留 `Program` 与 `module_build` 一个提交周期作为回滚点，再在下一步删掉。
+
+判据：切换后 `blob_baseline --verify` 必须仍是 `98 一致 · 0 差异` —— 那是整个重构的最终验收，
+不是「能编译」或「双跑相同」。双跑只证明了「同一份输入两条路径等价」，切换还要证明「产品路径
+换成新路径后，98 份产物仍然逐字节不变」。
+
+目录改名（`lower/` → `codegen/`）放在删除旧路径之后单独一个提交：改名会让 git 的 rename 检测
+吃掉 diff 可读性，混在一起就找不到「哪一行逻辑变了」。

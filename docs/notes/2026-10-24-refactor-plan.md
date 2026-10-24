@@ -104,6 +104,32 @@ I5 每节点带 span I6 `funcs[].key` 唯一。
 3. **隐式转换的粒度**：`convert` 今天自己按 `TyKind` 决定 `trunc/zext/sext/Raw`，窄常量加宽还走 `pattern_of`；
    只要与 sema 插 `Cast` 的粒度差一点（尤其 `Ptr`↔`Int` 的 `Raw` 与 `is_bool` 名义位），产物会**静默**变。
 
+## 2d. 错误模型（冻结，落码 `sema/errors.hh`）
+
+主设计 §3.4 要求三轴从**第一层**就带全。现在 `Result` 五字段里只有 `out[3]/out[4]` 放消息，责任与位置无处放，`catch(...)` 又全折成 `InternalError`。
+定下来（新代码一律用，旧路径 S3 再迁）：
+
+```cpp
+namespace simplexc::sema {
+enum class Responsibility { UserSource, Unimplemented, OurBug };
+enum class Stage { Lex, Parse, Sema, Codegen, Assemble, Shell };
+struct CompileError {
+  Responsibility resp;
+  Stage stage;
+  Span span;           // line/col；0/0 = 无位置
+  std::string detail;  // 具体是什么构造/为什么不行
+};
+}  // namespace simplexc::sema
+```
+
+约定：
+
+- `Unsupported`（旧）与 `CompileError`（新）**不共存于同一个函数**；新写的 sema 代码只抛后者。
+- 责任判定：sema/codegen 认不出的源码构造 = `Unimplemented`；同一类输入两次行为不一致、内部 assert 失败 = `OurBug`；
+  语法/类型错误 = `UserSource`。
+- 过 C 边界时**不许只剩类别名**（`catch(...)` → `InternalError` 是禁止的）；S3 做这一步。
+- P1..P6 六条静默路径按 §4b 的 D1/D2 办：能不改行为的就不改行为，但必须**可查**。
+
 ## 3. 分步与提交边界
 
 | 步 | 内容 | 判据 | 提交 |

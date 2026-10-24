@@ -1,0 +1,10 @@
+// 引 `docs/facts/semantics.md` §U-L8 的移位量掩码一条：掩码是**存储宽度向上取到 2 的幂再减 1**，
+// 不是 `W-1`（`W-1` = 4 会把 `U5 >> 1` 的移位量 1 抹成 0，`U5 >> 5` 的 5 也抹成 4）。
+// 移位量是运行期值才看得见这条掩码（常量会被 LLVM 折掉）。期望见同名 `.irkeys`。
+run_sim: while true {
+  var x = load(<U5>, U64 4096)
+  var k = load(<U5>, U64 4096)
+  var y = x >> k
+  store(U64 4104, y)
+  break
+}

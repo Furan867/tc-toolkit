@@ -1,5 +1,6 @@
-// 引 `docs/facts/semantics.md` §U-L8：`x >> n` = `trunc_W(lshr(ext64(x), n & (W-1)))` ——
-// **永远 lshr**、移位量按 W 取模（64 位 `& 63`、32 位 `& 31`）；`asr` 是 `ashr` + 先 `icmp ult`
+// 引 `docs/facts/semantics.md` §U-L8：`x >> n` = `trunc_W(lshr(ext64(x), n & 掩码))`，掩码按存储宽度向上取到 2 的幂再减 1
+// （W=32 掩 31、W=64 掩 63；非 2 次幂宽度的档见 `08`/`09` 两个用例）——
+// **永远 lshr**、移位量按掩码取模（64 位 `& 63`、32 位 `& 31`）；`asr` 是 `ashr` + 先 `icmp ult`
 // 把移位量夹到 W-1（n ≥ W 时饱和）。
 // 期望见 `04-ul8-shift-wrap.irkeys`。
 run_sim: while true {

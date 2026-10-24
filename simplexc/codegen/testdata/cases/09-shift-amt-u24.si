@@ -1,0 +1,10 @@
+// 引 `docs/facts/semantics.md` §U-L8 的移位量掩码一条：`U24` 的掩码是 **31**（`W-1` 与
+// `storage_bytes*8-1` 都给 23）。这一档是三条候选规则唯一分得开的地方（`W=17..24`）。
+// 期望见同名 `.irkeys`。
+run_sim: while true {
+  var w = load(<U24>, U64 4096)
+  var q = load(<U24>, U64 4096)
+  var r = w << q
+  store(U64 4104, r)
+  break
+}

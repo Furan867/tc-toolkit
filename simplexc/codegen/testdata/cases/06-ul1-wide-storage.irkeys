@@ -1,0 +1,4 @@
+load i64, ptr
+store i64
+8589934591
+, align 1

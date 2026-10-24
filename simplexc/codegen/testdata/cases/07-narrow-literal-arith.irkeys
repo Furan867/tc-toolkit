@@ -1,0 +1,4 @@
+%y = alloca i32
+and i64 %op, 4294967295
+shl i64
+, 8

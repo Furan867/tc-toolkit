@@ -21,6 +21,8 @@
 #pragma once
 
 #include "../frontend/ast.hh"
+#include "../sema/errors.hh"
+#include "../sema/types.hh"
 #include "llvm_ffi.hh"
 
 #include <cstdint>
@@ -36,67 +38,35 @@
 namespace simplexc {
 namespace lower {
 
-/* ---------------------------------------------------------------- 错误
- * 两种错误分开：`Unsupported` = 没实现 / 没定的构造（带源码行号，接口 §8 要求错误能
- * 定位到 span），`CompileFail` = 内部失败或环境问题。壳按 `ErrKind` 分类回退，别在这里合并。 */
-class Unsupported : public std::runtime_error {
-public:
-    Unsupported(const std::string& msg, int line)
-        : std::runtime_error(msg), line_(line) {}
-    int line() const { return line_; }
-
-private:
-    int line_;
-};
-
-class CompileFail : public std::runtime_error {
-public:
-    explicit CompileFail(const std::string& msg) : std::runtime_error(msg) {}
-};
-
-struct Diagnostic {
-    int line = 0;
-    std::string msg;
-};
-
-/* ---------------------------------------------------------------- 类型
- * 位宽是**真语义**（U-L7），`bits` 可以是 1..64 的任意值。 */
-enum class TyKind { Void, Int, Ptr, Enum, Struct, Array, Str };
-
-struct Ty;
-using TyRef = std::shared_ptr<const Ty>;
-
-struct Ty {
-    TyKind kind = TyKind::Void;
-    int bits = 64;
-    bool is_signed = false;
-    /* `Bool` 与 `U1` 在算术语义上等价（接口 §1），但**插值渲染不同**：`Bool` → `true`/`false`、
-     * `U1` → `1`/`0`（实测见 docs/notes/2026-10-18-str-interp.md）—— 所以这个名义标记必须留着。 */
-    bool is_bool = false;
-    std::string name;                                   /* Enum / Struct 的名字 */
-    std::vector<std::pair<std::string, TyRef>> fields;  /* Struct 字段（按声明序） */
-    TyRef elem;                                         /* Array / Str 的元素类型 */
-};
-
-/* 模块级单例（`I64` / `BOOL` / `PTR` / `STR` / `SEED` / `TIME`）。 */
-const TyRef& ty_void();
-const TyRef& ty_i64();
-const TyRef& ty_bool();
-const TyRef& ty_ptr();
-const TyRef& ty_str();
-const TyRef& ty_seed();
-const TyRef& ty_time();
-
-TyRef make_int(int bits, bool is_signed);
-TyRef make_enum(const std::string& name);
-TyRef make_struct(const std::string& name, int bits, std::vector<std::pair<std::string, TyRef>> fields);
-TyRef make_array(TyRef elem);
-
-inline constexpr uint64_t kMask64 = ~uint64_t{0};
-uint64_t mask_of(int bits);
-int storage_bytes(const Ty& ty);   /* 内存字节宽度；Void / 未知抛 Unsupported */
-const char* ty_kind_name(TyKind k);
-inline bool is_int(const Ty& ty) { return ty.kind == TyKind::Int; }
+/* ---------------------------------------------------------------- 过渡态（②d 清理）
+ * 类型系统与错误已搬到 `sema/`，用 using 把名字引入本命名空间 —— 让 `lower/` 里的调用点一行
+ * 不用改。**这是刻意的过渡态**，不是长期形态。 */
+using sema::CompileFail;
+using sema::Diagnostic;
+using sema::Ty;
+using sema::TyRef;
+using sema::TyKind;
+using sema::Unsupported;
+using sema::as_signed;
+using sema::fold_arith;
+using sema::fold_cmp;
+using sema::fold_unary;
+using sema::is_int;
+using sema::kMask64;
+using sema::make_array;
+using sema::make_enum;
+using sema::make_int;
+using sema::make_struct;
+using sema::mask_of;
+using sema::storage_bytes;
+using sema::ty_bool;
+using sema::ty_i64;
+using sema::ty_kind_name;
+using sema::ty_ptr;
+using sema::ty_seed;
+using sema::ty_str;
+using sema::ty_time;
+using sema::ty_void;
 
 /* 表达式的 lowering 结果：i64 位模式值（或 struct 聚合）+ 类型 + 可选的编译期常量。 */
 struct V {
@@ -107,14 +77,6 @@ struct V {
     static V instr(LLVMValueRef v, TyRef t) { return V{v, std::move(t), std::nullopt}; }
     static V konst(TyRef t, uint64_t c) { return V{nullptr, std::move(t), c}; }
 };
-
-/* ---------------------------------------------------------------- 常量折叠
- * 结果是**该类型的位模式**（`0 <= v < 2^bits`）。三条参考行为（见 `docs/facts/semantics.md`）：截断发生在运算
- * 结果上（U-L7）、`>>` 是 lshr 语义、除法的符号性看被除数且除数为 0 时商 0 余数为被除数。 */
-int64_t as_signed(uint64_t x, int bits);
-uint64_t fold_arith(const std::string& op, uint64_t a, uint64_t b, const Ty& ty);
-uint64_t fold_unary(const std::string& op, uint64_t a, const Ty& ty);
-uint64_t fold_cmp(const std::string& op, uint64_t a, uint64_t b, const Ty& ty);   /* 0 / 1 */
 
 /* ---------------------------------------------------------------- 前端 → lowering 的输入
  * 声明表（`Program` 从 `frontend/decls.hh` 拿的那张）。`ast.hh` 没有顶层 `type` 声明的

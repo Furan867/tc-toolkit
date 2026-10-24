@@ -81,6 +81,7 @@ CORE_SOURCES = [
     "simplexc/lower/module_build.cc",
     "simplexc/lower/lower.cc",
     "simplexc/lower/llvm_ffi.cc",
+    "simplexc/sema/types.cc",
     "build/objs/assemble.o",
 ]
 

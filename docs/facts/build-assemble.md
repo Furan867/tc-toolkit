@@ -71,3 +71,13 @@ COFF 对象文件里 `.bss` 是 `SizeOfRawData=N / PointerToRawData=0` —— �
 所以「产物确定」只能在**装配后的 blob** 上说；比 sha / 做 A/B 记录都要拿 blob，不要拿 `.obj`。
 验证：连编两次 `cmp -l` 只差 offset 4 的 1 字节；设 `SOURCE_DATE_EPOCH=0` 两次仍是不同时间戳
 最后验证：2026-10-17
+
+### blob 的 raw sha 只在同一次开机内跨进程可比
+系统 DLL 基址一次开机内跨进程共用（实测三个独立进程拿到同一个 `kernel32.base`），所以同一份 `.si`
+连编 3 次（3 个进程）raw 逐字节相同；**跨 boot 会变**，差异全部落在 extern 槽。
+所以「重构前后产物相同」这类回归要比**掩掉槽位**的归一化 sha，不能比 raw：槽位从 `.stubs` sidecar 取
+（`kind=stub` 的 imm64、`kind=slot` 的 8 字节）。
+验证：`python simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline` —— 比 6 个字段
+（status / blob_len / entry / stub_count / norm_sha256 / stubs_sha256），`raw_sha256` 只记不比；
+反向对照：改 1 个非槽字节 → 恰好命中 1 份并报出字节区间，改槽内字节 → 仍判等。
+最后验证：2026-10-24

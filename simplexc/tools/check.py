@@ -8,6 +8,7 @@
 | `corpus`        | `python simplexc/tools/recompile_corpus.py --check`（M0：语料/manifest 一致 + 同源三条断言）|
 | `host_selftest` | `python simplexc/tools/host/selftest.py --src …006.si --bin …006.bin --ticks 3`（M2 宿主自比对）|
 | `lower_equiv`   | `build/simplexc_cli.exe`（**C++ 产品路径**）出 rv32im 产物 → 宿主与参考逐 tick 比对（10 tick，灌 RESET_DATA）|
+| `blob_baseline` | `simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline`（98 份语料的装配产物逐字段比，重构前后必须等价）|
 | `hook_offline`  | `hook_offline.run_all()`：壳的四种情形 + refcmp + 超时（8 个 case）|
 | `probe_006`     | `simplexc/tools/probe_006.py`（M1.5 探针，**可选**：缺依赖/脚本在改 → SKIP）|
 
@@ -57,6 +58,9 @@ CORPUS = os.path.join(HERE, "recompile_corpus.py")
 SELFTEST = os.path.join(HERE, "host", "selftest.py")
 HOOK_OFFLINE = os.path.join(HERE, "hook_offline.py")
 PROBE = os.path.join(HERE, "probe_006.py")
+BLOB_BASELINE = os.path.join(HERE, "blob_baseline.py")
+BASELINE_DIR = os.path.join(HERE, "baseline")
+BASELINE_BLOBS = os.path.join(ROOT, "work", "tmp", "baseline-blobs")
 
 CORPUS_SRC = os.path.join("simplexc", "corpus", "src", "006.si")
 CORPUS_BIN = os.path.join("simplexc", "corpus", "ref", "006.bin")
@@ -226,21 +230,21 @@ def step_lower_equiv(ctx):
         with open(blob + ".entry", encoding="ascii") as f:
             ours_entry = "0x" + f.read().strip()
     except OSError as e:
-        summary["verdict"] = "读不到 .entry：%s" % e
+        summary["verdict"] = f"读不到 .entry：{e}"
         return {**r, "summary": summary}
     summary["ours_entry"] = ours_entry
 
     logs = {}
     for tag, binpath, entry in (("ref", RV32IM_BIN, RV32IM_REF_ENTRY),
                                ("ours", blob, ours_entry)):
-        out = os.path.join(workdir, "%s.jsonl" % tag)
+        out = os.path.join(workdir, f"{tag}.jsonl")
         with contextlib.suppress(OSError):
             os.remove(out)
         hr = run_cmd([sys.executable, HOST, "--src", RV32IM_SRC, "--bin", binpath,
                       "--entry", entry, "--ticks", str(LOWER_TICKS),
                       "--seed-reset-data", "seq", "--out", out], timeout=STEP_TIMEOUT)
         if hr["rc"] != 0 or not os.path.exists(out):
-            summary["verdict"] = "%s 侧宿主失败：%s" % (tag, (hr["output"] or "")[-400:])
+            summary["verdict"] = f"{tag} 侧宿主失败：{(hr['output'] or '')[-400:]}"
             return {**r, "output": r["output"] + "\n" + hr["output"], "summary": summary}
         with open(out, encoding="utf-8") as f:
             logs[tag] = [json.loads(line) for line in f if line.strip()]
@@ -249,15 +253,42 @@ def step_lower_equiv(ctx):
     try:
         diff = mod.compare(logs["ref"], logs["ours"])
     except Exception as e:                                     # noqa: BLE001 —— 比对器自己炸也要算 FAIL
-        summary["verdict"] = "比对器抛异常：%s" % e
+        summary["verdict"] = f"比对器抛异常：{e}"
         return {**r, "rc": 1, "status": "FAIL", "summary": summary}
-    summary["ticks"] = "%d/%d" % (len(logs["ref"]), len(logs["ours"]))
+    summary["ticks"] = f"{len(logs['ref'])}/{len(logs['ours'])}"
     summary["diff_count"] = len(diff)
     if diff:
         summary["first_diff"] = str(diff[0])[:300]
-        summary["verdict"] = "差异 %d 条" % len(diff)
+        summary["verdict"] = f"差异 {len(diff)} 条"
         return {**r, "rc": 1, "status": "FAIL", "reason": "有差异", "summary": summary}
     summary["verdict"] = "逐 tick 全等"
+    return {**r, "summary": summary}
+
+
+@step("blob_baseline", "产物基线回归（98 份语料的装配产物逐字段比，blob_baseline.py --verify）")
+def step_blob_baseline(ctx):
+    """重构（`lower/` → `sema/` + `codegen/`）的硬判据：每份语料的装配产物在重构前后等价。
+
+    缺产物目录是 SKIP 不是 FAIL：`work/tmp/baseline-blobs/` 体积大不进 git，别的机器 / 别的
+    worktree 本来就没有 —— 那说明这台机器还没 record，不是重构把产物改坏了。判等清单在 git 里。
+    """
+    record_hint = f"python simplexc/tools/blob_baseline.py --record {rel(BASELINE_DIR)}"
+    if not os.path.isdir(BASELINE_BLOBS):
+        why = f"缺产物目录 {rel(BASELINE_BLOBS)}/（不进 git）：先跑 {record_hint}"
+        return {"status": "SKIP", "rc": None, "seconds": 0.0,
+                "summary": {"reason": why}, "output": "", "reason": why}
+    if not os.path.exists(SIMPLEXC_CLI):
+        why = "缺 CLI：先跑 python simplexc/tools/build.py"
+        return {"status": "SKIP", "rc": None, "seconds": 0.0,
+                "summary": {"reason": why}, "output": "", "reason": why}
+    r = run_cmd([sys.executable, BLOB_BASELINE, "--verify", BASELINE_DIR,
+                 "--blobs", BASELINE_BLOBS, "--workdir", os.path.join(WORK, "blob_baseline")],
+                timeout=STEP_TIMEOUT)
+    summary = {"blobs": rel(BASELINE_BLOBS)}
+    same, diff = _num(r"一致 (\d+) 份", r["output"]), _num(r"差异 (\d+) 份", r["output"])
+    if same is not None and diff is not None:
+        summary["same"] = f"{same}/{same + diff}"
+        summary["diff"] = str(diff)
     return {**r, "summary": summary}
 
 

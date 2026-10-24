@@ -616,8 +616,8 @@ void Codegen::s_Return(const sema::HNode& st) {
     if (cur_fn().ret_ty->kind == TyKind::Void) {
         throw Unsupported("None 函数里 return 值", st.span.line);
     }
-    V v = convert(e(st.kids[0]), cur_fn().ret_ty, st.span.line);
-    LLVMBuildRet(cur_fn().bd, llv(v));
+    /* 返回值的转换已经是 kid 里的 `Cast` 节点（sema 的 `ret_stmt` 发）。 */
+    LLVMBuildRet(cur_fn().bd, llv(e(st.kids[0])));
 }
 
 void Codegen::s_Switch(const sema::HNode& st) {
@@ -804,30 +804,33 @@ V Codegen::e_cond(const sema::HNode& node) {
 
     LLVMPositionBuilderAtEnd(cur_fn().bd, then_bb);
     cur_fn().block = then_bb;
-    V tv = e(node.kids[1]);
+    auto dt = eval_deferred(node.kids[1]);
     LLVMBasicBlockRef t_bb = cur_fn().block;
     LLVMPositionBuilderAtEnd(cur_fn().bd, else_bb);
     cur_fn().block = else_bb;
-    V ev = e(node.kids[2]);
+    auto de = eval_deferred(node.kids[2]);
     LLVMBasicBlockRef e_bb = cur_fn().block;
 
+    const V& tv = dt.second;
+    const V& ev = de.second;
     if (tv.ty->kind == TyKind::Void || ev.ty->kind == TyKind::Void) {
         throw Unsupported("三目的一支没有值", node.span.line);
     }
     const TyRef& ty = node.ty;
-    /* 每个臂的 `convert` 必须在**它自己那个块**里做完（旧实现如此）。 */
+    /* 每个臂顶层的 `Cast` 必须在**它自己那个块**里发，而且是在两个臂都求值**之后**
+     * ——旧 `convert` 就是这个顺序，号编也跟着它。 */
     LLVMPositionBuilderAtEnd(cur_fn().bd, t_bb);
-    tv = convert(tv, ty, node.span.line);
+    const V t_fin = settle(dt);
     LLVMBuildBr(cur_fn().bd, end_bb);
     LLVMPositionBuilderAtEnd(cur_fn().bd, e_bb);
-    ev = convert(ev, ty, node.span.line);
+    const V e_fin = settle(de);
     LLVMBuildBr(cur_fn().bd, end_bb);
 
     LLVMPositionBuilderAtEnd(cur_fn().bd, end_bb);
     cur_fn().block = end_bb;
     /* phi 的结果类型是**值的类型**（窄整数一律 i64 位模式），不是内存宽度。 */
     LLVMValueRef phi = LLVMBuildPhi(cur_fn().bd, val_ll(*ty), "cnd");
-    std::vector<LLVMValueRef> vals{llv(tv), llv(ev)};
+    std::vector<LLVMValueRef> vals{llv(t_fin), llv(e_fin)};
     std::vector<LLVMBasicBlockRef> blks{t_bb, e_bb};
     LLVMAddIncoming(phi, vals.data(), blks.data(), 2);
     return V::instr(phi, ty);
@@ -848,10 +851,11 @@ V Codegen::e_index(const sema::HNode& node) {
     return load_addr(addr.first, addr.second);
 }
 
-V Codegen::e_cast(const sema::HNode& node) {
-    /* 隐式转换的唯一落点（不变量 ④）。逐种与旧 `convert` 的分支一一对应 —— 值的表示是
-     * 「i64 位模式 + 掩码」，所以 `trunc`/`zext` 都是**掩码**，不是 LLVM 的 `trunc`/`zext`。 */
-    const V v = e(node.kids[0]);
+V Codegen::e_cast(const sema::HNode& node) { return apply_cast(node, e(node.kids[0])); }
+
+/* 隐式转换发指令的唯一落点（不变量 ④）。逐种与旧 `convert` 的分支一一对应 —— 值的表示是
+ * 「i64 位模式 + 掩码」，所以 `trunc`/`zext` 都是**掩码**，不是 LLVM 的 `trunc`/`zext`。 */
+V Codegen::apply_cast(const sema::HNode& node, V v) {
     const int line = node.span.line;
     switch (node.cast_kind) {
         case sema::HCastKind::Trunc:
@@ -874,6 +878,18 @@ V Codegen::e_cast(const sema::HNode& node) {
             return V::instr(llv(v), node.ty);
     }
     throw Unsupported("转换形态", line);
+}
+
+/* 旧 `convert` 在二元运算里是「两个操作数**都**求值 → 各自转换」，HIR 把转换摆在 kid 的位置上
+ * （`Cast` 节点）。直接在 kid 里发会把左侧的掩码插到右侧的 load 前面 —— 指令顺序变了，产物就
+ * 不同。所以这里只剥 kid **顶层**那一个 `Cast`：先求它的操作数，两次求值都做完之后才 `settle`。 */
+std::pair<const sema::HNode*, V> Codegen::eval_deferred(const sema::HNode& kid) {
+    if (kid.kind != sema::HKind::Cast) return {nullptr, e(kid)};
+    return {&kid, e(kid.kids[0])};
+}
+
+V Codegen::settle(const std::pair<const sema::HNode*, V>& d) {
+    return d.first == nullptr ? d.second : apply_cast(*d.first, d.second);
 }
 
 V Codegen::e_array_lit(const sema::HNode& node) {
@@ -902,16 +918,14 @@ LLVMValueRef Codegen::sext64(LLVMValueRef ll, int bits) {
 }
 
 V Codegen::compare(const sema::HNode& node) {
-    /* 两侧已经在 sema 里 `convert` 到同一个类型（比较的结果类型恒 `Bool`），所以类型直接读
-     * 左操作数 —— 那正是旧 `unify` 的返回值。 */
-    /* 两侧已经在 sema 里 convert 到同一个类型（比较的结果类型恒 `Bool`），类型读左操作数 ——
-     * 那正是旧 `unify` 的返回值。求值顺序照旧：**两个操作数先都求值**，之后才各自 convert
-     * （反过来的话，左侧的掩码会插到右侧的 load 前面，指令序就变了）。 */
+    /* 两侧的转换是 kid 顶层的 `Cast` 节点（sema 的 `compare` 按 `unify` 发），比较的结果类型恒
+     * `Bool`，所以类型直接读左操作数 —— 那正是旧 `unify` 的返回值。求值顺序照旧：**两个操作数
+     * 先都求值**，之后才各自转换（见 `eval_deferred` 的注释）。 */
     const TyRef& ty = node.kids[0].ty;
-    const V ra = e(node.kids[0]);
-    const V rb = e(node.kids[1]);
-    const V a = convert(ra, ty, node.span.line);
-    const V b = convert(rb, ty, node.span.line);
+    auto da = eval_deferred(node.kids[0]);
+    auto db = eval_deferred(node.kids[1]);
+    const V a = settle(da);
+    const V b = settle(db);
     LLVMValueRef x = llv(a);
     LLVMValueRef y = llv(b);
     const bool sgn = is_int(*ty) && ty->is_signed;
@@ -966,10 +980,11 @@ V Codegen::binop(const sema::HNode& node) {
     const int line = node.span.line;
     const TyRef& ty = node.ty;
     /* 求值顺序照旧：两侧先都求值，再各自 convert（见 `compare` 的同一条注释）。 */
-    const V ra = e(node.kids[0]);
-    const V rb = e(node.kids[1]);
-    const V a = convert(ra, ty, line);
-    const V b = convert(rb, ty, line);
+    /* 求值顺序照旧：两侧先都求值，再各自转换（见 `eval_deferred` 的注释）。 */
+    auto da = eval_deferred(node.kids[0]);
+    auto db = eval_deferred(node.kids[1]);
+    const V a = settle(da);
+    const V b = settle(db);
     if (ty->kind == TyKind::Str) {
         /* `+` 是唯一的 Str 运算（实测：`"ab" + "cd"` → 长度 4 的 `abcd`）。 */
         if (node.bin_op != sema::HBinOp::Add) throw Unsupported(std::string("Str 的 ") + op, line);
@@ -1183,9 +1198,9 @@ V Codegen::call_func(const sema::HNode& node) {
     LLVMValueRef fnref = ensure_func(idx);
     std::vector<LLVMValueRef> vals;
     for (std::size_t i = 0; i < node.kids.size(); ++i) {
-        const TyRef& pty = i < f.params.size() ? f.params[i].ty : node.kids[i].ty;
-        V conv = convert(e(node.kids[i]), pty, node.span.line);
-        vals.push_back(conv.ty->kind == TyKind::Struct ? conv.ll : llv(conv));
+        /* 实参已经是形参类型（sema 在调用点发了 `Cast`；捕获指针另算，见下）。 */
+        const V arg = e(node.kids[i]);
+        vals.push_back(arg.ty->kind == TyKind::Struct ? arg.ll : llv(arg));
     }
     /* 捕获指针按 `HirFunc.caps` 的顺序追加在实参之后，取**调用点**同名绑定的地址。 */
     for (const sema::HCapture& c : f.caps) {
@@ -1249,8 +1264,8 @@ V Codegen::builtin_asr(const sema::HNode& node) {
         throw Unsupported(std::string("asr 用在 ") + ty_kind_name(x.ty->kind), line);
     }
     const int bits = x.ty->bits;
-    /* 常量在 sema 折好（决策 4）；移位量按操作数类型取位模式（旧 `convert` 同）。 */
-    const V n = convert(e(node.kids[1]), x.ty, line);
+    /* 常量在 sema 折好（决策 4）；移位量的位模式由 sema 的 `Cast` 转好（旧 `convert` 同）。 */
+    const V n = e(node.kids[1]);
     LLVMValueRef amt = llv(n);
     if (bits == 64) {
         amt = LLVMBuildAnd(cur_fn().bd, amt, const_int(63), "amt");
@@ -1331,11 +1346,11 @@ V Codegen::builtin_ror(const sema::HNode& node) {
 V Codegen::builtin_minmax(const sema::HNode& node, bool is_min) {
     if (node.kids.size() != 2) throw Unsupported("min/max 的形态", node.span.line);
     const TyRef& ty = node.ty;
-    /* 两侧已在 sema `unify` + `convert`（常量对比也在那里折好），这里只剩运行期的 `select`。 */
-    const V ra = e(node.kids[0]);
-    const V rb = e(node.kids[1]);
-    const V a = convert(ra, ty, node.span.line);
-    const V b = convert(rb, ty, node.span.line);
+    /* 两侧已在 sema `unify` + `convert`（常量对比也在那里折好），这里只剩运行期的 `select`。
+     * 转换的求值位置照旧是**逐个紧跟操作数**（`min`/`max` 的旧实现与 `binop` 不同，它每求一个
+     * 操作数就当场转），所以这里直接在 kid 里发 `Cast`，不用 `eval_deferred`。 */
+    const V a = e(node.kids[0]);
+    const V b = e(node.kids[1]);
     LLVMIntPredicate pred = LLVMIntEQ;
     if (is_min) pred = ty->is_signed ? LLVMIntSLT : LLVMIntULT;
     else pred = ty->is_signed ? LLVMIntSGT : LLVMIntUGT;
@@ -1425,7 +1440,7 @@ V Codegen::builtin_random(const sema::HNode& node) {
     V out = V::instr(next, ty);
     if (node.kids.size() == 1) return out;
     /* `%` 口径照抄 `div`（零除数不 trap，余数 = 被除数）：`random(0)` 返回被除数。 */
-    V m = convert(e(node.kids[1]), ty, node.span.line);
+    V m = e(node.kids[1]);
     return V::instr(div("%", llv(out), llv(m), *ty), ty);
 }
 
@@ -2033,8 +2048,8 @@ V Codegen::composite_literal(const sema::HNode& node) {
     vals.reserve(node.kids.size());
     bool all_const = true;
     for (std::size_t i = 0; i < node.kids.size(); ++i) {
-        V v = i < ty->fields.size() ? convert(e(node.kids[i]), ty->fields[i].second, node.span.line)
-                                    : e(node.kids[i]);
+        /* 每个 kid 已经是字段类型（sema 在复合字面量处发了 `Cast`，没写的字段是零值 `Const`）。 */
+        V v = e(node.kids[i]);
         all_const = all_const && v.c.has_value();
         vals.push_back(v);
     }

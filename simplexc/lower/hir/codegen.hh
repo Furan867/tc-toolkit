@@ -148,6 +148,11 @@ protected:
     V e_member(const sema::HNode& node);
     V e_index(const sema::HNode& node);
     V e_cast(const sema::HNode& node);
+    /* `Cast` 节点单独走：`e_cast` = `apply_cast(node, e(kid))`；二元运算剥掉 kid 顶层的 `Cast`
+     * 先求值、两次求值都做完再各自 `apply_cast` —— 旧 `convert` 就是这个顺序。 */
+    V apply_cast(const sema::HNode& node, V v);
+    std::pair<const sema::HNode*, V> eval_deferred(const sema::HNode& kid);
+    V settle(const std::pair<const sema::HNode*, V>& d);
     V e_array_lit(const sema::HNode& node);
     V e_composite_lit(const sema::HNode& node);
     V e_template(const sema::HNode& node);

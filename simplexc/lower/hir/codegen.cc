@@ -2043,15 +2043,23 @@ V Codegen::composite_literal(const sema::HNode& node) {
     auto it = struct_ll_.find(ty->name);
     if (it == struct_ll_.end()) throw CompileFail("struct 类型没建好：" + ty->name);
     /* HIR 的 kid 顺序 = **声明序**，每个字段一个 kid（没写的是零值 `Const`），所以 `kids[i]`
-     * 恒对应 `ty->fields[i]` —— 不再需要「按字段名匹配、补零」那一趟。 */
-    std::vector<V> vals;
-    vals.reserve(node.kids.size());
+     * 恒对应 `ty->fields[i]` —— 不再需要「按字段名匹配、补零」那一趟。
+     *
+     * 但**求值与拼接的先后**是源码书写序（求值有副作用时看得见，实验见 `work/tmp/ul4/`），
+     * 而书写序在 HIR 里只剩每个 kid 的 span 行号（前端不填 `col`，见 `span.hh`）。所以按行号
+     * 稳定排序：字段各占一行时正好还原书写序；同一行里几个字段的先后恢复不出来，退回声明序。
+     * 补出来的零值 `Const` 带的是字面量首行的 span，排在最前，但下面会跳过它们。 */
+    std::vector<std::size_t> order(node.kids.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&node](std::size_t a, std::size_t b) {
+        return node.kids[a].span.line < node.kids[b].span.line;
+    });
+    std::vector<V> vals(node.kids.size());
     bool all_const = true;
-    for (std::size_t i = 0; i < node.kids.size(); ++i) {
+    for (std::size_t i : order) {
         /* 每个 kid 已经是字段类型（sema 在复合字面量处发了 `Cast`，没写的字段是零值 `Const`）。 */
-        V v = e(node.kids[i]);
-        all_const = all_const && v.c.has_value();
-        vals.push_back(v);
+        vals[i] = e(node.kids[i]);
+        all_const = all_const && vals[i].c.has_value();
     }
     if (all_const) {
         /* 常量聚合：顶层 `var x = T {…}` 的初始化式也走这里（拿不到 builder）。 */
@@ -2067,7 +2075,7 @@ V Codegen::composite_literal(const sema::HNode& node) {
     }
     LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().block);
     LLVMValueRef agg = LLVMConstNull(it->second);
-    for (std::size_t i = 0; i < vals.size(); ++i) {
+    for (std::size_t i : order) {
         /* HIR 的 kid 按**声明序补满**（没写的字段是零值 `Const`），规则见 `hir.hh`；旧
          * `lower.cc` 只给**写了**的字段发 `insertvalue`。补出来的零和 `zeroinitializer`
          * 本来就没区别，所以零值常量字段不再发 —— 否则聚合返回会多一条 `insertvalue …, i8 0, n`。 */

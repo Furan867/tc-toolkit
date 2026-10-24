@@ -17,6 +17,7 @@
 | `timeout-ours`     | 预算 0 → `ours: Timeout`、manifest `impl=ours_failed` |
 | `timeout-fallback` | 同上但 ours_with_fallback → 转交参考、manifest `impl=fallback` |
 | `ours-budget-ok`   | （超时判据的对照）同一份源码、预算走默认 5 s → ours 成功 |
+| `user-err`         | 用户源码错（`USER_ERR_SRC`）→ `ours: UserError @ sema/…`（三轴都在失败串里）；`ours` 与 `ours_with_fallback` **两种模式都不转交**：`impl=ours_failed`、无 `impl=fallback`、无产物文件 |
 
 `ours-budget-ok` 是 `timeout-ours` 的对照：有了它才能说「超时那条的失败是超预算造成的」，
 而不是这份源码本身就走不通。
@@ -120,6 +121,11 @@ BASELINE_SRC = f"{BASELINE_REF}:tools/compile_hook.c"
 # 覆盖掉它等于把交付物的中间物换成测试构建的。
 SHELL_OBJ = os.path.join(WORK, "compile_hook_shell.o")
 SRC = os.path.join(SIMPLEXC, "corpus", "src", "176.si")
+
+# 用户源码错的最小 `.si`（**内联**，不进 `corpus/src/`：语料目录有 manifest，多一个文件会打破
+# `recompile_corpus.py --check` 的条数判据）。`1 == "x"` 落在 sema 的 `unify` 里
+# （`Str 与整数混用`，责任轴 = UserSource）—— 它过了词法/语法，靠 sema 才拒。
+USER_ERR_SRC = b'main: while true {\n    if 1 == "x" { }\n}\n'
 
 # 为什么是 176.si（这里的 ours 系 case 只要「一份能编过的真源码」）：它是当前 98 份里逐 tick 全等的
 # 三份之一。换掉旧值 058.si 是因为它现在编不过 —— 那是 lowering 的已知缺口（由 `tools/m5/coverage.py`
@@ -766,6 +772,59 @@ def case_ours_budget_ok(c):
             f"{len(error_records(recs))} 条 error")
 
 
+def case_user_err(c):
+    """user-err：用户源码错 → `UserError`，而且**不转交**（`ours` 与 `ours_with_fallback` 都一样）。
+
+    为什么这条要单独判：`InternalError` 在 `ours_with_fallback` 下会触发整单转交参考编译器，
+    于是「用户写错源码」会白跑一次参考编译、还往「回退率」的分母里偷一个「我们的 bug」——
+    回退率是关掉回退的唯一量化依据。判据因此有四层：
+      ① 失败串的前缀是 `ours: UserError`（**不是** `InternalError` / `UnsupportedConstruct`）；
+      ② 三轴真的流出了 C 边界：失败串里带 `sema/`（阶段+责任）与行号；
+      ③ `impl=ours_failed`，且**没有** `impl=fallback`；
+      ④ 没拿到产物：manifest `out_len=0`、目录里没有该 seq 的 `hook_out_NNN.bin`。
+    """
+    os.environ.pop("TC_OURS_TIMEOUT_MS", None)
+    d = vdirs("new")
+    set_mode("new", "ours")
+    dll, before = load_and_snapshot("new")
+    raw1, ret1 = call_compile(dll, USER_ERR_SRC)
+    q1, prod1 = show_result(c, "user-err(ours)", raw1, ret1)
+    rows1, _recs1 = show_delta(c, "new", before, "ours ")
+
+    set_mode("new", "ours_with_fallback")
+    raw2, ret2 = call_compile(dll, USER_ERR_SRC)
+    q2, prod2 = show_result(c, "user-err(ours_with_fallback)", raw2, ret2)
+    rows2, recs2 = show_delta(c, "new", before, "fallback ")
+
+    eb1, eb2 = err_bytes(raw1), err_bytes(raw2)
+    row1 = rows1[-1] if rows1 else {}
+    row2 = rows2[-1] if rows2 else {}
+    seq2 = row2.get("seq", "")
+    recs2 = [r for r in recs2 if r["seq"] == seq2]      # 只认**这一次**调用的行
+    c.fact("err_text", eb2.decode("utf-8", "replace"))
+    for tag, eb in (("ours", eb1), ("fallback", eb2)):
+        c.check(f"err_text_user_error_{tag}",
+                eb.startswith(b"ours: ") and b"UserError" in eb
+                and b"InternalError" not in eb and b"UnsupportedConstruct" not in eb, repr(eb))
+        c.check(f"err_text_has_axes_{tag}", b"sema/" in eb and "第".encode() in eb, repr(eb))
+    c.check("manifest_impl_ours_failed", row1.get("impl") == "ours_failed"
+            and row2.get("impl") == "ours_failed", f"impl={last_impl(rows2)}")
+    c.check("no_impl_fallback_log", not find_log(recs2, "impl", impl="fallback"),
+            f"impl 行：{[r['kv'].get('impl') for r in recs2]}")
+    c.check("log_kind_user_error", bool(find_log(recs2, "error", kind="UserError")))
+    c.check("no_product", prod1 is None and prod2 is None and q1[0] == 0 and q2[0] == 0,
+            f"out_len={q1[0]}/{q2[0]}")
+    c.check("manifest_out_len_zero", row1.get("out_len") == "0" and row2.get("out_len") == "0",
+            f"out_len={row1.get('out_len')}/{row2.get('out_len')}")
+    c.check("no_out_file",
+            not os.path.exists(os.path.join(d["out"], f"hook_out_{int(seq2):03d}.bin"))
+            if seq2.isdigit() else False, f"seq={seq2}")
+    # 进程没死是**本进程**判不了的（崩了就走不到这一行，由子进程 rc 兜）：这里只判两次调用的
+    # 失败 Result 形状都对（err_len/err_ptr 非 0），游戏才能走失败分支而不是当成成功。
+    c.check("failure_result_shaped", q1[3] != 0 and q1[4] != 0 and q2[3] != 0 and q2[4] != 0,
+            f"err_len/ptr：{q1[3]:#x}/{q1[4]:#x}、{q2[3]:#x}/{q2[4]:#x}")
+
+
 CASES = OrderedDict([
     ("ours-nosrc", ("空源码 + mode=ours → 壳自己判 InternalError：失败串 + impl=ours_failed + error/impl 两条日志",
                     case_ours_nosrc)),
@@ -781,6 +840,8 @@ CASES = OrderedDict([
     ("timeout-fallback", ("超时：ours_with_fallback + 预算 0 → 转交参考 / impl=fallback",
                           case_timeout_fallback)),
     ("ours-budget-ok", ("对照：同一份源码 + 默认预算 5 s → ours 成功", case_ours_budget_ok)),
+    ("user-err", ("用户源码错 → ours: UserError（三轴在串里）、两种模式都不转交、无产物",
+                  case_user_err)),
 ])
 
 

@@ -29,14 +29,25 @@ extern "C" {
  *   缓冲由 `simplexc_free()` 释放；壳负责在**下次编译开始时**释放上一块。
  *
  * 失败：返回 §8 的分类串（静态存储期，不要 free），三个出参不动：
- *   "UnsupportedConstruct" / "InternalError" / "BlobTooLarge"
- *   "RelocUnsupported"     / "SymbolUndefined"
+ *   "UserError"（用户源码错，**不转交参考实现**）/ "UnsupportedConstruct" / "InternalError"
+ *   "BlobTooLarge"          / "RelocUnsupported"       / "SymbolUndefined"
+ *
+ * 分类串只说「哪一档」，三轴（责任/阶段/位置）在 `simplexc_last_error()` 里。
  *
  * 不抛异常、不写文件、不改可观察的全局状态。调用方仍应包 VEH —— LLVM 在游戏进程里跑，
  * 熔断是壳的责任（`ours_veh`），不是核心的。
  */
 const char* simplexc_compile(const char* src, long long src_len, void** out_blob,
                              long long* out_len, long long* out_entry);
+
+/* 最近一次 `simplexc_compile` 失败的**三轴诊断串**（`sema/用户源码错 第 12 行：…`）。
+ *
+ * 为什么不在返回值里：返回值是**封闭词表**的分类串（壳与 manifest/hook.log 都按它分支），
+ * 而诊断串里有 detail —— 长度由用户源码决定，不能让词的边界跟着用户输入变。
+ * 调用约定：同一次调用里读完即弃；没有失败（或失败在那之前就被壳自己判掉）时是空串。
+ * 静态存储期，不要 free；下一次失败会覆盖它。
+ */
+const char* simplexc_last_error(void);
 
 /* 释放 simplexc_compile 给出的缓冲；传 NULL 安全。 */
 void simplexc_free(void* blob);

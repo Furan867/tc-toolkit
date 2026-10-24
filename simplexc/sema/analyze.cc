@@ -867,7 +867,7 @@ HNode Analyzer::const_decl_value(const VarDeclStmt& decl) {
     auto hit = mod_->const_by_decl.find(&decl);
     if (hit != mod_->const_by_decl.end()) return hit->second;
     auto v = const_value(*decl.init);
-    if (!v) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{decl.src_line}, "编译期常量 " + decl.name + " 的初始化式不是常量"};
+    if (!v) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{decl.src_line}, "编译期常量 " + decl.name + " 的初始化式不是常量"};
     HNode ref = *v;
     if (v->kind != HKind::Const) {
         HirConst c;
@@ -909,7 +909,9 @@ TyRef Analyzer::ty_of_name(const std::string& name, int line) {
             return make_int(bits, name[0] == 'S');
         }
     }
-    throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型 " + name};
+    /* 不认识的拼写：分不清「用户拼错」与「真实类型我们还没接」，按「我们没实现」算 ——
+       这一档才该去参考编译器那边试，而不是记成用户错。 */
+    throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型 " + name};
 }
 
 TyRef Analyzer::ty_of_ref(const TypeRef& ref, int line) {
@@ -1853,7 +1855,8 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
         const bool is_tp = params[i]->typ != nullptr && is_type_param(*params[i]->typ);
         if (!is_tp) {
             if (params[i]->typ == nullptr) {
-                throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "参数 " + params[i]->name + " 缺类型"};
+                /* 泛型实例化路径：这个参数的类型要靠类型实参/推型定，定不出来是我们没实现。 */
+                throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "泛型实例化的参数 " + params[i]->name + " 缺类型"};
             }
             out.rt_params.push_back(params[i].get());
             out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
@@ -1882,7 +1885,7 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
     for (std::size_t i = 0; i < params.size(); ++i) {
         if (i != 0) out.sig += ",";
         if (params[i]->typ == nullptr) {
-            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "参数 " + params[i]->name + " 缺类型"};
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "泛型实例化的参数 " + params[i]->name + " 缺类型"};
         }
         if (is_type_param(*params[i]->typ)) {
             out.sig += "@" + ty_key(*out.binds.at(params[i]->name));

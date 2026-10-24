@@ -22,8 +22,12 @@
     已进 `check.py`（6 步，50s 全绿）。
   - 分层地基：`sema/` 拿到类型系统 + 常量折叠（269 行逐行搬，无 LLVM 依赖）。
   - HIR 已冻结并落码：节点集、六条不变量的自检（每条各有一个不满足的样例并报对编号）、可 diff 的 dump + golden。
-  - **sema 生成器约六成**：程序根、表达式、类型解析、VarDecl/Assign/Return/Block/While/Break、隐式转换显式化成 `Cast`；
-    `analyze_selftest` 5 个最小用例 + golden。`sema/` 零 LLVM 依赖、不反向 include `frontend/`。
+  - **sema 生成器：语言形态基本覆盖，但语料覆盖率是 0/98**。已覆盖程序根、表达式、类型解析、
+    VarDecl/Assign/Return/Block/While/Break/If/Switch/数组/struct/enum/Str/模板/调用/def/泛型/闭包，
+    19 个最小用例全过；`sema/` 零 LLVM 依赖、不反向 include `frontend/`。
+    **两个指标不能混**：语言形态覆盖再高，只要内建（`asr/clz/ror/min/max/array/random`）、
+    前缀函数（`get_time/sleep/memory_clear/memory_copy/thread_exit`）、方法糖、`raw_cast` 常量
+    这四样没接，98 份语料一份也过不了（2026-10-24 实测）。S2b-4 正在补。
 
 ## 下一步（已决定）
 

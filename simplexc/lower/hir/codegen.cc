@@ -2053,7 +2053,12 @@ V Codegen::composite_literal(const sema::HNode& node) {
     LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().block);
     LLVMValueRef agg = LLVMConstNull(it->second);
     for (std::size_t i = 0; i < vals.size(); ++i) {
+        /* HIR 的 kid 按**声明序补满**（没写的字段是零值 `Const`），规则见 `hir.hh`；旧
+         * `lower.cc` 只给**写了**的字段发 `insertvalue`。补出来的零和 `zeroinitializer`
+         * 本来就没区别，所以零值常量字段不再发 —— 否则聚合返回会多一条 `insertvalue …, i8 0, n`。 */
         const TyRef& fty = ty->fields[i].second;
+        const uint64_t mask = is_int(*fty) ? mask_of(fty->bits) : kMask64;
+        if (vals[i].c && (*vals[i].c & mask) == 0) continue;
         LLVMValueRef el = vals[i].c ? const_for_storage(vals[i])
                                     : field_storage_value(vals[i], fty, node.span.line);
         agg = LLVMBuildInsertValue(cur_fn().bd, agg, el, static_cast<unsigned>(i), "cl");

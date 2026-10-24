@@ -8,5 +8,6 @@ Hir funcs=0 globals=1 externs=0 consts=1 strings=0 structs=0
         Block span=6:0
           VarDecl ty=S64 name="x" span=7:0
             Binary ty=S64 op=add span=7:0
-              Global ty=S64 global=0 span=7:0
+              Cast ty=S64 cast=raw span=7:0
+                Global ty=S64 global=0 span=7:0
               Const ty=S64 const=0x5 span=7:0

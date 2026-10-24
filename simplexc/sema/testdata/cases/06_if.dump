@@ -8,7 +8,8 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=0
             Const ty=S64 const=0x1 span=6:0
           If span=7:0
             Binary ty=Bool op=lt span=7:0
-              Local ty=S64 name="x" span=7:0
+              Cast ty=S64 cast=raw span=7:0
+                Local ty=S64 name="x" span=7:0
               Const ty=S64 const=0x3 span=7:0
             Block span=7:0
               VarDecl ty=S64 name="a" span=8:0
@@ -16,7 +17,8 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=0
             Block span=9:0
               If span=9:0
                 Binary ty=Bool op=lt span=9:0
-                  Local ty=S64 name="x" span=9:0
+                  Cast ty=S64 cast=raw span=9:0
+                    Local ty=S64 name="x" span=9:0
                   Const ty=S64 const=0x5 span=9:0
                 Block span=9:0
                   VarDecl ty=S64 name="b" span=10:0

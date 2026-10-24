@@ -26,7 +26,8 @@ Hir funcs=1 globals=0 externs=0 consts=1 strings=1 structs=0
               Local ty=U32 name="cycles" span=15:0
           ExprStmt span=16:0
             Call ty=Void callee=func:0 span=16:0
-              Local ty=U64 name="t" span=16:0
+              Cast ty=U64 cast=raw span=16:0
+                Local ty=U64 name="t" span=16:0
           VarDecl ty=Arr[U8] name="e" span=17:0
             ArrayLit ty=Arr[U8] span=17:0
           VarDecl ty=S64 name="z" span=18:0

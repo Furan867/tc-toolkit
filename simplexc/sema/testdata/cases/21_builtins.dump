@@ -47,8 +47,12 @@ Hir funcs=1 globals=1 externs=0 consts=0 strings=0 structs=0
     param[1] name="y" ty=U8
     Block span=8:0
       Return span=9:0
-        Call ty=U8 callee=builtin:6 span=9:0
-          Local ty=U8 name="x" span=9:0
-          Call ty=U8 callee=builtin:7 span=9:0
-            Local ty=U8 name="y" span=9:0
-            Const ty=U8 const=0x3 span=9:0
+        Cast ty=U8 cast=raw span=9:0
+          Call ty=U8 callee=builtin:6 span=9:0
+            Cast ty=U8 cast=raw span=9:0
+              Local ty=U8 name="x" span=9:0
+            Cast ty=U8 cast=raw span=9:0
+              Call ty=U8 callee=builtin:7 span=9:0
+                Cast ty=U8 cast=raw span=9:0
+                  Local ty=U8 name="y" span=9:0
+                Const ty=U8 const=0x3 span=9:0

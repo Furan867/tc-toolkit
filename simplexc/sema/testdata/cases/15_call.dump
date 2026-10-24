@@ -33,41 +33,56 @@ Hir funcs=5 globals=0 externs=0 consts=0 strings=1 structs=0
     Block span=6:0
       If span=7:0
         Binary ty=Bool op=eq span=7:0
-          Local ty=U64 name="n" span=7:0
+          Cast ty=U64 cast=raw span=7:0
+            Local ty=U64 name="n" span=7:0
           Const ty=U64 const=0x0 span=7:0
         Block span=7:0
           Return span=7:0
             Const ty=U64 const=0x0 span=7:0
       Return span=8:0
-        Binary ty=U64 op=add span=8:0
-          Call ty=U64 callee=func:2 span=8:0
-            Binary ty=U64 op=sub span=8:0
-              Local ty=U64 name="n" span=8:0
-              Const ty=U64 const=0x1 span=8:0
-          Const ty=U64 const=0x1 span=8:0
+        Cast ty=U64 cast=raw span=8:0
+          Binary ty=U64 op=add span=8:0
+            Cast ty=U64 cast=raw span=8:0
+              Call ty=U64 callee=func:2 span=8:0
+                Cast ty=U64 cast=raw span=8:0
+                  Binary ty=U64 op=sub span=8:0
+                    Cast ty=U64 cast=raw span=8:0
+                      Local ty=U64 name="n" span=8:0
+                    Const ty=U64 const=0x1 span=8:0
+            Const ty=U64 const=0x1 span=8:0
   func[3] key="is_even" name="is_even" inst_sig="" pre_body=none cap_index=-1 decl_line=10 line_suffix=0 ret=Bool params=1 caps=0
     param[0] name="n" ty=U64
     Block span=10:0
       Return span=10:0
-        Cond ty=Bool span=10:0
-          Binary ty=Bool op=eq span=10:0
-            Local ty=U64 name="n" span=10:0
-            Const ty=U64 const=0x0 span=10:0
-          Const ty=Bool const=0x1 span=10:0
-          Call ty=Bool callee=func:4 span=10:0
-            Binary ty=U64 op=sub span=10:0
-              Local ty=U64 name="n" span=10:0
-              Const ty=U64 const=0x1 span=10:0
+        Cast ty=Bool cast=raw span=10:0
+          Cond ty=Bool span=10:0
+            Binary ty=Bool op=eq span=10:0
+              Cast ty=U64 cast=raw span=10:0
+                Local ty=U64 name="n" span=10:0
+              Const ty=U64 const=0x0 span=10:0
+            Const ty=Bool const=0x1 span=10:0
+            Cast ty=Bool cast=raw span=10:0
+              Call ty=Bool callee=func:4 span=10:0
+                Cast ty=U64 cast=raw span=10:0
+                  Binary ty=U64 op=sub span=10:0
+                    Cast ty=U64 cast=raw span=10:0
+                      Local ty=U64 name="n" span=10:0
+                    Const ty=U64 const=0x1 span=10:0
   func[4] key="is_odd" name="is_odd" inst_sig="" pre_body=none cap_index=-1 decl_line=11 line_suffix=0 ret=Bool params=1 caps=0
     param[0] name="n" ty=U64
     Block span=11:0
       Return span=11:0
-        Cond ty=Bool span=11:0
-          Binary ty=Bool op=eq span=11:0
-            Local ty=U64 name="n" span=11:0
-            Const ty=U64 const=0x0 span=11:0
-          Const ty=Bool const=0x0 span=11:0
-          Call ty=Bool callee=func:3 span=11:0
-            Binary ty=U64 op=sub span=11:0
-              Local ty=U64 name="n" span=11:0
-              Const ty=U64 const=0x1 span=11:0
+        Cast ty=Bool cast=raw span=11:0
+          Cond ty=Bool span=11:0
+            Binary ty=Bool op=eq span=11:0
+              Cast ty=U64 cast=raw span=11:0
+                Local ty=U64 name="n" span=11:0
+              Const ty=U64 const=0x0 span=11:0
+            Const ty=Bool const=0x0 span=11:0
+            Cast ty=Bool cast=raw span=11:0
+              Call ty=Bool callee=func:3 span=11:0
+                Cast ty=U64 cast=raw span=11:0
+                  Binary ty=U64 op=sub span=11:0
+                    Cast ty=U64 cast=raw span=11:0
+                      Local ty=U64 name="n" span=11:0
+                    Const ty=U64 const=0x1 span=11:0

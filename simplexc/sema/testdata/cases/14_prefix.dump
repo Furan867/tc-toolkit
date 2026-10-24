@@ -10,5 +10,6 @@ Hir funcs=0 globals=1 externs=0 consts=0 strings=0 structs=0
             Const ty=U64 const=0x5 span=4:0
           VarDecl ty=U64 name="s" span=5:0
             Binary ty=U64 op=add span=5:0
-              Global ty=U64 global=0 span=5:0
+              Cast ty=U64 cast=raw span=5:0
+                Global ty=U64 global=0 span=5:0
               Const ty=U64 const=0x1 span=5:0

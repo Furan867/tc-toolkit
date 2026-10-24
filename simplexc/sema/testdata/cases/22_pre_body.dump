@@ -21,7 +21,8 @@ Hir funcs=5 globals=0 externs=0 consts=1 strings=0 structs=0
               Const ty=S64 const=0x8 span=11:0
           If span=12:0
             Binary ty=Bool op=eq span=12:0
-              Local ty=U64 name="t" span=12:0
+              Cast ty=U64 cast=raw span=12:0
+                Local ty=U64 name="t" span=12:0
               Const ty=U64 const=0x0 span=12:0
             Block span=12:0
               ExprStmt span=13:0

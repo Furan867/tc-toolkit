@@ -34,7 +34,8 @@ Hir funcs=1 globals=0 externs=0 consts=3 strings=1 structs=1
             Const ty=Struct.Pair const_id=2 span=22:0
           If span=23:0
             Binary ty=Bool op=eq span=23:0
-              Local ty=U8 name="a" span=23:0
+              Cast ty=U8 cast=raw span=23:0
+                Local ty=U8 name="a" span=23:0
               Cast ty=U8 cast=zext span=23:0
                 Local ty=U1 name="b" span=23:0
             Block span=23:0
@@ -46,4 +47,5 @@ Hir funcs=1 globals=0 externs=0 consts=3 strings=1 structs=1
         Cast ty=U8 cast=zext span=13:0
           Index ty=U1 span=13:0
             Const ty=Arr[U1] const_id=1 span=17:0
-            Local ty=S64 name="i" span=13:0
+            Cast ty=S64 cast=raw span=13:0
+              Local ty=S64 name="i" span=13:0

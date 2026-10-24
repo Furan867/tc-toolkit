@@ -12,4 +12,5 @@ Hir funcs=0 globals=0 externs=0 consts=0 strings=0 structs=0
             Binary ty=U64 op=add span=7:0
               Cast ty=U64 cast=zext span=7:0
                 Local ty=U8 name="a" span=7:0
-              Local ty=U64 name="b" span=7:0
+              Cast ty=U64 cast=raw span=7:0
+                Local ty=U64 name="b" span=7:0

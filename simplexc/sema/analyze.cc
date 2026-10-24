@@ -1379,7 +1379,8 @@ HNode Analyzer::convert(HNode v, const TyRef& target, int line) {
             return cast_node(HCastKind::PtrToInt, std::move(v), target, line);
         }
         if (c) return const_node(target, *c & mask_of(target->bits), line);
-        if (same_val_ty(v.ty, target)) return v;
+        /* 同类型也照样发 `Raw`（= 一道掩码）：旧 `convert` 对整数目标**无条件**掩码，codegen 侧
+         * 那道 `convert` 已经删掉，这里再早退就会比旧路径少一条 `and`。 */
         if (target->bits < v.ty->bits) return cast_node(HCastKind::Trunc, std::move(v), target, line);
         if (target->bits > v.ty->bits) return cast_node(HCastKind::Zext, std::move(v), target, line);
         return cast_node(HCastKind::Raw, std::move(v), target, line); /* 同宽、只换符号性/名义位 */

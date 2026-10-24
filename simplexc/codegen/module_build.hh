@@ -28,7 +28,11 @@ namespace lower {
 /* `build_module` 的失败类型来自 `sema/errors.hh`（错误模型只有那一处定义）。用 using 引入本
  * 命名空间是为了让调用方照旧写 `lw::Unsupported` / `lw::CompileFail` —— 它们 `catch` 的就是
  * 这一层抛出来的东西，不该逼调用方去记类型住在哪个命名空间。 */
+using sema::CompileError;
 using sema::CompileFail;
+using sema::Responsibility;
+using sema::Span;
+using sema::Stage;
 using sema::Unsupported;
 
 /* `ModuleAst` 只持裸指针（它的注释写明「调用方保证生命周期」），所以整棵树由这里持有。

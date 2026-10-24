@@ -37,11 +37,13 @@
 namespace simplexc {
 namespace codegen {
 
-using sema::CompileFail;
+using sema::CompileError;
+using sema::Responsibility;
+using sema::Span;
+using sema::Stage;
 using sema::Ty;
 using sema::TyRef;
 using sema::TyKind;
-using sema::Unsupported;
 using sema::is_int;
 using sema::kMask64;
 using sema::make_array;
@@ -78,7 +80,7 @@ protected:
     LLVMValueRef const_int(uint64_t v) const;
     LLVMValueRef const_ptr(uint64_t addr) const;
     /* 位模式 → 存储形态的常量（全局初值、聚合字段都走它）。 */
-    LLVMValueRef const_for_storage(const V& v);
+    LLVMValueRef const_for_storage(const V& v, Span span);
     LLVMValueRef const_for_bits(const TyRef& ty, uint64_t bits);
     LLVMValueRef field_storage_value(const V& v, const TyRef& ty, int line);
 
@@ -172,7 +174,7 @@ protected:
     LLVMValueRef ensure_clz_fn();
 
     /* ---- 运算（逐 op 的参考行为；类型一律从 HIR 节点上读） */
-    LLVMValueRef as_cond(const V& v);
+    LLVMValueRef as_cond(const V& v, Span span);
     V compare(const sema::HNode& node);
     V str_compare(const V& a, const V& b, int line, bool ne);
     V logical(const sema::HNode& node);
@@ -206,7 +208,7 @@ protected:
     LLVMValueRef get_extern(const std::string& name, const TyRef& ret_ty,
                             const std::vector<TyRef>& param_tys);
     LLVMValueRef ensure_prefix_fn(const std::string& name, const TyRef& ret_ty,
-                                  const std::vector<TyRef>& param_tys);
+                                  const std::vector<TyRef>& param_tys, Span span);
     void body_get_time();
     void body_sleep();
     void body_memory_clear();

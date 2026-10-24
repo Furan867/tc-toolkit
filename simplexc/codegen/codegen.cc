@@ -153,7 +153,7 @@ LLVMTypeRef Codegen::val_ll(const Ty& ty) {
 LLVMTypeRef Codegen::ll_type(const Ty& ty) {
     if (ty.kind == TyKind::Struct) {
         auto it = struct_ll_.find(ty.name);
-        if (it == struct_ll_.end()) throw CompileFail("struct 类型没建好：" + ty.name);
+        if (it == struct_ll_.end()) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "struct 类型没建好：" + ty.name};
         return it->second;
     }
     if (ty.kind == TyKind::Str || ty.kind == TyKind::Array) return ptr_;
@@ -175,16 +175,16 @@ LLVMValueRef Codegen::const_ptr(uint64_t addr) const {
     return LLVMConstIntToPtr(const_int(addr), ptr_);
 }
 
-LLVMValueRef Codegen::const_for_storage(const V& v) {
+LLVMValueRef Codegen::const_for_storage(const V& v, Span span) {
     if (v.ty->kind == TyKind::Struct) {
         auto it = struct_ll_.find(v.ty->name);
-        if (it == struct_ll_.end()) throw CompileFail("struct 类型没建好：" + v.ty->name);
+        if (it == struct_ll_.end()) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "struct 类型没建好：" + v.ty->name};
         return LLVMConstNull(it->second);
     }
     if (v.ty->kind == TyKind::Str || v.ty->kind == TyKind::Array) {
         return v.ll != nullptr ? v.ll : const_ptr(v.c.value_or(0));
     }
-    if (!v.c) throw Unsupported("（内部）const_for_storage 拿到非常量", 0);
+    if (!v.c) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{span}, "（内部）const_for_storage 拿到非常量"};
     return LLVMConstInt(storage_ll(*v.ty), *v.c & mask_of(v.ty->bits), 0);
 }
 
@@ -192,7 +192,7 @@ LLVMValueRef Codegen::const_for_storage(const V& v) {
 LLVMValueRef Codegen::const_for_bits(const TyRef& ty, uint64_t bits) {
     if (ty->kind == TyKind::Struct) {
         auto it = struct_ll_.find(ty->name);
-        if (it == struct_ll_.end()) throw CompileFail("struct 类型没建好：" + ty->name);
+        if (it == struct_ll_.end()) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "struct 类型没建好：" + ty->name};
         return LLVMConstNull(it->second);
     }
     if (ty->kind == TyKind::Str || ty->kind == TyKind::Array) return const_ptr(bits);
@@ -309,7 +309,7 @@ const Binding* Codegen::lookup(const std::string& name) const {
 
 LLVMValueRef Codegen::llv(const V& v) {
     if (v.ll != nullptr) return v.ll;
-    if (!v.c) throw Unsupported("（内部）常量与指令都为空", 0);
+    if (!v.c) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "（内部）常量与指令都为空"};
     if (v.ty->kind == TyKind::Str || v.ty->kind == TyKind::Array) return const_ptr(*v.c);
     return const_int(*v.c);
 }
@@ -338,15 +338,14 @@ LLVMValueRef Codegen::mask_ll(LLVMValueRef ll, int bits) {
 }
 
 V Codegen::convert(const V& v, const TyRef& target, int line) {
-    if (target->kind == TyKind::Void) throw Unsupported("转换成 None", line);
+    if (target->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{line}, "转换成 None"};
     if (v.ty->kind == TyKind::Struct || target->kind == TyKind::Struct) {
         if (v.ty->kind == TyKind::Struct && target->kind == TyKind::Struct &&
             v.ty->name == target->name) {
             return v;
         }
-        throw Unsupported("转换 " + std::string(ty_kind_name(v.ty->kind)) + " → " +
-                              ty_kind_name(target->kind),
-                          line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "转换 " + std::string(ty_kind_name(v.ty->kind)) + " → " +
+                              ty_kind_name(target->kind)};
     }
     auto c = pat_const(v);
     if (target->kind == TyKind::Int) {
@@ -402,7 +401,7 @@ void Codegen::store_addr(LLVMValueRef p, const V& v, const TyRef& ty, int line) 
 
 std::pair<LLVMValueRef, TyRef> Codegen::global_slot(int global_id, int line) {
     if (global_id < 0 || global_id >= static_cast<int>(hir_.globals.size())) {
-        throw Unsupported("（内部）全局下标越界", line);
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{line}, "（内部）全局下标越界"};
     }
     const sema::HirGlobal& g = hir_.globals[static_cast<std::size_t>(global_id)];
     auto it = globals_.find(g.name);
@@ -415,16 +414,16 @@ std::pair<LLVMValueRef, TyRef> Codegen::lvalue(const sema::HNode& node) {
     switch (node.kind) {
         case sema::HKind::Local: {
             const Binding* b = lookup(node.name);
-            if (b == nullptr) throw Unsupported("（内部）作用域里没有 " + node.name, line);
+            if (b == nullptr) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{line}, "（内部）作用域里没有 " + node.name};
             if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
                 return {b->ptr, b->ty};
             }
-            throw Unsupported("给常量 " + node.name + " 赋值", line);
+            throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{line}, "给常量 " + node.name + " 赋值"};
         }
         case sema::HKind::Capture: {
             const int idx = node.capture_index;
             if (idx < 0 || idx >= static_cast<int>(cur_fn().captures.size())) {
-                throw Unsupported("（内部）捕获序号越界", line);
+                throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{line}, "（内部）捕获序号越界"};
             }
             const Binding& b = cur_fn().captures[static_cast<std::size_t>(idx)];
             return {b.ptr, b.ty};
@@ -434,8 +433,7 @@ std::pair<LLVMValueRef, TyRef> Codegen::lvalue(const sema::HNode& node) {
         case sema::HKind::Index: {
             V base = e(node.kids[0]);
             if (base.ty->kind != TyKind::Array && base.ty->kind != TyKind::Str) {
-                throw Unsupported("下标用在 " + std::string(ty_kind_name(base.ty->kind)) + " 上",
-                                  line);
+                throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{line}, "下标用在 " + std::string(ty_kind_name(base.ty->kind)) + " 上"};
             }
             V idx = convert(e(node.kids[1]), ty_i64(), line);
             const int step = storage_bytes(*base.ty->elem); /* 地址是字节地址（U-L1） */
@@ -450,8 +448,7 @@ std::pair<LLVMValueRef, TyRef> Codegen::lvalue(const sema::HNode& node) {
             auto base = lvalue(node.kids[0]);
             const TyRef& bty = base.second;
             if (bty->kind != TyKind::Struct) {
-                throw Unsupported("字段访问用在 " + std::string(ty_kind_name(bty->kind)) + " 上",
-                                  line);
+                throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{line}, "字段访问用在 " + std::string(ty_kind_name(bty->kind)) + " 上"};
             }
             /* 偏移由 sema 算好（`Hir.structs`，唯一实现是 `sema/layout.cc`）。偏移 0 的字段
              * 直接复用基址 —— 现状就是这样省的这一层 GEP。 */
@@ -462,7 +459,7 @@ std::pair<LLVMValueRef, TyRef> Codegen::lvalue(const sema::HNode& node) {
             return {p, node.ty};
         }
         default:
-            throw Unsupported("左值形态 " + std::string(hkind_name(node.kind)), line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "左值形态 " + std::string(hkind_name(node.kind))};
     }
 }
 
@@ -488,7 +485,7 @@ void Codegen::lower_stmt(const sema::HNode& st) {
          * scope push/pop，正是要的语义。 */
         case sema::HKind::Block: lower_block(st); break;
         default:
-            throw Unsupported("语句形态 " + std::string(hkind_name(st.kind)), st.span.line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{st.span.line}, "语句形态 " + std::string(hkind_name(st.kind))};
     }
     /* 块已被终止符收口（return / break）→ 后续语句放进一个不可达块继续发。 */
     if (LLVMGetBasicBlockTerminator(cur_fn().block) != nullptr) new_block("dead");
@@ -498,7 +495,7 @@ void Codegen::s_VarDecl(const sema::HNode& st) {
     /* `let`/`const` 带编译期常量值的情况在 HIR 里**没有节点**（sema 把引用点直接折成 `Const`），
      * 所以这里只剩「开一个槽 + store」这一条路。 */
     V v = e(st.kids[0]);
-    if (v.ty->kind == TyKind::Void) throw Unsupported(st.name + " 的初始化式没有值", st.span.line);
+    if (v.ty->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{st.span.line}, st.name + " 的初始化式没有值"};
     LLVMValueRef a = alloca_slot(v.ty, st.name);
     store_addr(a, v, v.ty, st.span.line);
     bind(st.name, Binding::local(a, v.ty));
@@ -554,7 +551,7 @@ void Codegen::lower_if_runtime(const std::vector<const sema::HNode*>& conds,
         LLVMBuildBr(cur_fn().bd, cont);
     };
     for (std::size_t i = 0; i < conds.size(); ++i) {
-        LLVMValueRef cond = as_cond(e(*conds[i]));
+        LLVMValueRef cond = as_cond(e(*conds[i]), conds[i]->span);
         LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "then");
         LLVMBasicBlockRef next_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "next");
         LLVMBuildCondBr(cur_fn().bd, cond, then_bb, next_bb);
@@ -581,7 +578,7 @@ void Codegen::s_While(const sema::HNode& st) {
     LLVMBasicBlockRef head = br_new_block("loop");
     LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "body");
     LLVMBasicBlockRef exit_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "exit");
-    LLVMValueRef cond = as_cond(e(st.kids[0]));
+    LLVMValueRef cond = as_cond(e(st.kids[0]), st.span);
     LLVMBuildCondBr(cur_fn().bd, cond, body_bb, exit_bb);
     LLVMPositionBuilderAtEnd(cur_fn().bd, body_bb);
     cur_fn().block = body_bb;
@@ -601,20 +598,20 @@ void Codegen::s_Break(const sema::HNode& st) {
             break;
         }
     }
-    if (target == nullptr) throw Unsupported("break " + st.label, st.span.line);
+    if (target == nullptr) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{st.span.line}, "break " + st.label};
     LLVMBuildBr(cur_fn().bd, target);
 }
 
 void Codegen::s_Return(const sema::HNode& st) {
     if (st.kids.empty()) {
         if (cur_fn().ret_ty->kind != TyKind::Void) {
-            throw Unsupported("非 None 函数里裸 return", st.span.line);
+            throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{st.span.line}, "非 None 函数里裸 return"};
         }
         LLVMBuildRetVoid(cur_fn().bd);
         return;
     }
     if (cur_fn().ret_ty->kind == TyKind::Void) {
-        throw Unsupported("None 函数里 return 值", st.span.line);
+        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{st.span.line}, "None 函数里 return 值"};
     }
     /* 返回值的转换已经是 kid 里的 `Cast` 节点（sema 的 `ret_stmt` 发）。 */
     LLVMBuildRet(cur_fn().bd, llv(e(st.kids[0])));
@@ -642,7 +639,7 @@ void Codegen::s_Switch(const sema::HNode& st) {
         }
         values.push_back(&st.kids[i]);
         if (i + 1 >= st.kids.size() || st.kids[i + 1].kind != sema::HKind::Block) {
-            throw Unsupported("（内部）switch 的 case 值后面没有块", st.span.line);
+            throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{st.span.line}, "（内部）switch 的 case 值后面没有块"};
         }
         blocks.push_back(&st.kids[i + 1]);
         ++i;
@@ -657,12 +654,12 @@ void Codegen::s_Switch(const sema::HNode& st) {
         if (str_subj) {
             V cvv = e(*values[i]);
             if (cvv.ty->kind != TyKind::Str) {
-                throw Unsupported("Str 主体 switch 的 case 值不是 Str 常量", values[i]->span.line);
+                throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{values[i]->span.line}, "Str 主体 switch 的 case 值不是 Str 常量"};
             }
-            cnd = as_cond(str_compare(subj, cvv, values[i]->span.line, false));
+            cnd = as_cond(str_compare(subj, cvv, values[i]->span.line, false), values[i]->span);
         } else {
             auto cvv = pat_const(e(*values[i]));
-            if (!cvv) throw Unsupported("switch case 的值不是常量", values[i]->span.line);
+            if (!cvv) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{values[i]->span.line}, "switch case 的值不是常量"};
             cnd = LLVMBuildICmp(cur_fn().bd, LLVMIntEQ, subj_ll, const_int(*cvv), "sc");
         }
         LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "case");
@@ -708,7 +705,7 @@ V Codegen::e(const sema::HNode& node) {
         case sema::HKind::CompositeLit: return e_composite_lit(node);
         case sema::HKind::Template: return e_template(node);
         default:
-            throw Unsupported("表达式形态 " + std::string(hkind_name(node.kind)), node.span.line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "表达式形态 " + std::string(hkind_name(node.kind))};
     }
 }
 
@@ -719,7 +716,7 @@ V Codegen::e_const(const sema::HNode& node) {
      * 必须发同一枚全局（旧路径按声明节点备忘：`root_const_values_`）；每次引用各发一枚会把
      * 产物变大，而且全局重名。 */
     const std::size_t id = static_cast<std::size_t>(node.const_id);
-    if (id >= hir_.consts.size()) throw Unsupported("（内部）常量下标越界", node.span.line);
+    if (id >= hir_.consts.size()) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）常量下标越界"};
     auto hit = const_pool_.find(node.const_id);
     if (hit != const_pool_.end()) return hit->second;
     V v = e(hir_.consts[id].value);
@@ -733,7 +730,7 @@ V Codegen::e_strlit(const sema::HNode& node) {
 
 V Codegen::e_local(const sema::HNode& node) {
     const Binding* b = lookup(node.name);
-    if (b == nullptr) throw Unsupported("（内部）作用域里没有 " + node.name, node.span.line);
+    if (b == nullptr) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）作用域里没有 " + node.name};
     if (b->kind == Binding::Kind::Local || b->kind == Binding::Kind::Capture) {
         return load_addr(b->ptr, b->ty);
     }
@@ -748,7 +745,7 @@ V Codegen::e_global(const sema::HNode& node) {
 V Codegen::e_capture(const sema::HNode& node) {
     const int idx = node.capture_index;
     if (idx < 0 || idx >= static_cast<int>(cur_fn().captures.size())) {
-        throw Unsupported("（内部）捕获序号越界", node.span.line);
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）捕获序号越界"};
     }
     const Binding& b = cur_fn().captures[static_cast<std::size_t>(idx)];
     return load_addr(b.ptr, b.ty);
@@ -763,7 +760,7 @@ V Codegen::e_unary(const sema::HNode& node) {
         return V::instr(LLVMBuildZExt(cur_fn().bd, cnd, i64_, "nb"), ty_bool());
     }
     if (!is_int(*v.ty)) {
-        throw Unsupported("一元运算用在 " + std::string(ty_kind_name(v.ty->kind)), line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "一元运算用在 " + std::string(ty_kind_name(v.ty->kind))};
     }
     LLVMValueRef ll = nullptr;
     if (node.un_op == sema::HUnOp::Neg) {
@@ -796,7 +793,7 @@ V Codegen::e_binary(const sema::HNode& node) {
 V Codegen::e_cond(const sema::HNode& node) {
     /* 形状是 **condbr + phi**，不是 `select`：两臂里都可能有 `load(…)`，`select` 会两支都求值
      * —— 与短路语义不一致。每个臂的类型转换已经在 sema 里做完（`Cast` 节点在各自的臂里）。 */
-    LLVMValueRef cond = as_cond(e(node.kids[0]));
+    LLVMValueRef cond = as_cond(e(node.kids[0]), node.span);
     LLVMBasicBlockRef then_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "t_then");
     LLVMBasicBlockRef else_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "t_else");
     LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "t_end");
@@ -814,7 +811,7 @@ V Codegen::e_cond(const sema::HNode& node) {
     const V& tv = dt.second;
     const V& ev = de.second;
     if (tv.ty->kind == TyKind::Void || ev.ty->kind == TyKind::Void) {
-        throw Unsupported("三目的一支没有值", node.span.line);
+        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "三目的一支没有值"};
     }
     const TyRef& ty = node.ty;
     /* 每个臂顶层的 `Cast` 必须在**它自己那个块**里发，而且是在两个臂都求值**之后**
@@ -877,7 +874,7 @@ V Codegen::apply_cast(const sema::HNode& node, V v) {
             if (is_int(*node.ty)) return V::instr(mask_ll(llv(v), node.ty->bits), node.ty);
             return V::instr(llv(v), node.ty);
     }
-    throw Unsupported("转换形态", line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "转换形态"};
 }
 
 /* 旧 `convert` 在二元运算里是「两个操作数**都**求值 → 各自转换」，HIR 把转换摆在 kid 的位置上
@@ -904,8 +901,8 @@ V Codegen::e_template(const sema::HNode& node) { return template_expr(node); }
 
 /* ================================================================ 运算 */
 
-LLVMValueRef Codegen::as_cond(const V& v) {
-    if (v.ty->kind == TyKind::Void) throw Unsupported("None 值当条件", 0);
+LLVMValueRef Codegen::as_cond(const V& v, Span span) {
+    if (v.ty->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{span}, "None 值当条件"};
     return LLVMBuildICmp(cur_fn().bd, LLVMIntNE, llv(v), const_int(0), "c");
 }
 
@@ -954,7 +951,7 @@ V Codegen::logical(const sema::HNode& node) {
     /* `&&` / `||` 短路（`get_command` 读的是游戏内存，不能随意重排）。两侧**不** convert
      * （`as_cond` 只看非零），所以类型可以不同。 */
     const bool is_and = node.bin_op == sema::HBinOp::LogAnd;
-    LLVMValueRef lhs = as_cond(e(node.kids[0]));
+    LLVMValueRef lhs = as_cond(e(node.kids[0]), node.span);
     LLVMBasicBlockRef lhs_bb = cur_fn().block;
     LLVMBasicBlockRef rhs_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "rhs");
     LLVMBasicBlockRef end_bb = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "lend");
@@ -962,7 +959,7 @@ V Codegen::logical(const sema::HNode& node) {
     else LLVMBuildCondBr(cur_fn().bd, lhs, end_bb, rhs_bb);
     LLVMPositionBuilderAtEnd(cur_fn().bd, rhs_bb);
     cur_fn().block = rhs_bb;
-    LLVMValueRef rhs = as_cond(e(node.kids[1]));
+    LLVMValueRef rhs = as_cond(e(node.kids[1]), node.span);
     LLVMBasicBlockRef rhs_end = cur_fn().block;
     LLVMBuildBr(cur_fn().bd, end_bb);
     LLVMPositionBuilderAtEnd(cur_fn().bd, end_bb);
@@ -987,12 +984,12 @@ V Codegen::binop(const sema::HNode& node) {
     const V b = settle(db);
     if (ty->kind == TyKind::Str) {
         /* `+` 是唯一的 Str 运算（实测：`"ab" + "cd"` → 长度 4 的 `abcd`）。 */
-        if (node.bin_op != sema::HBinOp::Add) throw Unsupported(std::string("Str 的 ") + op, line);
+        if (node.bin_op != sema::HBinOp::Add) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, std::string("Str 的 ") + op};
         return str_concat(a, b, line);
     }
     if (ty->kind == TyKind::Ptr) {
         if (node.bin_op != sema::HBinOp::Add && node.bin_op != sema::HBinOp::Sub) {
-            throw Unsupported(std::string("指针 ") + op, line);
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, std::string("指针 ") + op};
         }
         if (node.bin_op == sema::HBinOp::Add) {
             return V::instr(LLVMBuildAdd(cur_fn().bd, llv(a), llv(b), "pa"), ty);
@@ -1025,7 +1022,7 @@ V Codegen::binop(const sema::HNode& node) {
         case sema::HBinOp::BitAnd: r = LLVMBuildAnd(cur_fn().bd, x, y, "op"); break;
         case sema::HBinOp::BitOr: r = LLVMBuildOr(cur_fn().bd, x, y, "op"); break;
         case sema::HBinOp::BitXor: r = LLVMBuildXor(cur_fn().bd, x, y, "op"); break;
-        default: throw Unsupported(std::string("运算符 ") + op, line);
+        default: throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, std::string("运算符 ") + op};
     }
     return V::instr(mask_ll(r, bits), ty);
 }
@@ -1188,7 +1185,7 @@ LLVMValueRef Codegen::ensure_func(int index) {
 V Codegen::call_func(const sema::HNode& node) {
     const int idx = node.callee.index;
     if (idx < 0 || idx >= static_cast<int>(hir_.funcs.size())) {
-        throw Unsupported("（内部）被调函数下标越界", node.span.line);
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）被调函数下标越界"};
     }
     const sema::HirFunc& f = hir_.funcs[static_cast<std::size_t>(idx)];
     /* 前缀（stdlib）里的 5 个 def：产物里用 codegen 自己的优化实现（`body_*`），**不编译它的体**
@@ -1206,7 +1203,7 @@ V Codegen::call_func(const sema::HNode& node) {
     for (const sema::HCapture& c : f.caps) {
         const Binding* b = lookup(c.name);
         if (b == nullptr || b->ptr == nullptr) {
-            throw Unsupported("（内部）捕获 " + c.name + " 在调用点没有地址", node.span.line);
+            throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）捕获 " + c.name + " 在调用点没有地址"};
         }
         vals.push_back(b->ptr);
     }
@@ -1231,37 +1228,37 @@ V Codegen::call_builtin(const sema::HNode& node) {
         case kBuiltinMs: return builtin_ms(node);
         default: break;
     }
-    throw Unsupported("内建编号 " + std::to_string(node.callee.index), node.span.line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "内建编号 " + std::to_string(node.callee.index)};
 }
 
 V Codegen::builtin_load(const sema::HNode& node) {
     /* `load(<T>, p)`：结果类型就是 `Call.ty`（sema 已定），实参唯一。 */
-    if (node.kids.size() != 1) throw Unsupported("load(<T>, p) 的形态", node.span.line);
+    if (node.kids.size() != 1) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "load(<T>, p) 的形态"};
     return load_addr(to_ptr(e(node.kids[0])), node.ty);
 }
 
 V Codegen::builtin_store(const sema::HNode& node) {
-    if (node.kids.size() != 2) throw Unsupported("store(p, v) 的形态", node.span.line);
+    if (node.kids.size() != 2) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "store(p, v) 的形态"};
     LLVMValueRef addr = to_ptr(e(node.kids[0]));
     V val = e(node.kids[1]);
-    if (val.ty->kind == TyKind::Void) throw Unsupported("store 的值是 None", node.span.line);
+    if (val.ty->kind == TyKind::Void) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "store 的值是 None"};
     store_addr(addr, val, val.ty, node.span.line);
     return V::instr(nullptr, ty_void());
 }
 
 V Codegen::builtin_raw_cast(const sema::HNode& node) {
     /* sema 已把它折成 `Cast{Raw}` 或 `Const`；这条只在直接构造 HIR 时才会走到。 */
-    if (node.kids.size() != 1) throw Unsupported("raw_cast(<T>, v) 的形态", node.span.line);
+    if (node.kids.size() != 1) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "raw_cast(<T>, v) 的形态"};
     return V::instr(llv(e(node.kids[0])), node.ty);
 }
 
 V Codegen::builtin_asr(const sema::HNode& node) {
     /* `asr`：按 W 位符号位算术右移，与 `>>` 不同（U-L8 指示 3）：n ≥ W 时**饱和**。 */
-    if (node.kids.size() != 2) throw Unsupported("asr(x, n) 的形态", node.span.line);
+    if (node.kids.size() != 2) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "asr(x, n) 的形态"};
     const int line = node.span.line;
     const V x = e(node.kids[0]);
     if (!is_int(*x.ty)) {
-        throw Unsupported(std::string("asr 用在 ") + ty_kind_name(x.ty->kind), line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, std::string("asr 用在 ") + ty_kind_name(x.ty->kind)};
     }
     const int bits = x.ty->bits;
     /* 常量在 sema 折好（决策 4）；移位量的位模式由 sema 的 `Cast` 转好（旧 `convert` 同）。 */
@@ -1293,10 +1290,10 @@ V Codegen::builtin_clz(const sema::HNode& node) {
     /* 数前导零的范围是**操作数声明的位宽**，不是 64：137 的注释把 `Int` 操作数钉在 64
      * （`clz(input.input)` 的 `input.input` 是 U8 → 数 8 位里的前导零）。所以用 i64 的 ctlz
      * 再减去「64 - 位宽」——不必为每种位宽各声明一条 intrinsic。 */
-    if (node.kids.size() != 1) throw Unsupported("clz(x) 的形态", node.span.line);
+    if (node.kids.size() != 1) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "clz(x) 的形态"};
     V x = e(node.kids[0]);
     if (!is_int(*x.ty)) {
-        throw Unsupported(std::string("clz 用在 ") + ty_kind_name(x.ty->kind), node.span.line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, std::string("clz 用在 ") + ty_kind_name(x.ty->kind)};
     }
     const int bits = x.ty->bits;
     LLVMValueRef v = mask_ll(llv(x), bits);
@@ -1320,15 +1317,15 @@ V Codegen::builtin_ror(const sema::HNode& node) {
      *
      * 只写一条路就会与参考分叉，所以两条路各按实测来。旋转量只看低位，不必像 `asr` 那样
      * 先转成操作数的类型。 */
-    if (node.kids.size() != 2) throw Unsupported("ror(x, n) 的形态", node.span.line);
+    if (node.kids.size() != 2) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "ror(x, n) 的形态"};
     const int line = node.span.line;
     V x = e(node.kids[0]);
     V n = e(node.kids[1]);
     if (!is_int(*x.ty)) {
-        throw Unsupported(std::string("ror 用在 ") + ty_kind_name(x.ty->kind), line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, std::string("ror 用在 ") + ty_kind_name(x.ty->kind)};
     }
     if (!is_int(*n.ty)) {
-        throw Unsupported(std::string("ror 的旋转量是 ") + ty_kind_name(n.ty->kind), line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, std::string("ror 的旋转量是 ") + ty_kind_name(n.ty->kind)};
     }
     const int bits = x.ty->bits;
     /* 「两个操作数都是常量」那一路（64 位旋转）在 sema 折好；这里只剩按 W 位宽算的运行期那一路。 */
@@ -1344,7 +1341,7 @@ V Codegen::builtin_ror(const sema::HNode& node) {
 }
 
 V Codegen::builtin_minmax(const sema::HNode& node, bool is_min) {
-    if (node.kids.size() != 2) throw Unsupported("min/max 的形态", node.span.line);
+    if (node.kids.size() != 2) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "min/max 的形态"};
     const TyRef& ty = node.ty;
     /* 两侧已在 sema `unify` + `convert`（常量对比也在那里折好），这里只剩运行期的 `select`。
      * 转换的求值位置照旧是**逐个紧跟操作数**（`min`/`max` 的旧实现与 `binop` 不同，它每求一个
@@ -1373,14 +1370,14 @@ V Codegen::builtin_array(const sema::HNode& node) {
      * 我们把它做成**每个调用点一枚私有全局**（头 + 零载荷）：语料里 `array()` 都在「建表」函数里
      * （每次运行只调一次），所以加载期的零初始化等价于参考的每次分配零初始化。 */
     if (node.kids.size() != 1 || node.ty->kind != TyKind::Array) {
-        throw Unsupported("array(<T>, n) 的形态", node.span.line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "array(<T>, n) 的形态"};
     }
     const TyRef& elem = node.ty->elem;
     auto count_opt = pat_const(e(node.kids[0]));
-    if (!count_opt) throw Unsupported("array 的长度不是常量", node.span.line);
+    if (!count_opt) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度不是常量"};
     const uint64_t count = *count_opt;
     if (count > (uint64_t{1} << 32)) {
-        throw Unsupported("array 的长度 " + std::to_string(count) + " 太大", node.span.line);
+        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度 " + std::to_string(count) + " 太大"};
     }
     const uint64_t payload = count * static_cast<uint64_t>(storage_bytes(*elem));
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
@@ -1424,9 +1421,9 @@ V Codegen::builtin_random(const sema::HNode& node) {
      * `0x2545F4914F6CDD1`（只有 15 位，别换成教科书的 16 位那个）；返回新 state 的全 64 位；
      * `random(n) = U64(state) % U64(n)`；种子就是前缀的 `var global_seed = Seed 1`，与源码写
      * `global_seed = Seed (…)` 的是**同一份**全局。 */
-    if (node.kids.empty() || node.kids.size() > 2) throw Unsupported("random 的参数个数", node.span.line);
+    if (node.kids.empty() || node.kids.size() > 2) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "random 的参数个数"};
     if (node.kids[0].kind != sema::HKind::Global) {
-        throw Unsupported("（内部）random 的第一枚操作数不是种子全局", node.span.line);
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）random 的第一枚操作数不是种子全局"};
     }
     const auto sg = global_slot(node.kids[0].global_id, node.span.line);
     const TyRef& ty = sg.second;
@@ -1447,10 +1444,10 @@ V Codegen::builtin_random(const sema::HNode& node) {
 /* `.len()`（内建 10）：**读 `p[-8]` 的头**（`len_of`），不是 inttoptr/ptrtoint 算术 —— 换成算术
  * 之后 IR 形状就变了，产物逐字节相同这条主判据就没有保证了（方案 §2f 追加段）。 */
 V Codegen::builtin_len(const sema::HNode& node) {
-    if (node.kids.size() != 1) throw Unsupported("len(obj) 的形态", node.span.line);
+    if (node.kids.size() != 1) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "len(obj) 的形态"};
     V obj = e(node.kids[0]);
     if (obj.ty->kind != TyKind::Str && obj.ty->kind != TyKind::Array) {
-        throw Unsupported(".len() 用在 " + std::string(ty_kind_name(obj.ty->kind)), node.span.line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, ".len() 用在 " + std::string(ty_kind_name(obj.ty->kind))};
     }
     return V::instr(len_of(obj, node.span.line), ty_i64());
 }
@@ -1458,10 +1455,10 @@ V Codegen::builtin_len(const sema::HNode& node) {
 /* `.ms()`（内建 11）：毫秒 → `Time`（纳秒）。常量折在**这里**（`pat_const` 是「按源类型符号性
  * 扩过的 64 位值」，折法只该有一处），运行期是一乘。 */
 V Codegen::builtin_ms(const sema::HNode& node) {
-    if (node.kids.size() != 1) throw Unsupported("ms(obj) 的形态", node.span.line);
+    if (node.kids.size() != 1) throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "ms(obj) 的形态"};
     V obj = e(node.kids[0]);
     if (!is_int(*obj.ty)) {
-        throw Unsupported(".ms() 用在 " + std::string(ty_kind_name(obj.ty->kind)), node.span.line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, ".ms() 用在 " + std::string(ty_kind_name(obj.ty->kind))};
     }
     auto c = pat_const(obj);
     if (c) return V::konst(ty_time(), (*c * kNsPerMs) & kMask64);
@@ -1473,17 +1470,17 @@ V Codegen::call_prefix(const sema::HirFunc& f, const sema::HNode& node) {
      * 注释）；实参在 sema 里已经 `convert` 到形参类型，所以这里只取位模式。
      * `thread_exit` 是**外部符号**（装配器造桩），其余四个是产物内联的优化实现。 */
     if (f.pre_body == sema::HPreBody::ThreadExit) {
-        if (!node.kids.empty()) throw Unsupported("thread_exit 的参数个数", node.span.line);
+        if (!node.kids.empty()) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "thread_exit 的参数个数"};
         LLVMValueRef fn = get_extern(f.name, f.ret, {});
         emit_call(fn, {});
         return V::instr(nullptr, ty_void());
     }
     if (node.kids.size() != f.params.size()) {
-        throw Unsupported(f.name + "(…) 的参数个数", node.span.line);
+        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, f.name + "(…) 的参数个数"};
     }
     std::vector<TyRef> param_tys;
     for (const sema::HParam& p : f.params) param_tys.push_back(p.ty);
-    LLVMValueRef fn = ensure_prefix_fn(f.name, f.ret, param_tys);
+    LLVMValueRef fn = ensure_prefix_fn(f.name, f.ret, param_tys, node.span);
     std::vector<LLVMValueRef> vals;
     vals.reserve(node.kids.size());
     for (const sema::HNode& kid : node.kids) vals.push_back(llv(e(kid)));
@@ -1599,7 +1596,7 @@ void Codegen::body_memory_copy() {
 }
 
 LLVMValueRef Codegen::ensure_prefix_fn(const std::string& name, const TyRef& ret_ty,
-                                       const std::vector<TyRef>& param_tys) {
+                                       const std::vector<TyRef>& param_tys, Span span) {
     const std::string key = "prefix:" + name;
     auto hit = fns_.find(key);
     if (hit != fns_.end()) return hit->second;
@@ -1618,7 +1615,7 @@ LLVMValueRef Codegen::ensure_prefix_fn(const std::string& name, const TyRef& ret
     else if (name == "sleep") body_sleep();
     else if (name == "memory_clear") body_memory_clear();
     else if (name == "memory_copy") body_memory_copy();
-    else throw Unsupported("前缀函数 " + name, 0);
+    else throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{span}, "前缀函数 " + name};
     finish_function();
     return fnref;
 }
@@ -1633,7 +1630,7 @@ LLVMValueRef Codegen::ensure_prefix_fn(const std::string& name, const TyRef& ret
 
 LLVMValueRef Codegen::len_of(const V& obj, int line) {
     if (obj.ty->kind != TyKind::Str && obj.ty->kind != TyKind::Array) {
-        throw Unsupported("长度用在 " + std::string(ty_kind_name(obj.ty->kind)), line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "长度用在 " + std::string(ty_kind_name(obj.ty->kind))};
     }
     std::vector<LLVMValueRef> gi{const_int(static_cast<uint64_t>(-8))};
     LLVMValueRef lp = LLVMBuildGEP2(cur_fn().bd, storage_ll(*make_int(8, false)), to_ptr(obj),
@@ -1672,11 +1669,11 @@ V Codegen::template_expr(const sema::HNode& node) {
         if (i % 2 == 0) {
             const sema::HNode& seg = node.kids[i];
             if (seg.kind != sema::HKind::StrLit) {
-                throw Unsupported("（内部）模板的文字段不是 StrLit", seg.span.line);
+                throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{seg.span.line}, "（内部）模板的文字段不是 StrLit"};
             }
             const int id = seg.string_id;
             if (id < 0 || id >= static_cast<int>(hir_.strings.size())) {
-                throw Unsupported("（内部）串池下标越界", seg.span.line);
+                throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{seg.span.line}, "（内部）串池下标越界"};
             }
             texts.push_back(hir_.strings[static_cast<std::size_t>(id)].bytes);
         } else {
@@ -1684,7 +1681,7 @@ V Codegen::template_expr(const sema::HNode& node) {
         }
     }
     if (node.kids.size() % 2 == 0) {
-        throw Unsupported("（内部）模板的 kid 个数应是奇数", node.span.line);
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "（内部）模板的 kid 个数应是奇数"};
     }
     std::vector<V> vals;
     vals.reserve(parts.size());
@@ -1756,7 +1753,7 @@ uint64_t Codegen::part_capacity(const V& v, int line) {
     if (v.ty->kind == TyKind::Str) return 0;
     if (v.ty->kind == TyKind::Ptr) return 21;
     if (v.ty->kind == TyKind::Int) return v.ty->is_bool ? 5 : 21;
-    throw Unsupported("模板插值遇到 " + std::string(ty_kind_name(v.ty->kind)), line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "模板插值遇到 " + std::string(ty_kind_name(v.ty->kind))};
 }
 
 LLVMValueRef Codegen::write_literal(LLVMValueRef cur, const std::string& text, int line) {
@@ -1764,7 +1761,7 @@ LLVMValueRef Codegen::write_literal(LLVMValueRef cur, const std::string& text, i
      * 注意 HIR 的串已经过 sema 的转义解码，所以这条只能拦住「源码里就是反斜杠」那种；
      * 解码过的转义在 sema 侧就该拦（已回报）。 */
     if (text.find('\\') != std::string::npos) {
-        throw Unsupported("含转义的字符串字面量（U-L10 未定）", line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "含转义的字符串字面量（U-L10 未定）"};
     }
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     for (std::size_t k = 0; k < text.size(); ++k) {
@@ -1822,7 +1819,7 @@ LLVMValueRef Codegen::render_part(LLVMValueRef cur, const V& v, int line) {
         }
         return emit_call(ensure_dec_fn(), {cur, x, minus});
     }
-    throw Unsupported("模板插值遇到 " + std::string(ty_kind_name(v.ty->kind)), line);
+    throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "模板插值遇到 " + std::string(ty_kind_name(v.ty->kind))};
 }
 
 LLVMValueRef Codegen::ensure_copy_fn() {
@@ -1995,12 +1992,12 @@ V Codegen::array_literal(const sema::HNode& node) {
     std::vector<V> ev;
     ev.reserve(node.kids.size());
     for (const sema::HNode& item : node.kids) ev.push_back(e(item));
-    if (ev.empty()) throw Unsupported("空数组字面量", node.span.line);
+    if (ev.empty()) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line}, "空数组字面量"};
     /* 元素类型取**第一个**元素的类型（后面各元素不 convert，写入时按自己的宽度截断）。 */
     const TyRef& ty = ev[0].ty;
     LLVMTypeRef el = storage_ll(*ty);
     std::vector<LLVMValueRef> elems;
-    for (const auto& e : ev) elems.push_back(const_for_storage(e));
+    for (const auto& e : ev) elems.push_back(const_for_storage(e, node.span));
     /* 载荷前必须带 8 字节 Nim 头（`p[-8] = len << 16`，读法见 `len_of` 与 facts §数组/字符串布局）：
      * 少了它，`.len()` 那条越界的**常量** `load` 在 O2 里是 undef，靠它判分支的整条 `if`
      * 会被折掉 —— 实测 008 的 `check_output` 因此恒返回 fail（`docs/notes/2026-10-18-test-result-chain.md`）。
@@ -2038,10 +2035,10 @@ LLVMValueRef Codegen::field_storage_value(const V& v, const TyRef& ty, int line)
 V Codegen::composite_literal(const sema::HNode& node) {
     const TyRef& ty = node.ty;
     if (ty->kind != TyKind::Struct) {
-        throw Unsupported(std::string("复合字面量类型 ") + ty_kind_name(ty->kind), node.span.line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, std::string("复合字面量类型 ") + ty_kind_name(ty->kind)};
     }
     auto it = struct_ll_.find(ty->name);
-    if (it == struct_ll_.end()) throw CompileFail("struct 类型没建好：" + ty->name);
+    if (it == struct_ll_.end()) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "struct 类型没建好：" + ty->name};
     /* HIR 的 kid 顺序 = **声明序**，每个字段一个 kid（没写的是零值 `Const`），所以 `kids[i]`
      * 恒对应 `ty->fields[i]` —— 不再需要「按字段名匹配、补零」那一趟。
      *
@@ -2067,13 +2064,13 @@ V Codegen::composite_literal(const sema::HNode& node) {
         /* 常量聚合：顶层 `var x = T {…}` 的初始化式也走这里（拿不到 builder）。 */
         std::vector<LLVMValueRef> elems;
         elems.reserve(vals.size());
-        for (const V& v : vals) elems.push_back(const_for_storage(v));
+        for (const V& v : vals) elems.push_back(const_for_storage(v, node.span));
         LLVMValueRef agg = LLVMConstStructInContext(ctx(), elems.data(),
                                                     static_cast<unsigned>(elems.size()), 1);
         return V::instr(agg, ty);
     }
     if (cur_fn().bd == nullptr || cur_fn().block == nullptr) {
-        throw Unsupported("复合字面量里的字段值不是编译期常量", node.span.line);
+        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "复合字面量里的字段值不是编译期常量"};
     }
     LLVMPositionBuilderAtEnd(cur_fn().bd, cur_fn().block);
     LLVMValueRef agg = LLVMConstNull(it->second);
@@ -2084,7 +2081,7 @@ V Codegen::composite_literal(const sema::HNode& node) {
         const TyRef& fty = ty->fields[i].second;
         const uint64_t mask = is_int(*fty) ? mask_of(fty->bits) : kMask64;
         if (vals[i].c && (*vals[i].c & mask) == 0) continue;
-        LLVMValueRef el = vals[i].c ? const_for_storage(vals[i])
+        LLVMValueRef el = vals[i].c ? const_for_storage(vals[i], node.span)
                                     : field_storage_value(vals[i], fty, node.span.line);
         agg = LLVMBuildInsertValue(cur_fn().bd, agg, el, static_cast<unsigned>(i), "cl");
     }
@@ -2097,14 +2094,14 @@ V Codegen::string_literal(int string_id, int line) {
     auto hit = str_pool_.find(string_id);
     if (hit != str_pool_.end()) return hit->second;
     if (string_id < 0 || string_id >= static_cast<int>(hir_.strings.size())) {
-        throw Unsupported("（内部）串池下标越界", line);
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{line}, "（内部）串池下标越界"};
     }
     const sema::HirString& s = hir_.strings[static_cast<std::size_t>(string_id)];
     /* 字符串字面量 → Nim 布局的常量（`p[-8] = (len << 16) | cap_log2`，接口 §3）。`cap_log2` 取 0
      * （只有 `len` 那半被用到）；末尾照加一个 NUL。转义语义没定（U-L10），含反斜杠的仍报错：
      * 方案 §2e 决定 1 —— S2c 期间保持现状行为，放开是单独一步。 */
     if (s.bytes.find('\\') != std::string::npos) {
-        throw Unsupported("含转义的字符串字面量（U-L10 未定）", line);
+        throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line}, "含转义的字符串字面量（U-L10 未定）"};
     }
     std::string raw;
     const uint64_t header = static_cast<uint64_t>(s.bytes.size()) << 16;
@@ -2188,11 +2185,11 @@ std::string Program::ir_text() const { return print_module(module()); }
 std::vector<uint8_t> Program::emit_object() {
     std::string err;
     std::unique_ptr<TargetMachine> tm(TargetMachine::create(kTriple, &err));
-    if (!tm) throw CompileFail(err);
-    if (!verify_module(module(), &err)) throw CompileFail("IR 校验失败：" + err);
-    if (!tm->run_default_o2(module(), &err)) throw CompileFail(err);
+    if (!tm) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, err};
+    if (!verify_module(module(), &err)) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, "IR 校验失败：" + err};
+    if (!tm->run_default_o2(module(), &err)) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, err};
     std::vector<uint8_t> out;
-    if (!tm->emit_object(module(), &out, &err)) throw CompileFail(err);
+    if (!tm->emit_object(module(), &out, &err)) throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{}, err};
     return out;
 }
 

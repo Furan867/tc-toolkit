@@ -651,7 +651,7 @@ void usage_all(const char* argv0) {
         "\n"
         "子命令:\n"
         "  run    --src <si> --bin <blob> [--entry <hex>] [--target <cycles>]\n"
-        "         [--seed none|seq|xorshift] [--save <seq>] [--json]\n"
+        "         [--seed none|seq|xorshift] [--save <seq>] [--dump-boot <path>] [--json]\n"
         "         跑一份产物，采一份 store 序列（只采集，不比对）\n"
         "  diff   --state <a.seq> <b.seq> [--src <si>] [--tick-mark <hex>] [--json]\n"
         "  diff   --trace <a.seq> <b.seq> [--json]\n"
@@ -684,6 +684,9 @@ void usage_run(const char* argv0) {
         "  --target  sim_target_cycle，默认 100\n"
         "  --seed    `#RESET_DATA_*` 灌什么：seq（默认）/ xorshift / none（全零）\n"
         "  --save    跑完后把 store 序列落盘（`tc::save` 的格式，给 diff / where 用）\n"
+        "  --dump-boot <path>\n"
+        "            启动（boot）跑完、还没发 run 命令时，把 `[game_lo, game_hi)` 的原始字节写到该文件。\n"
+        "            无 header，文件大小 = game_hi - game_lo；区间里没有映射的地址是 0。不给就完全跳过\n"
         "  --json    结果输出成一个 JSON 对象到 stdout\n"
         "  --dll-dir compile_real.dll 所在目录（默认用 image.hh 的 kDllReal；也可用 DIFFTRACE_DLL_DIR）\n"
         "退出码: 0=成功 / 2=参数或模拟错误\n",
@@ -723,7 +726,7 @@ void usage_where(const char* argv0) {
 
 int cmd_run(int argc, char** argv) {
     const auto t0 = std::chrono::steady_clock::now();
-    std::string src, bin, save_path;
+    std::string src, bin, save_path, boot_dump_path;
     std::optional<u64> entry_arg;
     std::optional<std::string> dll_dir;
     u64 target = 100;
@@ -747,6 +750,8 @@ int cmd_run(int argc, char** argv) {
             seed = parse_seed(argv[++i]);
         } else if (a == "--save" && more) {
             save_path = argv[++i];
+        } else if (a == "--dump-boot" && more) {
+            boot_dump_path = argv[++i];
         } else if (a == "--dll-dir" && more) {
             dll_dir = argv[++i];
         } else if (a == "--json") {
@@ -775,7 +780,7 @@ int cmd_run(int argc, char** argv) {
 
     tc::RunOutcome out;
     try {
-        out = tc::run_to_cycle(uc, spec, image, target, seed);
+        out = tc::run_to_cycle(uc, spec, image, target, seed, boot_dump_path);
     } catch (...) {
         uc_close(uc);
         throw;
@@ -786,6 +791,11 @@ int cmd_run(int argc, char** argv) {
         tc::save(save_path, out.stores);
         say(io, "序列已落盘       : %s（%zu 条）\n", save_path.c_str(), out.stores.size());
     }
+    // 只在要了快照时打：不给 `--dump-boot` 的输出必须与以前逐字节相同。
+    if (!out.boot_dump.empty())
+        say(io, "boot 快照        : [%s, %s) %llu B → %s（无 header）\n", hex(out.boot_lo).c_str(),
+            hex(out.boot_hi).c_str(), static_cast<unsigned long long>(out.boot_bytes),
+            out.boot_dump.c_str());
 
     // 正常收工只有这两种停法（`running_zero` = 精确、`sampled` = 兜底）。
     const bool ok = out.result.reason == "running_zero" || out.result.reason == "sampled";
@@ -797,6 +807,10 @@ int cmd_run(int argc, char** argv) {
         if (s.addr == watched) watched_values.push_back(s.value);
 
     say(io, "entry            : %s（%s）\n", hex(entry.value).c_str(), entry.source.c_str());
+    say(io, "源 / 产物        : --src %s / --bin %s\n", src.c_str(), bin.c_str());
+    say(io, "code 字节数      : %zu B\n", image.code.size());
+    say(io, "目标 tick        : %llu（--target = sim_target_cycle）\n",
+        static_cast<unsigned long long>(target));
     say(io, "段 / 字节        : %zu 段、%llu B（uc_mem_map_ptr %zu 段）\n", out.layout.regions,
         static_cast<unsigned long long>(out.layout.mapped_bytes), out.host_regions.size());
     say(io, "DLL 镜像         : %s base %s、%zu B、导入槽 %zu\n", dll_path.c_str(),
@@ -865,6 +879,9 @@ int cmd_run(int argc, char** argv) {
     const auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
             .count();
+    say(io, "结论             : %s（退出码 %d）\n", ok ? "ok" : "不 ok",
+        ok ? kExitOk : kExitError);
+    say(io, "耗时             : %llu ms\n", static_cast<unsigned long long>(elapsed_ms));
     if (io.json) {
         Json j;
         j.flag("ok", ok);
@@ -891,6 +908,10 @@ int cmd_run(int argc, char** argv) {
         j.text("src", src);
         j.text("bin", bin);
         j.text("save", save_path);
+        if (!out.boot_dump.empty()) {
+            j.text("boot_dump", out.boot_dump);
+            j.num("boot_bytes", out.boot_bytes);
+        }
         j.text("dll", dll_path);
         j.num("elapsed_ms", static_cast<u64>(elapsed_ms));
         std::printf("%s\n", j.str().c_str());
@@ -899,6 +920,225 @@ int cmd_run(int argc, char** argv) {
 }
 
 // ---- diff -------------------------------------------------------------------
+
+// `diff --state` 的全部结论。人读与 `--json` 都只从这一个结构体渲染：两处各算一遍必然分叉 ——
+// 逐 tick 曾经只落在 JSON 里（`first_diff_tick` / `tick_diff_bytes`），看人读输出的人于是以为
+// 判据根本没做逐 tick。
+struct StateReport {
+    // 输入与过滤
+    std::string path_a;
+    std::string path_b;
+    std::string src;
+    std::optional<GameSpace> space;
+    size_t stores_a = 0;  // 过滤前的条数
+    size_t stores_b = 0;
+    size_t kept_a = 0;
+    size_t kept_b = 0;
+    size_t dropped_a = 0;
+    size_t dropped_b = 0;
+    size_t dropped_code_a = 0;
+    size_t dropped_code_b = 0;
+
+    // 判据：整段折叠成终态再逐字节比
+    bool equal = false;
+    size_t final_diff_bytes = 0;
+    std::vector<tc::ByteDiff> final_rows;
+
+    // 逐 tick 线索（只在给了 `--tick-mark` 时有意义）
+    bool tick_marked = false;
+    u64 tick_mark = 0;
+    size_t mark_a = 0;      // 界标在过滤后的 A 里被写几次
+    size_t mark_b = 0;
+    size_t mark_raw_a = 0;  // 过滤前
+    size_t mark_raw_b = 0;
+    size_t ticks_a = 0;
+    size_t ticks_b = 0;
+    // 非空 = 某个 tick 有差异，或两边 tick 数不同；空 = 每个 tick 折叠后都 0 差异
+    std::optional<tc::StateDiff> tick_diff;
+    // tick 数相同、逐 tick 都比过且都 0 差异，终态却不等。折叠是「按顺序把各 tick 的写合并进
+    // 同一份内存」，逐 tick 全等而终态不等在算术上不成立 —— 只可能是切分或折叠坏了。这时
+    // equal / 不等两个结论都不可信，按出错处理（退出码 2）。
+    bool tick_contradiction = false;
+};
+
+// 逐 tick 的结论只有「某个 tick 有差异」会给 `first_diff_tick`：两边 tick 数不同时此后无从逐
+// tick 比，那条结论本身就在 `tick_diff->tick_count` 里。
+std::optional<size_t> first_diff_tick(const StateReport& r) {
+    if (!r.tick_diff || r.tick_diff->tick_count) return std::nullopt;
+    return r.tick_diff->tick;
+}
+
+bool tick_count_mismatch(const StateReport& r) {
+    return r.tick_diff && r.tick_diff->tick_count.has_value();
+}
+
+size_t tick_diff_bytes(const StateReport& r) { return r.tick_diff ? r.tick_diff->mismatch_count : 0; }
+
+// 先算、后渲染：这里只往结构体里写，不出一个字节。
+StateReport state_report(const std::string& path_a, const std::string& path_b,
+                         const std::string& src, const std::optional<u64>& tick_mark) {
+    StateReport r;
+    r.path_a = path_a;
+    r.path_b = path_b;
+    r.src = src;
+
+    const std::vector<tc::Store> raw_a = tc::load(path_a);
+    const std::vector<tc::Store> raw_b = tc::load(path_b);
+    r.stores_a = raw_a.size();
+    r.stores_b = raw_b.size();
+    FilterOut keep_a;
+    FilterOut keep_b;
+    if (src.empty()) {
+        keep_a.stores = raw_a;
+        keep_b.stores = raw_b;
+    } else {
+        r.space = game_space_of(Spec::parse(src), raw_a, raw_b);
+        keep_a = keep_game_space(raw_a, *r.space);
+        keep_b = keep_game_space(raw_b, *r.space);
+    }
+    const std::vector<tc::Store>& a = keep_a.stores;
+    const std::vector<tc::Store>& b = keep_b.stores;
+    r.kept_a = a.size();
+    r.kept_b = b.size();
+    r.dropped_a = keep_a.dropped;
+    r.dropped_b = keep_b.dropped;
+    r.dropped_code_a = keep_a.dropped_code;
+    r.dropped_code_b = keep_b.dropped_code;
+
+    // 根因防线：过滤把两边都清空时 equal 是平凡成立的（001 就是这么假绿过）。
+    // 局限在这一个场景：一边非零另一边为 0 时差异还看得见，报错只会把真结论捂起来。
+    if (r.space && (!raw_a.empty() || !raw_b.empty()) && a.empty() && b.empty()) {
+        char msg[1024];
+        std::snprintf(msg, sizeof(msg),
+                      "过滤后两边都是 0 条写（原始 A %zu / B %zu 条）：判据会平凡成立，不能当 equal。"
+                      "游戏地址空间 [%s, %s) 里一条写都没有，查 `--src` 对不对",
+                      raw_a.size(), raw_b.size(), hex(r.space->lo).c_str(), hex(r.space->hi).c_str());
+        throw std::runtime_error(msg);
+    }
+
+    // 界标先验：界标不在过滤后的序列里 = `split_ticks` 只会给出一段，逐 tick 会静默退化成终态比。
+    // 也正是「传了个没人写的地址」踩过的坑，所以它在任何结论打印之前就报错。
+    if (tick_mark) {
+        r.tick_marked = true;
+        r.tick_mark = *tick_mark;
+        r.mark_a = count_writes_at(a, *tick_mark);
+        r.mark_b = count_writes_at(b, *tick_mark);
+        r.mark_raw_a = count_writes_at(raw_a, *tick_mark);
+        r.mark_raw_b = count_writes_at(raw_b, *tick_mark);
+        if (r.mark_a == 0 || r.mark_b == 0) {
+            char msg[1024];
+            std::snprintf(msg, sizeof(msg),
+                          "--tick-mark %s 在过滤后的序列里出现 A %zu 次 / B %zu 次"
+                          "（原始序列 A %zu / B %zu）；该地址出现 0 次。"
+                          "逐 tick 需要的是序列里真被写过的地址，且要落在游戏区间 [%s, %s) 内。",
+                          hex(*tick_mark).c_str(), r.mark_a, r.mark_b, r.mark_raw_a, r.mark_raw_b,
+                          r.space ? hex(r.space->lo).c_str() : "-",
+                          r.space ? hex(r.space->hi).c_str() : "-");
+            throw std::runtime_error(msg);
+        }
+    }
+
+    // 判据：折完整序列的终态。不靠界标，所以界标选错也不会把结论带偏，所以它是第一行。
+    const tc::Memory final_a = tc::fold(a, 0, a.size());
+    const tc::Memory final_b = tc::fold(b, 0, b.size());
+    r.final_diff_bytes = tc::memory_diff(final_a, final_b, kMaxMismatchPrint, r.final_rows);
+    r.equal = r.final_diff_bytes == 0;
+
+    // 逐 tick：不给界标就不做（宁可不给线索，也不给一条看着像判据的假线索）。
+    if (r.tick_marked) {
+        r.ticks_a = tc::split_ticks(a, r.tick_mark).size();
+        r.ticks_b = tc::split_ticks(b, r.tick_mark).size();
+        r.tick_diff = tc::first_state_diff(a, b, r.tick_mark, kMaxMismatchPrint);
+        r.tick_contradiction = !r.tick_diff && !r.equal;
+    }
+    return r;
+}
+
+// 人读渲染。数字全部来自同一个 `StateReport`（`print_state_json` 也读它），两种输出不可能分叉；
+// 每一行都能在 `--json` 里找到对应字段。
+void print_state_text(const Io& io, const StateReport& r) {
+    say(io, "最终状态         : %s\n", r.equal ? "equal（判据通过）" : "不等（判据不过）");
+    if (r.final_diff_bytes != 0) print_byte_diffs(io, r.final_rows, r.final_diff_bytes);
+    say(io, "A                : %s（%zu 条写，留下 %zu）\n", r.path_a.c_str(), r.stores_a, r.kept_a);
+    say(io, "B                : %s（%zu 条写，留下 %zu）\n", r.path_b.c_str(), r.stores_b, r.kept_b);
+    if (!r.space) {
+        say(io, "范围             : 没给 --src → 不过滤（栈区与代码区也进比对）\n");
+    } else {
+        say(io, "游戏地址空间     : [%s, %s)（game_lo / game_hi，%llu 字节）\n",
+            hex(r.space->lo).c_str(), hex(r.space->hi).c_str(),
+            static_cast<unsigned long long>(r.space->hi - r.space->lo));
+        say(io, "代码区           : [%s, %s)（上界 = 序列里最高的代码区写 + 宽度；代码区里的写不比）\n",
+            hex(r.space->code_lo).c_str(), hex(r.space->code_hi).c_str());
+        say(io, "保留条数         : kept_a %zu / kept_b %zu（丢 A %zu / B %zu，其中代码区 A %zu / B %zu）\n",
+            r.kept_a, r.kept_b, r.dropped_a, r.dropped_b, r.dropped_code_a, r.dropped_code_b);
+    }
+
+    if (!r.tick_marked) {
+        say(io, "逐 tick          : 未给 --tick-mark，只比终态（逐 tick 要一个每 tick 写一次的地址当界标）\n");
+        return;
+    }
+    say(io, "tick 界标        : %s（A %zu 次 / B %zu 次写；过滤前 A %zu / B %zu）\n",
+        hex(r.tick_mark).c_str(), r.mark_a, r.mark_b, r.mark_raw_a, r.mark_raw_b);
+    say(io, "tick 数          : A %zu / B %zu\n", r.ticks_a, r.ticks_b);
+    if (tick_count_mismatch(r)) {
+        say(io, "第一个不同       : 没得比 —— 两边 tick 数不同（A %zu / B %zu），此后无从逐 tick 比\n",
+            r.tick_diff->tick_count->first, r.tick_diff->tick_count->second);
+    } else if (const std::optional<size_t> tick = first_diff_tick(r)) {
+        say(io, "第一个不同       : tick %zu（0 基，即第 %zu 个 tick），差异 %zu 字节\n", *tick,
+            *tick + 1, tick_diff_bytes(r));
+        print_byte_diffs(io, r.tick_diff->mismatches, tick_diff_bytes(r));
+    } else {
+        say(io, "第一个不同       : 无（每个 tick 折叠后都是 0 差异）\n");
+    }
+    if (r.tick_contradiction) {
+        say(io, "矛盾             : 逐 tick 未发现差异但终态不等（tick 数 A %zu / B %zu）——"
+                 "折叠是逐 tick 合并，这在算术上不可能，是 tick 切分或折叠的 bug，本结论不可用\n",
+            r.ticks_a, r.ticks_b);
+    }
+}
+
+void print_state_json(const StateReport& r) {
+    Json j;
+    j.flag("ok", !r.tick_contradiction);
+    if (r.tick_contradiction)
+        j.text("error", "逐 tick 全部 0 差异而终态不等：tick 切分或折叠有 bug，本结论不可用");
+    j.text("subcommand", "diff");
+    j.text("mode", "state");
+    j.flag("equal", r.equal);
+    j.opt_size("ticks", r.tick_marked ? std::optional<size_t>(r.ticks_a) : std::nullopt);
+    j.size("diff_bytes", r.final_diff_bytes);
+    j.opt_size("first_diff_tick", first_diff_tick(r));
+    j.opt_size("ticks_b", r.tick_marked ? std::optional<size_t>(r.ticks_b) : std::nullopt);
+    j.flag("tick_count_mismatch", tick_count_mismatch(r));
+    j.size("tick_diff_bytes", tick_diff_bytes(r));
+    j.opt_num("tick_mark", r.tick_marked ? std::optional<u64>(r.tick_mark) : std::nullopt);
+    j.put("tick_mark_writes", r.tick_marked ? "{\"a\":" + std::to_string(r.mark_a) + ",\"b\":" +
+                                                std::to_string(r.mark_b) + ",\"raw_a\":" +
+                                                std::to_string(r.mark_raw_a) + ",\"raw_b\":" +
+                                                std::to_string(r.mark_raw_b) + "}"
+                                          : std::string("null"));
+    j.size("stores_a", r.stores_a);
+    j.size("stores_b", r.stores_b);
+    j.size("kept_a", r.kept_a);
+    j.size("kept_b", r.kept_b);
+    j.size("dropped_a", r.dropped_a);
+    j.size("dropped_b", r.dropped_b);
+    j.size("dropped_code_a", r.dropped_code_a);
+    j.size("dropped_code_b", r.dropped_code_b);
+    if (r.space) {
+        j.num("game_lo", r.space->lo);
+        j.num("game_hi", r.space->hi);
+        j.num("code_lo", r.space->code_lo);
+        j.num("code_hi", r.space->code_hi);
+    }
+    j.flag("filtered", !r.src.empty());
+    j.text("src", r.src);
+    j.put("final_diff", byte_diff_json(r.final_rows));
+    j.put("tick_diff", r.tick_diff && !r.tick_diff->tick_count
+                              ? byte_diff_json(r.tick_diff->mismatches)
+                              : std::string("[]"));
+    std::printf("%s\n", j.str().c_str());
+}
 
 int cmd_diff(int argc, char** argv) {
     std::string path_a, path_b, src;
@@ -987,156 +1227,18 @@ int cmd_diff(int argc, char** argv) {
         return equal ? kExitOk : kExitDiff;
     }
 
-    const std::vector<tc::Store> raw_a = tc::load(path_a);
-    const std::vector<tc::Store> raw_b = tc::load(path_b);
-    std::optional<GameSpace> space;
-    FilterOut keep_a;
-    FilterOut keep_b;
-    if (src.empty()) {
-        keep_a.stores = raw_a;
-        keep_b.stores = raw_b;
-    } else {
-        space = game_space_of(Spec::parse(src), raw_a, raw_b);
-        keep_a = keep_game_space(raw_a, *space);
-        keep_b = keep_game_space(raw_b, *space);
+    const StateReport r = state_report(path_a, path_b, src, tick_mark);
+    print_state_text(io, r);
+    if (io.json) print_state_json(r);
+    // 判据设施自相矛盾：结论一个都不能用，且不能让调用方以为「跑完了，只是不等」。
+    if (r.tick_contradiction) {
+        std::fprintf(stderr,
+                     "difftrace diff: 逐 tick 全部 0 差异但终态不等（tick 数 A %zu / B %zu）："
+                     "tick 切分或折叠有 bug，本结论不可用\n",
+                     r.ticks_a, r.ticks_b);
+        return kExitError;
     }
-    const std::vector<tc::Store>& a = keep_a.stores;
-    const std::vector<tc::Store>& b = keep_b.stores;
-
-    // 根因防线：过滤把两边都清空时 equal 是平凡成立的（001 就是这么假绿过）。
-    // 局限在这一个场景：一边非零另一边为 0 时差异还看得见，报错只会把真结论捂起来。
-    if (space && (!raw_a.empty() || !raw_b.empty()) && a.empty() && b.empty()) {
-        char msg[1024];
-        std::snprintf(msg, sizeof(msg),
-                      "过滤后两边都是 0 条写（原始 A %zu / B %zu 条）：判据会平凡成立，不能当 equal。"
-                      "游戏地址空间 [%s, %s) 里一条写都没有，查 `--src` 对不对",
-                      raw_a.size(), raw_b.size(), hex(space->lo).c_str(), hex(space->hi).c_str());
-        throw std::runtime_error(msg);
-    }
-
-    // 界标先验：界标不在过滤后的序列里 = `split_ticks` 只会给出一段，逐 tick 会静默退化成终态比。
-    // 也正是「传了个没人写的地址」踩过的坑，所以它在任何结论打印之前就报错。
-    size_t mark_a = 0;
-    size_t mark_b = 0;
-    size_t mark_raw_a = 0;
-    size_t mark_raw_b = 0;
-    if (tick_mark) {
-        mark_a = count_writes_at(a, *tick_mark);
-        mark_b = count_writes_at(b, *tick_mark);
-        mark_raw_a = count_writes_at(raw_a, *tick_mark);
-        mark_raw_b = count_writes_at(raw_b, *tick_mark);
-        if (mark_a == 0 || mark_b == 0) {
-            char msg[1024];
-            std::snprintf(msg, sizeof(msg),
-                          "--tick-mark %s 在过滤后的序列里出现 A %zu 次 / B %zu 次"
-                          "（原始序列 A %zu / B %zu）；该地址出现 0 次。"
-                          "逐 tick 需要的是序列里真被写过的地址，且要落在游戏区间 [%s, %s) 内。",
-                          hex(*tick_mark).c_str(), mark_a, mark_b, mark_raw_a, mark_raw_b,
-                          space ? hex(space->lo).c_str() : "-", space ? hex(space->hi).c_str() : "-");
-            throw std::runtime_error(msg);
-        }
-    }
-
-    // 判据：折完整序列的终态。不靠界标，所以界标选错也不会把结论带偏，所以它是第一行。
-    const tc::Memory final_a = tc::fold(a, 0, a.size());
-    const tc::Memory final_b = tc::fold(b, 0, b.size());
-    std::vector<tc::ByteDiff> final_rows;
-    const size_t final_count = tc::memory_diff(final_a, final_b, kMaxMismatchPrint, final_rows);
-    const bool equal = final_count == 0;
-
-    say(io, "最终状态         : %s\n", equal ? "equal（判据通过）" : "不等（判据不过）");
-    if (final_count != 0) print_byte_diffs(io, final_rows, final_count);
-    say(io, "A                : %s（%zu 条写，留下 %zu）\n", path_a.c_str(), raw_a.size(), a.size());
-    say(io, "B                : %s（%zu 条写，留下 %zu）\n", path_b.c_str(), raw_b.size(), b.size());
-    if (src.empty()) {
-        say(io, "范围             : 没给 --src → 不过滤（栈区与代码区也进比对）\n");
-    } else {
-        say(io, "游戏地址空间     : [%s, %s)（game_lo / game_hi，%llu 字节）\n",
-            hex(space->lo).c_str(), hex(space->hi).c_str(),
-            static_cast<unsigned long long>(space->hi - space->lo));
-        say(io, "代码区           : [%s, %s)（上界 = 序列里最高的代码区写 + 宽度；代码区里的写不比）\n",
-            hex(space->code_lo).c_str(), hex(space->code_hi).c_str());
-        say(io, "保留条数         : kept_a %zu / kept_b %zu（丢 A %zu / B %zu，其中代码区 A %zu / B %zu）\n",
-            a.size(), b.size(), keep_a.dropped, keep_b.dropped, keep_a.dropped_code,
-            keep_b.dropped_code);
-    }
-
-    // 逐 tick：不给界标就不做（宁可不给线索，也不给一条看着像判据的假线索）。
-    std::optional<size_t> ticks_a;
-    std::optional<size_t> ticks_b;
-    std::optional<size_t> first_diff_tick;
-    size_t tick_diff_bytes = 0;
-    std::vector<tc::ByteDiff> tick_rows;
-    bool tick_count_mismatch = false;
-    if (tick_mark) {
-        const std::vector<tc::TickSpan> spans_a = tc::split_ticks(a, *tick_mark);
-        const std::vector<tc::TickSpan> spans_b = tc::split_ticks(b, *tick_mark);
-        ticks_a = spans_a.size();
-        ticks_b = spans_b.size();
-        const std::optional<tc::StateDiff> diff =
-            tc::first_state_diff(a, b, *tick_mark, kMaxMismatchPrint);
-        say(io, "tick 界标        : %s（A %zu 次 / B %zu 次写）\n", hex(*tick_mark).c_str(), mark_a,
-            mark_b);
-        say(io, "逐 tick 线索     : tick 数 A %zu / B %zu\n", *ticks_a, *ticks_b);
-        if (!diff) {
-            say(io, "                    每个 tick 折叠后都是 0 差异\n");
-        } else if (diff->tick_count) {
-            tick_count_mismatch = true;
-            tick_diff_bytes = diff->mismatch_count;
-            say(io, "                    第一个不同的 tick %zu：两边 tick 数不同（%zu vs %zu），"
-                     "之后无从逐 tick 比\n",
-                diff->tick, diff->tick_count->first, diff->tick_count->second);
-        } else {
-            first_diff_tick = diff->tick;
-            tick_diff_bytes = diff->mismatch_count;
-            tick_rows = diff->mismatches;
-            say(io, "                    第一个不同的 tick %zu（0 起）\n", diff->tick);
-            print_byte_diffs(io, diff->mismatches, diff->mismatch_count);
-        }
-    } else {
-        say(io, "逐 tick 线索     : 没给 --tick-mark → 只报终态\n");
-    }
-
-    if (io.json) {
-        Json j;
-        j.flag("ok", true);
-        j.text("subcommand", "diff");
-        j.text("mode", "state");
-        j.flag("equal", equal);
-        j.opt_size("ticks", ticks_a);
-        j.size("diff_bytes", final_count);
-        j.opt_size("first_diff_tick", first_diff_tick);
-        j.opt_size("ticks_b", ticks_b);
-        j.flag("tick_count_mismatch", tick_count_mismatch);
-        j.size("tick_diff_bytes", tick_diff_bytes);
-        j.opt_num("tick_mark", tick_mark);
-        j.put("tick_mark_writes", mark_a || mark_b || mark_raw_a || mark_raw_b
-                                     ? "{\"a\":" + std::to_string(mark_a) + ",\"b\":" +
-                                           std::to_string(mark_b) + ",\"raw_a\":" +
-                                           std::to_string(mark_raw_a) + ",\"raw_b\":" +
-                                           std::to_string(mark_raw_b) + "}"
-                                     : std::string("null"));
-        j.size("stores_a", raw_a.size());
-        j.size("stores_b", raw_b.size());
-        j.size("kept_a", a.size());
-        j.size("kept_b", b.size());
-        j.size("dropped_a", keep_a.dropped);
-        j.size("dropped_b", keep_b.dropped);
-        j.size("dropped_code_a", keep_a.dropped_code);
-        j.size("dropped_code_b", keep_b.dropped_code);
-        if (space) {
-            j.num("game_lo", space->lo);
-            j.num("game_hi", space->hi);
-            j.num("code_lo", space->code_lo);
-            j.num("code_hi", space->code_hi);
-        }
-        j.flag("filtered", !src.empty());
-        j.text("src", src);
-        j.put("final_diff", byte_diff_json(final_rows));
-        j.put("tick_diff", byte_diff_json(tick_rows));
-        std::printf("%s\n", j.str().c_str());
-    }
-    return equal ? kExitOk : kExitDiff;
+    return r.equal ? kExitOk : kExitDiff;
 }
 
 // ---- where ------------------------------------------------------------------
@@ -1202,6 +1304,8 @@ int cmd_where(int argc, char** argv) {
         hex(window_lo).c_str(), hex(window_hi).c_str(), hex(*addr).c_str(),
         static_cast<unsigned long long>(kWhereWindow));
     say(io, "命中             : %zu 条\n", hits.size());
+    say(io, "结论             : %s（退出码 %d）\n", hits.empty() ? "未命中" : "命中",
+        hits.empty() ? kExitDiff : kExitOk);
     for (const auto& [index, s] : hits) print_store(io, "", index, s);
 
     // 每条不同 pc 只反汇编一次：同一个写指令写多次时重复反汇编只会把输出灌满。

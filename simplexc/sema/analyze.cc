@@ -1903,7 +1903,9 @@ void Analyzer::def_stmt(HNode& /*parent*/, const DefStmt& st) {
 const FunctionDef* Analyzer::pick_def(const std::string& name, const CallExpr& node) {
     auto it = mod_->defs.find(name);
     if (it == mod_->defs.end()) return nullptr;
+    for (int pass = 0; pass < 2; ++pass)
     for (const FunctionDef* d : it->second) {
+        if (has_type_params(d->params) != (pass == 1)) continue;
         if (has_type_params(d->params)) {
             /* 泛型候选：先定实例化（类型实参 / 推型），再只比**运行期**形参。定不下来就跳过
              * 这个候选 —— 不能把异常泄出去，否则同一名字的其它重载都再也选不到。 */

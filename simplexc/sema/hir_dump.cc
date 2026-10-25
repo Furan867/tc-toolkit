@@ -68,6 +68,7 @@ const char* hkind_name(HKind k) {
         case HKind::Switch: return "Switch";
         case HKind::Break: return "Break";
         case HKind::Return: return "Return";
+        case HKind::Asm: return "Asm";
     }
     return "?";
 }
@@ -248,6 +249,15 @@ void dump_node(std::string& out, const HNode& n, int depth) {
         case HKind::If:
         case HKind::Switch:
         case HKind::Return:
+            break;
+        /* 指令序列印在同一行（`行号:助记符 操作数`）—— 它是块内容的唯一投影，
+           快照对比要能直接看到它。 */
+        case HKind::Asm:
+            for (const HAsmInst& in : n.asm_insts) {
+                out += " [" + std::to_string(in.line) + ":" + in.mnemonic;
+                for (const std::string& op : in.ops) out += " " + op;
+                out += "]";
+            }
             break;
     }
     out += " span=" + std::to_string(n.span.line) + ":" + std::to_string(n.span.col) + "\n";
@@ -475,6 +485,10 @@ bool check_conv_node(const HNode& n, const TyRef& ret, const std::string& where,
         case HKind::Global:
         case HKind::Capture:
         case HKind::Break:
+            if (!expect_kids(n, 0, 0, where, err)) return false;
+            break;
+        /* 指令序列是**裸文本**切出来的，没有表达式子节点。 */
+        case HKind::Asm:
             if (!expect_kids(n, 0, 0, where, err)) return false;
             break;
         case HKind::Unary: {

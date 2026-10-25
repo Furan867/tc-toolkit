@@ -53,6 +53,20 @@ Result encode(const Inst& inst, const std::vector<Slot>& slots);
 /* 只判助记符在不在白名单里（不含操作数检查）。给「整块能不能过」的粗筛与单测用。 */
 bool mnemonic_supported(const std::string& mnemonic);
 
+/* 操作数是不是硬件寄存器名（`rax` / `eax` / `al` / `r8b` 三种拼写都算）。
+ * 为什么要问编码器而不在调用方再拄一张表：能编的寄存器集合与「什么是寄存器」必须是同一份
+ * 数据，两处各摆一份必然分叉（一边认 `r8`、一边不认）。 */
+bool is_register(const std::string& name);
+
+/* 寄存器名的**父名**（`al` / `eax` / `rax` 都 → `rax`，`cl` → `rcx`）。不是寄存器 → 空串。
+ * 用途：inline asm 的 clobber 只能写父名。 */
+std::string reg_parent(const std::string& name);
+
+/* 寄存器名的 32 位拼写（`rdi` / `dil` / `edi` 都 → `edi`）。不是寄存器 → 空串。
+ * 用途：参考对 `mov rdi, <常量>` 发的是 32 位形式（`bf imm32`），常量装载要逐字节对齐它的
+ * 前提就是这里能拿到 32 位名。 */
+std::string reg32_name(const std::string& name);
+
 }  // namespace asm_x64
 }  // namespace codegen
 }  // namespace simplexc

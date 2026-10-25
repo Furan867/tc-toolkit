@@ -88,6 +88,7 @@ const char* ast_kind_name(NK k) {
         case NK::Switch: return "SwitchStmt";
         case NK::Return: return "ReturnStmt";
         case NK::Break: return "BreakStmt";
+        case NK::Asm: return "AsmStmt";
         case NK::Def: return "DefStmt";
         case NK::Function: return "FunctionDef";
         case NK::IfCase: return "IfCase";
@@ -680,6 +681,7 @@ private:
     void switch_stmt(HNode& parent, const SwitchStmt& st);
     void while_stmt(HNode& parent, const WhileStmt& st);
     void break_stmt(HNode& parent, const BreakStmt& st);
+    void asm_stmt(HNode& parent, const AsmStmt& st);
     HNode return_stmt(const ReturnStmt& st);
     HNode lvalue(const Expr& node);
     HNode lvalue_ident(const IdentExpr& id);
@@ -2552,6 +2554,9 @@ void Analyzer::statement(HNode& parent, const Stmt& st) {
         case NK::Break:
             break_stmt(parent, static_cast<const BreakStmt&>(st));
             return;
+        case NK::Asm:
+            asm_stmt(parent, static_cast<const AsmStmt&>(st));
+            return;
         case NK::Def:
             def_stmt(parent, static_cast<const DefStmt&>(st));
             return;
@@ -2770,6 +2775,85 @@ void Analyzer::break_stmt(HNode& parent, const BreakStmt& st) {
     if (!found) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{st.src_line}, "break " + st.label};
     HNode n = stmt_node(HKind::Break, st.src_line);
     n.label = st.label;
+    parent.kids.push_back(std::move(n));
+}
+
+/* ---------------------------------------------------------------- asm 块
+
+   一行的切法 = 参考指令表的形状（`work/tmp/res-asm/report.md` §3.2）：**一个助记符 +
+   逗号分隔的操作数**；`rep movsb` / `rep stosb` 在参考的指令表里是**一条**，所以两个词合成
+   一个助记符。切分放在 sema 而不是前端：「哪些词是助记符」是语义，而前端只负责按行原样存。
+
+   超出这三条形态的一律报未实现（不猜）：行内标签、`define` 别名。它们只在前缀里
+   注释掉的死代码中出现过，参考侧对它们的真实行为本轮没有字节证据。 */
+std::string asm_trim(const std::string& s) {
+    std::size_t b = 0, e = s.size();
+    while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r')) ++b;
+    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r')) --e;
+    return s.substr(b, e - b);
+}
+
+HAsmInst split_asm_inst(const AsmSrcLine& ln) {
+    HAsmInst out;
+    out.line = ln.line;
+    const std::string text = asm_trim(ln.text);
+    if (text.empty()) return out;
+    if (text.find(':') != std::string::npos) {
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{ln.line},
+                           "asm 块内的标签：" + text};
+    }
+    const std::size_t sp = text.find(' ');
+    std::string head = sp == std::string::npos ? text : text.substr(0, sp);
+    std::string rest = sp == std::string::npos ? std::string() : asm_trim(text.substr(sp + 1));
+    if (head == "rep") {
+        const std::size_t sp2 = rest.find(' ');
+        const std::string tail = sp2 == std::string::npos ? rest : rest.substr(0, sp2);
+        if (tail.empty()) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{ln.line},
+                               "asm 的 'rep' 后面没有指令"};
+        }
+        head += " " + tail;
+        rest = sp2 == std::string::npos ? std::string() : asm_trim(rest.substr(sp2 + 1));
+    }
+    if (head == "define") {
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{ln.line},
+                           "asm 块内的 define 别名（唯一使用者是前缀里注释掉的死代码）"};
+    }
+    out.mnemonic = head;
+    /* 按**顶层**逗号切：`[ … ]` 里的逗号属于同一个操作数（内存操作数的写法见 report §3.2）。 */
+    std::string cur;
+    int depth = 0;
+    for (char c : rest) {
+        if (c == '[') {
+            ++depth;
+        } else if (c == ']') {
+            --depth;
+        }
+        if (c == ',' && depth == 0) {
+            out.ops.push_back(asm_trim(cur));
+            cur.clear();
+            continue;
+        }
+        cur.push_back(c);
+    }
+    const std::string last = asm_trim(cur);
+    if (!last.empty() || !out.ops.empty()) out.ops.push_back(last);
+    return out;
+}
+
+/* 非目标架构的块**整块丢弃且不校验内容**（report §3.3 的实测：`asm aarch64 { frobnicate x0 }`
+   在 x86_64 目标上照编过，产物与「根本没这块」逐字节相同）—— 所以这一步不产生任何节点，
+   连切行都不做。
+
+   副作用：按**有副作用**算（块内可写内存、写寄存器），不参与任何「纯表达式」判定；sema 本身
+   不做语句级 DCE，这个节点只原样传到 codegen。 */
+void Analyzer::asm_stmt(HNode& parent, const AsmStmt& st) {
+    if (st.arch != "x86_64") return;
+    HNode n = stmt_node(HKind::Asm, st.src_line);
+    for (const AsmSrcLine& ln : st.lines) {
+        HAsmInst inst = split_asm_inst(ln);
+        if (!inst.mnemonic.empty()) n.asm_insts.push_back(std::move(inst));
+    }
     parent.kids.push_back(std::move(n));
 }
 

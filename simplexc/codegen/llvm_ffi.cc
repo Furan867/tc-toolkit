@@ -8,6 +8,11 @@ void init_native_target() {
     LLVMInitializeX86Target();
     LLVMInitializeX86TargetMC();
     LLVMInitializeX86AsmPrinter();
+    /* 内联汇编（`asm x86_64 { … }` 的发射路径）走 MC 的汇编器：不登记 AsmParser 时
+     * 产物阶段直接报 `Inline asm not supported by this streamer because we don't have an
+     * asm parser for this target`。C API 把 AsmParser 排除在「四个标准初始化」之外，
+     * 所以这里必须单独调一次。 */
+    LLVMInitializeX86AsmParser();
 }
 
 TargetMachine* TargetMachine::create(const char* triple, std::string* err) {

@@ -10,9 +10,11 @@
 #include <algorithm>
 #include <cassert>
 #include <functional>
+#include <set>
 #include <utility>
 
 #include "../sema/builtins.hh"
+#include "asm_x64.hh"
 
 namespace simplexc {
 namespace codegen {
@@ -73,6 +75,7 @@ const char* hkind_name(sema::HKind k) {
         case sema::HKind::Switch: return "Switch";
         case sema::HKind::Break: return "Break";
         case sema::HKind::Return: return "Return";
+        case sema::HKind::Asm: return "Asm";
     }
     return "?";
 }
@@ -485,6 +488,7 @@ void Codegen::lower_stmt(const sema::HNode& st) {
         case sema::HKind::While: s_While(st); break;
         case sema::HKind::Break: s_Break(st); break;
         case sema::HKind::Return: s_Return(st); break;
+        case sema::HKind::Asm: s_Asm(st); break;
         case sema::HKind::Switch: s_Switch(st); break;
         /* 裸块 = 一层作用域（实测 `work/tmp/bareblock/b01_scope.si`）：`lower_block` 自带
          * scope push/pop，正是要的语义。 */
@@ -1614,6 +1618,249 @@ LLVMValueRef Codegen::ensure_prefix_fn(const std::string& name, const TyRef& ret
     else throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{span}, "前缀函数 " + name};
     finish_function();
     return fnref;
+}
+
+/* ================================================================ asm 块
+
+   参考把块里的指令**重新汇编**（`work/tmp/res-asm/report.md` §3.1）：寄存器名当可变源变量、
+   名字操作数换成值、不在白名单里的助记符直接编译错。这里实现同一件事的最小子集：
+
+     · 寄存器/立即数形态的指令 → `asm_x64::encode` 拿字节，以 `.byte` 写进内联汇编文本
+       （逐字节拄参考的编码，包括它“一律发 32 位 mov 立即数”的口径）；
+     · 操作数是**名字**（形参 / `$局部`）时，它就是一次取值：`mov rsi, source` 在参考里长成
+       `mov esi, <值>`，所以这里发一条“把值装进 rsi”的内联汇编文本，常量时约束用 `i`、
+       非常量用 `r` —— 前者汇编器发 `be imm32`，与参考的字节一致；
+     · `mov $局部, <寄存器>` 是写回：寄存器值由**输出约束**取回，调完之后 store 进栈槽。
+       这里**没有**版本 glue（参考的 `mov rdx, rcx` 那类）：那是对它自己 SSA 化的补偿，
+       在我们这里同一个硬件寄存器本来就只有一份值，多搬运一次只改字节、不改语义。
+
+   为什么整块只用**一次** inline asm 调用：块内各条指令共享硬件寄存器的值（`rdtsc` 写
+   eax/edx，后面的 `shl rdx, cl` 接用），拆成多次就得在调用之间把寄存器值来回搬。
+
+   拒绝的东西（不猜，带行号报未实现）：块内标签、`define` 别名（在 sema 就拦）、
+   `mov $局部, 立即数`、两个以上的写回、白名单外的助记符、8 位寄存器接收非常量名字。 */
+void Codegen::s_Asm(const sema::HNode& st) {
+    if (st.asm_insts.empty()) return;
+
+    /* 一条指令的发射计划。为什么要“先规划、后拼文本”：inline asm 的 `$N` 按“输出全部在前、
+       输入在后”编号，而源里的装载与写回是交错的 —— 边规划边编号拿不到正确的 N。 */
+    enum class What { Bytes, Load, StoreReg };
+    struct Plan {
+        What what = What::Bytes;
+        std::string reg;   /* Load/StoreReg：寄存器名的源拼写 */
+        std::string name;  /* Load/StoreReg：变量名（不带 '$'） */
+        int line = 0;
+        std::vector<std::uint8_t> bytes;
+    };
+    std::vector<Plan> plans;
+
+    /* `mov` 的操作数是“变量”而不是寄存器/立即数？`$x` 恒为变量；裸名只在它确实是当前
+       作用域里的绑定（形参/局部/捕获/编译期常量）时才算 —— 否则交给编码器去判错。 */
+    auto var_name = [&](const std::string& op, std::string* name) -> bool {
+        if (!op.empty() && op[0] == '$') {
+            *name = op.substr(1);
+            return true;
+        }
+        if (asm_x64::is_register(op)) return false;
+        if (!op.empty() && (op[0] == '-' || op[0] == '+' || (op[0] >= '0' && op[0] <= '9'))) {
+            return false;
+        }
+        if (lookup(op) == nullptr) return false;
+        *name = op;
+        return true;
+    };
+    /* 变量的**值**：常量绑定直接给位模式，其余从它的栈槽读。
+       只收整数与 `Ptr`：它们在我们的值表示里都是 i64，能直接当一个寄存器值；
+       `Str`/`Arr`/聚合是真 `ptr`，当成寄存器值只会拼出对不上的 IR。 */
+    auto value_of = [&](const std::string& name, int line) -> V {
+        const Binding* b = lookup(name);
+        if (b == nullptr) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line},
+                               "asm 操作数 '" + name + "' 不是本函数的局部/形参"};
+        }
+        if (b->kind == Binding::Kind::Const) {
+            if (!b->value.has_value()) {
+                throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line},
+                                   "asm 操作数 '" + name + "' 是常量但没有位模式"};
+            }
+            return *b->value;
+        }
+        if (!is_int(*b->ty) && b->ty->kind != TyKind::Ptr) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line},
+                               "asm 只能取整数或 Ptr 类型的名字（'" + name + "' 是 " +
+                                   ty_kind_name(b->ty->kind) + "）"};
+        }
+        return load_addr(b->ptr, b->ty);
+    };
+    /* 写回的目标：必须是有地址的局部/捕获（常量没地方存）。 */
+    auto target_of = [&](const std::string& name, int line) -> const Binding* {
+        const Binding* b = lookup(name);
+        if (b == nullptr || (b->kind != Binding::Kind::Local && b->kind != Binding::Kind::Capture)) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line},
+                               "asm 写回的目标 '" + name + "' 不是本函数的有地址局部/形参"};
+        }
+        if (!is_int(*b->ty) && b->ty->kind != TyKind::Ptr) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{line},
+                               "asm 写回只做整数或 Ptr 类型的名字（'" + name + "' 是 " +
+                                   ty_kind_name(b->ty->kind) + "）"};
+        }
+        return b;
+    };
+
+    for (const sema::HAsmInst& in : st.asm_insts) {
+        Plan p;
+        p.line = in.line;
+        if (in.mnemonic == "mov" && in.ops.size() == 2) {
+            std::string dst;
+            std::string src;
+            const bool dst_var = var_name(in.ops[0], &dst);
+            const bool src_var = var_name(in.ops[1], &src);
+            if (dst_var && !src_var) {
+                target_of(dst, in.line);
+                if (!asm_x64::is_register(in.ops[1])) {
+                    throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{in.line},
+                                       "asm 写回只做 `mov $变量, <寄存器>`（'" + in.ops[1] +
+                                           "' 不是寄存器）"};
+                }
+                p.what = What::StoreReg;
+                p.reg = in.ops[1];
+                p.name = dst;
+                plans.push_back(std::move(p));
+                continue;
+            }
+            if (!dst_var && src_var) {
+                if (!asm_x64::is_register(in.ops[0])) {
+                    throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{in.line},
+                                       "asm 装载只做 `mov <寄存器>, <变量>`（'" + in.ops[0] +
+                                           "' 不是寄存器）"};
+                }
+                p.what = What::Load;
+                p.reg = in.ops[0];
+                p.name = src;
+                plans.push_back(std::move(p));
+                continue;
+            }
+        }
+        for (const std::string& op : in.ops) {
+            if (!op.empty() && op[0] == '$') {
+                throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{in.line},
+                                   "asm 的 $变量 在这个位置没有支持（只做 mov 的两侧）：" + in.mnemonic +
+                                       " " + op};
+            }
+        }
+        asm_x64::Inst one;
+        one.mnemonic = in.mnemonic;
+        one.ops = in.ops;
+        const asm_x64::Result r = asm_x64::encode(one, {});
+        if (!r.ok) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{in.line},
+                               "asm 指令编码失败：" + r.error};
+        }
+        p.what = What::Bytes;
+        p.bytes = r.bytes;
+        plans.push_back(std::move(p));
+    }
+
+    /* ---- 输出（写回）：最多一个，参考的活代码只有一个（`mov $result, rax`）。 */
+    const Plan* out = nullptr;
+    for (const Plan& p : plans) {
+        if (p.what != What::StoreReg) continue;
+        if (out != nullptr) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{p.line},
+                               "asm 块里有多个写回目标（只做最多一个）"};
+        }
+        out = &p;
+    }
+    std::string constraints;
+    if (out != nullptr) {
+        constraints = "={" + asm_x64::reg_parent(out->reg) + "}";
+    }
+
+    /* ---- 输入（装载）+ 文本 */
+    std::vector<LLVMValueRef> args;
+    std::vector<LLVMTypeRef> arg_tys;
+    std::vector<std::string> lines;
+    std::size_t next_index = out != nullptr ? 1 : 0;
+    for (const Plan& p : plans) {
+        if (p.what == What::Bytes) {
+            std::string line = ".byte ";
+            for (std::size_t i = 0; i < p.bytes.size(); ++i) {
+                static const char* kDigits = "0123456789abcdef";
+                if (i != 0) line += ",";
+                line += "0x";
+                line.push_back(kDigits[p.bytes[i] >> 4]);
+                line.push_back(kDigits[p.bytes[i] & 0xF]);
+            }
+            lines.push_back(std::move(line));
+            continue;
+        }
+        if (p.what == What::StoreReg) continue; /* 值从输出约束拿，文本里没有 */
+        const V v = value_of(p.name, p.line);
+        const std::optional<uint64_t> c = pat_const(v);
+        if (c.has_value()) {
+            if (*c > 0xFFFFFFFFull) {
+                throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{p.line},
+                                   "asm 装载的常量超出 imm32（参考只发过 ≤0xFFFFFFFF 的）"};
+            }
+            args.push_back(const_int(*c));
+            arg_tys.push_back(i64_);
+            if (!constraints.empty()) constraints += ",";
+            constraints += "i";
+            lines.push_back("mov " + asm_x64::reg32_name(p.reg) + ", $" + std::to_string(next_index));
+        } else {
+            if (asm_x64::reg32_name(p.reg).empty()) {
+                throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{p.line},
+                                   "asm 装载的目标寄存器不认识：'" + p.reg + "'"};
+            }
+            args.push_back(llv(v));
+            arg_tys.push_back(i64_);
+            if (!constraints.empty()) constraints += ",";
+            constraints += "r";
+            lines.push_back("mov " + asm_x64::reg_parent(p.reg) + ", $" + std::to_string(next_index));
+        }
+        ++next_index;
+    }
+
+    if (lines.empty()) return; /* 只剩写回、没有指令：不产生任何代码 */
+
+    /* ---- clobber：块里出现过的寄存器（父名）里扣掉输出，再加内存与标志位。
+       不写 clobber 会让 LLVM 把活值留在被改掉的寄存器里（静默错），所以宁可多写。
+       rsp/rbp 不能进 clobber 列表（LLVM 把它们当保留寄存器直接报错）。 */
+    std::set<std::string> clob;
+    for (const Plan& p : plans) {
+        if (p.what == What::Bytes) continue;
+        const std::string parent = asm_x64::reg_parent(p.reg);
+        if (parent != "rsp" && parent != "rbp") clob.insert(parent);
+    }
+    for (const sema::HAsmInst& in : st.asm_insts) {
+        for (const std::string& op : in.ops) {
+            const std::string parent = asm_x64::reg_parent(op);
+            if (!parent.empty() && parent != "rsp" && parent != "rbp") clob.insert(parent);
+        }
+    }
+    if (out != nullptr) clob.erase(asm_x64::reg_parent(out->reg));
+    for (const std::string& c : clob) constraints += ",~{" + c + "}";
+    constraints += ",~{memory},~{dirflag},~{fpsr},~{flags}";
+
+    std::string text;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (i != 0) text += "\n";
+        text += lines[i];
+    }
+
+    LLVMTypeRef ret_ty = out != nullptr ? i64_ : void_ty_;
+    LLVMTypeRef fn_ty =
+        LLVMFunctionType(ret_ty, arg_tys.data(), static_cast<unsigned>(arg_tys.size()), 0);
+    LLVMValueRef asm_val = LLVMGetInlineAsm(
+        fn_ty, text.c_str(), text.size(), constraints.c_str(), constraints.size(), 1, 0,
+        LLVMInlineAsmDialectIntel, 0);
+    LLVMValueRef call =
+        LLVMBuildCall2(cur_fn().bd, fn_ty, asm_val, args.data(), static_cast<unsigned>(args.size()), "");
+
+    if (out != nullptr) {
+        const Binding* b = target_of(out->name, out->line);
+        store_addr(b->ptr, V::instr(call, b->ty), b->ty, out->line);
+    }
 }
 
 /* ================================================================ 模板插值与串 */

@@ -136,6 +136,11 @@ void walk_nodes(const Node* n, const NodeVisitor& on_node, const TypeRefVisitor&
     }
     case NK::Break:
       break;
+    /* asm 块的内容是**裸文本行**，里面没有表达式、也没有标识符引用。绝不能下钻：块内的
+       `mov rsi, source` 里的 `source` 会被当成一次标识符使用收进名字表，`in_scope` 判据
+       与可达闭包就被污染了。 */
+    case NK::Asm:
+      break;
     /* 裸块本身零条指令，但里面的语句必须递归进来 —— 这个 switch 的其它分支
        没有 default，漏掉它会让 covered_lines() 与可达闭包漏掉块内的一切。 */
     case NK::BlockStmt: {

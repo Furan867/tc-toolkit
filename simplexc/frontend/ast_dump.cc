@@ -274,6 +274,15 @@ Json node_to_json(const Node* n) {
     case NK::BlockStmt:
       d.set("block", node_to_json(static_cast<const BlockStmt&>(*n).block.get()));
       break;
+    case NK::Asm: {
+      const auto& x = static_cast<const AsmStmt&>(*n);
+      d.set("arch", Json::string(x.arch));
+      d.set("os", str_or_null(x.os));
+      Json lines = Json::array();
+      for (const AsmSrcLine& ln : x.lines) lines.push(Json::string(ln.text));
+      d.set("lines", std::move(lines));
+      break;
+    }
     case NK::Def: {
       const auto& x = static_cast<const DefStmt&>(*n);
       d.set("name", Json::string(x.name));
@@ -556,6 +565,13 @@ std::string render_tree(const Node* n, int indent) {
     case NK::BlockStmt: {
       const auto& x = static_cast<const BlockStmt&>(*n);
       kid_node("block", x.block.get());
+      break;
+    }
+    case NK::Asm: {
+      const auto& x = static_cast<const AsmStmt&>(*n);
+      parts.scal.push_back("arch=" + py_repr_str(x.arch));
+      parts.scal.push_back(x.os.empty() ? "os=None" : "os=" + py_repr_str(x.os));
+      parts.scal.push_back("lines=" + std::to_string(x.lines.size()));
       break;
     }
     case NK::Def: {

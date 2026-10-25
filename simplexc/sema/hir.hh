@@ -46,7 +46,7 @@ enum class HKind {
     Const, StrLit, Local, Global, Capture, Unary, Binary, Cond, Call, Member, Index, Cast,
     ArrayLit, CompositeLit, Template,
     // 语句
-    Block, VarDecl, Assign, ExprStmt, If, While, Switch, Break, Return,
+    Block, VarDecl, Assign, ExprStmt, If, While, Switch, Break, Return, Asm,
 };
 
 /* 语句/表达式分界，不变量 ① 就落在这个判断上。 */
@@ -77,6 +77,7 @@ inline bool is_expr(HKind k) {
         case HKind::Switch:
         case HKind::Break:
         case HKind::Return:
+        case HKind::Asm:
             return false;
     }
     return false;
@@ -139,6 +140,15 @@ struct HCallee {
  *                                                         default 放到所有 case 之后跑，所以这里
  *                                                         也按「有值的 case 在前、default 在后」写）
  */
+/* 一条已切好的 `asm` 指令（切分在 sema 完成，S3）。`line` 是它所在的源码行 —— 失败时
+ * 报这一行，而不是整个块的起始行。操作数保留 `$` 前缀（`$result`）：“它是个局部变量的
+ * 栈槽” 与 “它是硬件寄存器名” 得在 codegen 里分得开。 */
+struct HAsmInst {
+    std::string mnemonic;
+    std::vector<std::string> ops;
+    int line = 0;
+};
+
 struct HNode {
     HKind kind = HKind::Const;
     Span span;
@@ -167,6 +177,9 @@ struct HNode {
     int capture_index = -1; /* Capture：第几个捕获（`HirFunc.caps` 下标） */
     int field_index = -1;   /* Member：字段序号（按声明序） */
     int offset = -1;        /* Member：字段字节偏移（布局由 sema 定，codegen 不再算） */
+
+    /* Asm：切好的指令序列（非 x86_64 的块根本不生成节点，见 analyze.cc 的 `asm_stmt`）。 */
+    std::vector<HAsmInst> asm_insts;
 
     std::vector<HNode> kids;
 };

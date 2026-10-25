@@ -338,6 +338,30 @@ bool mnemonic_supported(const std::string& mnemonic) {
     return false;
 }
 
+bool is_register(const std::string& name) { return find_reg(name) != nullptr; }
+
+/* 同一个硬件寄存器的三种拼写共用 `code`（0..15），三种拼写各占一行，所以「按 code 找同一位宽
+ * 的名字」就是查表。位宽不匹配 = 这个寄存器没有该位宽的拼写（不存在）。 */
+std::string reg_parent(const std::string& name) {
+    const RegInfo* reg = find_reg(name);
+    if (reg == nullptr) return std::string();
+    if (reg->width == Width::k64) return name;
+    for (const RegInfo& r : kRegs) {
+        if (r.code == reg->code && r.width == Width::k64) return r.name;
+    }
+    return std::string();
+}
+
+std::string reg32_name(const std::string& name) {
+    const RegInfo* reg = find_reg(name);
+    if (reg == nullptr) return std::string();
+    if (reg->width == Width::k32) return name;
+    for (const RegInfo& r : kRegs) {
+        if (r.code == reg->code && r.width == Width::k32) return r.name;
+    }
+    return std::string();
+}
+
 Result encode(const Inst& inst, const std::vector<Slot>& slots) {
     if (!mnemonic_supported(inst.mnemonic)) {
         return fail("Unsupported instruction " + inst.mnemonic +

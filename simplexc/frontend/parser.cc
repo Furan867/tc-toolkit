@@ -117,6 +117,65 @@ CompileError err_line(int line, std::string msg) {
   return CompileError{Responsibility::UserSource, Stage::Parse, Span{line, 0}, std::move(msg)};
 }
 
+/* `asm <arch> [<os>] { … }`：块里是**原始指令行**，不是表达式。所以这里只认形状，然后按花括
+   号配平把整块吞掉，内容按源码行原样留给 sema 切（切法 = report §3.2 的「助记符 + 操作数」）。
+
+   为什么按 token 拼行、不从源码取原文：词法器已经把注释抹成空白，token 的 `line` 就是源码行
+   号；再从原文取一次就要把注释再剥一遍，两套口径必然分叉。代价是行内空白归一成单个空格 ——
+   参考也只把指令文本重新分词，空白不影响语义。
+   sigil 必须补回去：`$result` 的 token 是 kind=`dollar`、text=`result`，丢掉 `$` 会让「这是
+   一个变量槽」这个事实在下一层无法复原。
+
+   块内不做任何语法检查，原因：非目标架构的块连内容都不能碰（report §3.3：`asm aarch64 { 
+   frobnicate x0 }` 在 x86 目标上照编过），检查时机必然在架构过滤之后。 */
+std::unique_ptr<Stmt> parse_asm(Parser& p, const Tok& t) {
+  p.next(); /* `asm` */
+  auto st = std::make_unique<AsmStmt>(t.line);
+  st->arch = p.expect("ident", "", "汇编块架构名（x86_64 / aarch64）").text;
+  if (p.at("ident")) st->os = p.next().text;
+  p.expect("op", "{", "汇编块的 '{'");
+
+  std::vector<Tok> body;
+  int depth = 1;
+  bool closed = false;
+  while (!p.at_eof()) {
+    Tok tk = p.next();
+    if (tk.kind == "op" && tk.text == "{") {
+      ++depth;
+    } else if (tk.kind == "op" && tk.text == "}") {
+      --depth;
+      if (depth == 0) {
+        closed = true;
+        break;
+      }
+    }
+    body.push_back(std::move(tk));
+  }
+  if (!closed) {
+    throw err_tok(t, "第 " + std::to_string(t.line) + " 行的 'asm' 块没有配对的 '}'");
+  }
+
+  for (std::size_t i = 0; i < body.size();) {
+    AsmSrcLine ln;
+    ln.line = body[i].line;
+    std::size_t j = i;
+    while (j < body.size() && body[j].line == ln.line) {
+      const Tok& tk = body[j];
+      if (!ln.text.empty()) ln.text.push_back(' ');
+      if (tk.kind == "dollar") {
+        ln.text += "$";
+      } else if (tk.kind == "hash") {
+        ln.text += "#";
+      }
+      ln.text += tk.text;
+      ++j;
+    }
+    st->lines.push_back(std::move(ln));
+    i = j;
+  }
+  return st;
+}
+
 }  // namespace
 
 std::string_view node_py_name(NK kind) {
@@ -147,6 +206,7 @@ std::string_view node_py_name(NK kind) {
     case NK::Break: return "BreakStmt";
     case NK::Def: return "DefStmt";
     case NK::BlockStmt: return "BlockStmt";
+    case NK::Asm: return "AsmStmt";
     case NK::Function: return "FunctionDef";
     case NK::IfCase: return "IfCase";
     case NK::SwitchCase: return "SwitchCase";
@@ -187,6 +247,7 @@ bool is_stmt_kind(NK kind) {
     case NK::Break:
     case NK::Def:
     case NK::BlockStmt:
+    case NK::Asm:
       return true;
     default:
       return false;
@@ -353,10 +414,11 @@ std::unique_ptr<Stmt> Parser::parse_statement() {
       d->body = parse_block();
       return d;
     }
+    if (w == "asm") return parse_asm(*this, t);
     if (w == "elif" || w == "else") throw err_tok(t, "'" + w + "' 前面没有 'if'");
     if (w == "case" || w == "default") throw err_tok(t, "'" + w + "' 前面没有 'switch'");
     if (unsupported_stmt_words().count(w)) throw err_tok(t, "语句 '" + w + "' 未支持");
-    /* 未识别的**语句关键字**别再掉进表达式解析（P1）：`asm x86_64 { … }` 这种「ident + 另一个
+    /* 未识别的**语句关键字**别再掉进表达式解析（P1）：`foo x { … }` 这种「ident + 另一个
      * ident」在语句位置既不是赋值（`x = …`）、不是调用（`f(…)`）、也不是下标/字段，于是
      * `cast_ahead()` 把它读成类型转换，最后报出「是不是把 '=' 写成了 '=='？」—— 文案把排查
      * 引离真因，而且看起来像用户的排版错。判据是**形状**：词既不是已知语句词、也不是声明的

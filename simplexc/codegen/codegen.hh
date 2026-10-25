@@ -121,7 +121,7 @@ protected:
      * `Program::make_globals` 里预建，前缀全局第一次被引用时才建（建序照旧路径）。 */
     std::pair<LLVMValueRef, TyRef> add_global(const sema::HirGlobal& g);
 
-    /* ---- 语句（HIR 的 9 种语句节点） */
+    /* ---- 语句（HIR 的 10 种语句节点） */
     void lower_block(const sema::HNode& block);
     void lower_stmt(const sema::HNode& st);
     /* `if` / `elif` / `else` 链：所有分支汇到同一个 `ifend` 块（旧 `s_IfStmt` 的形状）。 */
@@ -136,6 +136,10 @@ protected:
     void s_Break(const sema::HNode& st);
     void s_Return(const sema::HNode& st);
     void s_Switch(const sema::HNode& st);
+    /* 内联汇编语句：逐条调 `asm_x64::encode` 取字节，再用一次 inline asm 调回发进 IR。
+       取值/写回变量的那些操作数（`mov rsi, source` / `mov $result, rax`）走调用的操作数
+       约束，不走字节 —— 见 codegen.cc 里 `s_Asm` 的说明。 */
+    void s_Asm(const sema::HNode& st);
 
     /* ---- 表达式（HIR 的 15 种表达式节点） */
     V e(const sema::HNode& node);

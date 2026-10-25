@@ -61,7 +61,7 @@ enum class NK {
   // 辅助（不是 Expr 也不是 Stmt）
   FieldInit, Block, Param,
   // 语句
-  VarDecl, Assign, ExprStmt, If, PpIf, While, Switch, Return, Break, Def, BlockStmt,
+  VarDecl, Assign, ExprStmt, If, PpIf, While, Switch, Return, Break, Def, BlockStmt, Asm,
   // 顶层函数/标签块
   Function,
   // 容器节点也各自一个类别：与父语句共用类别会让 as<T>() 把 IfStmt 认成 IfCase
@@ -291,6 +291,26 @@ struct BlockStmt : Stmt {
   static constexpr NK k = NK::BlockStmt;
   explicit BlockStmt(int line) : Stmt(k, line) {}
   std::unique_ptr<Block> block;
+};
+
+/* `asm <arch> [<os>] { … }` 的块内**一行原始指令**。
+   为什么留文本、不解析成表达式：参考编译器把块里的指令文本交给它自己的小汇编器**重新汇编**
+   （`work/tmp/res-asm/report.md` §3.1 的实测：会做寄存器重分配、`nop` 被白名单拒绝），
+   所以这一层的形状必须是「助记符 + 操作数」的原文；越早解析成节点，越会把我们自己的语法
+   规则套到汇编文本上。 */
+struct AsmSrcLine {
+  int line = 0;
+  std::string text;
+};
+
+/* 内联汇编语句。`arch`/`os` 是源码拼写（`x86_64` / `aarch64`，`windows` / `linux` / `macos`，后者可缺）。
+   非目标架构的块由 sema 整块丢弃且**不校验内容**（report §3.3：aarch64 块里写垃圾也能编过）。 */
+struct AsmStmt : Stmt {
+  static constexpr NK k = NK::Asm;
+  explicit AsmStmt(int line) : Stmt(k, line) {}
+  std::string arch;
+  std::string os;  // 空 = 源码里没写
+  std::vector<AsmSrcLine> lines;
 };
 
 struct DefStmt : Stmt {  // 函数体里的嵌套 def

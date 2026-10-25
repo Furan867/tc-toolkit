@@ -445,6 +445,53 @@ std::string where(uc_engine* uc) {
     return "pc=" + hex(reg(uc, UC_X86_REG_RIP)) + " rsp=" + hex(reg(uc, UC_X86_REG_RSP));
 }
 
+// boot 快照的字节数上限：`game_hi - game_lo` 超了就不写（一次性几 GB 的写入只能是把 DLL / host
+// 地址算进了游戏区间，不是「大电路的快照」）。
+constexpr uint64_t kMaxBootDumpBytes = 2ull << 30;
+
+// `--dump-boot`：`[game_lo, game_hi)` 的原始字节，无 header（地址由调用方从 `.si` 算）。
+// 文件大小恒等于 `game_hi - game_lo`：区间内没有映射的地址写 0 —— 快照吃的是一段连续地址，
+// 而 `map_game` 只映射 `spec.regions()` 合并后的段；同一份 `.si` 两边段几何相同，空洞也一样。
+struct BootDump {
+    uint64_t lo = 0;
+    uint64_t hi = 0;
+    uint64_t bytes = 0;
+};
+
+BootDump dump_boot_memory(uc_engine* uc, const Spec& spec, const Layout& layout,
+                          const std::string& path) {
+    BootDump d;
+    d.lo = spec.game_lo();
+    d.hi = spec.game_hi();
+    if (d.hi < d.lo)
+        throw std::runtime_error("difftrace: --dump-boot 的游戏地址空间是负的: " + hex(d.lo) + " .. " +
+                                 hex(d.hi));
+    d.bytes = d.hi - d.lo;
+    if (d.bytes > kMaxBootDumpBytes)
+        throw std::runtime_error("difftrace: --dump-boot 的游戏地址空间 " + hex(d.lo) + " .. " +
+                                 hex(d.hi) + " 有 " + std::to_string(d.bytes) +
+                                 " 字节，超过 2 GiB 上限");
+
+    std::vector<uint8_t> bytes(d.bytes, 0);
+    for (const auto& [lo, hi] : layout.spans) {
+        const uint64_t a = std::max(lo, d.lo);
+        const uint64_t b = std::min(hi, d.hi);
+        if (a >= b) continue;
+        check(uc_mem_read(uc, a, bytes.data() + (a - d.lo), b - a),
+              "读 boot 快照 " + hex(a) + ".." + hex(b));
+    }
+
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    if (f == nullptr) throw std::runtime_error("difftrace: 打不开 boot 快照文件写: " + path);
+    const size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
+    const int closed = std::fclose(f);
+    if (n != bytes.size() || closed != 0)
+        throw std::runtime_error("difftrace: 写 boot 快照文件失败: " + path + "（写了 " +
+                                 std::to_string(n) + " / " + std::to_string(bytes.size()) +
+                                 " 字节）");
+    return d;
+}
+
 // 要写桩地址的槽清单 —— `Stubs::install` 的唯一输入，magic 编号 = 清单下标。
 // 两条导入机制互斥地贡献槽：参考产物全是 `dll_refs` 的 IAT 槽（`image.dll.iat` 整张表：DLL 自己的
 // 代码也会调到别的导入），我们的产物全是 sidecar 指出的位置（`stub_refs`）。两者都只是
@@ -577,7 +624,7 @@ PatchStats patch_dll_refs(uc_engine* uc, const Image& image,
 }
 
 RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uint64_t target_cycle,
-                        Seed seed) {
+                        Seed seed, const std::string& boot_dump_path) {
     RunOutcome out;
     out.layout = map_game(uc, spec, image, out.host_regions);
 
@@ -654,6 +701,16 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
                             std::to_string(wait.reads) + " 次；" + where(uc) + "）";
         out.stop_pc = reg(uc, UC_X86_REG_RIP);
         return out;
+    }
+
+    // 快照必须在这里拍：启动期的写不进 store 序列（阶段 B 才 attach），它是唯一能看见那段内存的
+    // 窗口；位置在发命令之前 = 「初始化完了、还没跑」那一刻的状态。
+    if (!boot_dump_path.empty()) {
+        const BootDump d = dump_boot_memory(uc, spec, out.layout, boot_dump_path);
+        out.boot_dump = boot_dump_path;
+        out.boot_lo = d.lo;
+        out.boot_hi = d.hi;
+        out.boot_bytes = d.bytes;
     }
 
     // -- 阶段 B：发一次 run ------------------------------------------------------

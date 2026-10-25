@@ -122,6 +122,12 @@ struct RunOutcome {
     uint64_t wait_reads = 0;        // 判「在等命令」时看到的 ctl_command_id 读次数
     uint64_t unnamed_hits = 0;      // import 为空的 dll_refs 站点被踩到几次
     uint64_t unnamed_first_pc = 0;  // 第一次踩到的 pc（0 = 没踩到）
+    // `--dump-boot` 的结果：空路径 = 没要快照，下面三个数保持 0。
+    // `boot_bytes == boot_hi - boot_lo`，也就是快照文件的大小（无 header）。
+    std::string boot_dump;
+    uint64_t boot_lo = 0;
+    uint64_t boot_hi = 0;
+    uint64_t boot_bytes = 0;
     size_t seeded_blocks = 0;       // 灌了图案的 `#RESET_DATA_*` 块数
     uint64_t seeded_bytes = 0;
     // 完成判据用到的三个数（全部从 `Spec` 算出来：`settings` 地址、`StateIndex` 里 sim_running
@@ -141,7 +147,9 @@ struct RunOutcome {
 // 从 `code_base + entry` 起跑：先跑到「等命令」状态，再发一次 run（target_cycle 个 tick）
 // 并跑到 K2 判据成立。失败不猜、不硬凑 —— 原因写进 `result.reason`，pc/rsp 由调用方打。
 // `seed` 决定 `#RESET_DATA_*` 灌什么（host.py 的 `--seed-reset-data` 同语义）。
+// `boot_dump_path` 非空时，在「启动跑完、还没发 run 命令」那一刻把 `[game_lo, game_hi)` 的原始字节
+// 写到该文件；空 = 完全跳过（连 `game_lo`/`game_hi` 都不算，输出与耗时都不变）。
 RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uint64_t target_cycle,
-                        Seed seed);
+                        Seed seed, const std::string& boot_dump_path);
 
 }  // namespace tc

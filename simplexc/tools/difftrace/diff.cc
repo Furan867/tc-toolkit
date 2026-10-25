@@ -1,6 +1,7 @@
 #include "diff.hh"
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -46,6 +47,12 @@ uint64_t read_u64(const std::string& in, size_t& off, const std::string& path) {
 
 bool valid_size(uint32_t size) {
     return size == 1 || size == 2 || size == 4 || size == 8 || size == 16;
+}
+
+std::string hex_addr(uint64_t v) {
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "0x%llx", static_cast<unsigned long long>(v));
+    return buf;
 }
 
 // 计数表的唯一排序规则：计数降序，同计数按 key 升序 —— 同输入必须逐字节同输出，
@@ -158,9 +165,15 @@ Memory fold(const std::vector<Store>& seq, size_t begin, size_t end) {
     const size_t stop = std::min(end, seq.size());
     for (size_t i = std::min(begin, seq.size()); i < stop; ++i) {
         const Store& s = seq[i];
-        // `value` 只有 8 字节：`size == 16` 只能展开前 8 个（语料里没有 16 字节写）。
-        const uint32_t bytes = std::min<uint32_t>(s.size, 8);
-        for (uint32_t b = 0; b < bytes; ++b)
+        // 只有 1/2/4/8 能按字节展开：`Store::value` 是 uint64_t，`size > 8` 时高半截没有真值来源
+        // （宽写由 Unicorn 写钩子记成 0，见 driver.cc 的 Trace::write_hook）。按 8 截断等于让判据
+        // 看不见高半截的差异、却照旧报 equal；展开 16 字节则是凭空造数据。两条都比报错难查。
+        // `size == 0` 也不接受：落到这里只说明 Store 造错了。
+        if (s.size != 1 && s.size != 2 && s.size != 4 && s.size != 8) {
+            throw std::runtime_error("difftrace: fold 只能展开 1/2/4/8 字节的写，遇到 size=" +
+                                     std::to_string(s.size) + " addr=" + hex_addr(s.addr));
+        }
+        for (uint32_t b = 0; b < s.size; ++b)
             mem[s.addr + b] = static_cast<uint8_t>((s.value >> (8 * b)) & 0xffu);
     }
     return mem;

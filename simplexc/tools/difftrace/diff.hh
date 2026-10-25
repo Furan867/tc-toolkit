@@ -61,8 +61,9 @@ std::vector<std::pair<uint64_t, size_t>> histogram_addr(const std::vector<Store>
 // 那两件事是同一件事（后者覆盖的另外 3 个字节也是 0）。
 using Memory = std::map<uint64_t, uint8_t>;
 
-// 一段写序列 → 最终内存，最后一次写获胜。`Store::value` 只有 8 字节，`size == 16` 的写只能展开
-// 低 8 字节（语料里的写宽度只有 1/2/4/8）。
+// 一段写序列 → 最终内存，最后一次写获胜。`size` 必须是 1/2/4/8 之一；其它值（含 16）**抛
+// `std::runtime_error`**（带 size 与 addr）：`Store::value` 只有 64 位，高 8 字节本来就不存在，
+// 展开等于造假数据，截断成 8 字节则让判据看不见那半截差异还照旧报 equal。
 Memory fold(const std::vector<Store>& seq, size_t begin, size_t end);
 
 // 一个字节的差异：`addr` → `(A 的字节, B 的字节)`，`nullopt` = 那一边没写过这个地址。

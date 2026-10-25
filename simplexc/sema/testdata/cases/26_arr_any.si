@@ -1,0 +1,21 @@
+// `Arr[@Any]`：类型参数写在**类型拼写里面**。参考实测（`work/tmp/aany/` 的 a1/a2/a3）绑的是
+// 实参数组的**元素类型** ⇒ 一个 def 按元素类型各发一份实例，`size(a[0])` 折成 8 / 64。
+// 三处都要覆盖：顶层 def（`elem_size`）、按引用形参＋原样转发（`upper`/`lower`，`$a` 与 `$x` 是
+// 两个类型拼写相同的 `Arr` 对象）、嵌套 def（`inner`），以及 `type_of_element(a)` 当类型值
+// （`array(type_of_element(a), n)` 等价于 `array(<元素类型>, n)`）。
+def elem_size(a: Arr[@Any]) U64 { return size(a[0]) }
+def lower($a: Arr[@Any]) None { a[0] = 1 }
+def upper($a: Arr[@Any]) None {
+  def inner($x: Arr[@Any], v: @Type) None { $x[1] = v }
+  lower($a)
+  inner($a, U8 2)
+}
+run_sim: while true {
+  var a8 = array(<U8>, 4)
+  var a64 = array(<U64>, 4)
+  upper($a8)
+  upper($a64)
+  var s8 = elem_size(a8)
+  var s64 = elem_size(a64)
+  var mine = array(type_of_element(a8), 4)
+}

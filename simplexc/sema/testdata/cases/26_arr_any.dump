@@ -1,0 +1,93 @@
+Hir funcs=8 globals=0 externs=0 consts=0 strings=0 structs=0
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=13:0
+      While label="run_sim" span=13:0
+        Const ty=Bool const=0x1 span=13:0
+        Block span=13:0
+          VarDecl ty=Arr[U8] name="a8" span=14:0
+            Call ty=Arr[U8] callee=builtin:8 span=14:0
+              Const ty=S64 const=0x4 span=14:0
+          VarDecl ty=Arr[U64] name="a64" span=15:0
+            Call ty=Arr[U64] callee=builtin:8 span=15:0
+              Const ty=S64 const=0x4 span=15:0
+          ExprStmt span=16:0
+            Call ty=Void callee=func:0 span=16:0
+              Local ty=Arr[U8] name="a8" span=16:0
+          ExprStmt span=17:0
+            Call ty=Void callee=func:3 span=17:0
+              Local ty=Arr[U64] name="a64" span=17:0
+          VarDecl ty=U64 name="s8" span=18:0
+            Call ty=U64 callee=func:6 span=18:0
+              Cast ty=Arr[U8] cast=raw span=18:0
+                Local ty=Arr[U8] name="a8" span=18:0
+          VarDecl ty=U64 name="s64" span=19:0
+            Call ty=U64 callee=func:7 span=19:0
+              Cast ty=Arr[U64] cast=raw span=19:0
+                Local ty=Arr[U64] name="a64" span=19:0
+          VarDecl ty=Arr[U8] name="mine" span=20:0
+            Call ty=Arr[U8] callee=builtin:8 span=20:0
+              Const ty=S64 const=0x4 span=20:0
+  func[0] key="upper$arr:u8#v" name="upper" inst_sig="arr:u8#v" pre_body=none cap_index=-1 decl_line=8 line_suffix=0 ret=Void params=1 caps=0
+    param[0] name="a" ty=Arr[U8]
+    Block span=8:0
+      ExprStmt span=10:0
+        Call ty=Void callee=func:1 span=10:0
+          Local ty=Arr[U8] name="a" span=10:0
+      ExprStmt span=11:0
+        Call ty=Void callee=func:2 span=11:0
+          Local ty=Arr[U8] name="a" span=11:0
+          Const ty=U8 const=0x2 span=11:0
+  func[1] key="lower$arr:u8#v" name="lower" inst_sig="arr:u8#v" pre_body=none cap_index=-1 decl_line=7 line_suffix=0 ret=Void params=1 caps=0
+    param[0] name="a" ty=Arr[U8]
+    Block span=7:0
+      Assign span=7:0
+        Index ty=U8 span=7:0
+          Local ty=Arr[U8] name="a" span=7:0
+          Const ty=S64 const=0x0 span=7:0
+        Const ty=S64 const=0x1 span=7:0
+  func[2] key="upper|inner@9@Any=u8@Type=u8" name="inner" inst_sig="" pre_body=none cap_index=-1 decl_line=9 line_suffix=0 ret=Void params=2 caps=0
+    param[0] name="x" ty=Arr[U8]
+    param[1] name="v" ty=U8
+    Block span=9:0
+      Assign span=9:0
+        Index ty=U8 span=9:0
+          Local ty=Arr[U8] name="x" span=9:0
+          Const ty=S64 const=0x1 span=9:0
+        Local ty=U8 name="v" span=9:0
+  func[3] key="upper$arr:u64#v" name="upper" inst_sig="arr:u64#v" pre_body=none cap_index=-1 decl_line=8 line_suffix=0 ret=Void params=1 caps=0
+    param[0] name="a" ty=Arr[U64]
+    Block span=8:0
+      ExprStmt span=10:0
+        Call ty=Void callee=func:4 span=10:0
+          Local ty=Arr[U64] name="a" span=10:0
+      ExprStmt span=11:0
+        Call ty=Void callee=func:5 span=11:0
+          Local ty=Arr[U64] name="a" span=11:0
+          Const ty=U8 const=0x2 span=11:0
+  func[4] key="lower$arr:u64#v" name="lower" inst_sig="arr:u64#v" pre_body=none cap_index=-1 decl_line=7 line_suffix=0 ret=Void params=1 caps=0
+    param[0] name="a" ty=Arr[U64]
+    Block span=7:0
+      Assign span=7:0
+        Index ty=U64 span=7:0
+          Local ty=Arr[U64] name="a" span=7:0
+          Const ty=S64 const=0x0 span=7:0
+        Const ty=S64 const=0x1 span=7:0
+  func[5] key="upper|inner@9@Any=u64@Type=u8" name="inner" inst_sig="" pre_body=none cap_index=-1 decl_line=9 line_suffix=0 ret=Void params=2 caps=0
+    param[0] name="x" ty=Arr[U64]
+    param[1] name="v" ty=U8
+    Block span=9:0
+      Assign span=9:0
+        Index ty=U64 span=9:0
+          Local ty=Arr[U64] name="x" span=9:0
+          Const ty=S64 const=0x1 span=9:0
+        Local ty=U8 name="v" span=9:0
+  func[6] key="elem_size$arr:u8#v" name="elem_size" inst_sig="arr:u8#v" pre_body=none cap_index=-1 decl_line=6 line_suffix=0 ret=U64 params=1 caps=0
+    param[0] name="a" ty=Arr[U8]
+    Block span=6:0
+      Return span=6:0
+        Const ty=U64 const=0x8 span=6:0
+  func[7] key="elem_size$arr:u64#v" name="elem_size" inst_sig="arr:u64#v" pre_body=none cap_index=-1 decl_line=6 line_suffix=0 ret=U64 params=1 caps=0
+    param[0] name="a" ty=Arr[U64]
+    Block span=6:0
+      Return span=6:0
+        Const ty=U64 const=0x40 span=6:0

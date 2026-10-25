@@ -166,15 +166,23 @@ const std::map<std::string, HashConst>& hash_consts() {
 
 /* ---------------------------------------------------------------- 泛型与捕获的小件 */
 
-/* 类型参数写在形参类型那一格上（`x: @Type`）。只有**整格**是类型参数才算 —— `Arr[@Any]` 这种
- * 嵌套拼写在 `ty_of_ref` 就报错了，与 `lower.cc` 的 `is_type_param` 同一条口径。 */
+/* 类型参数写在形参类型那一格上（`x: @Type`）。**整格**是类型参数才算 —— 它的绑定来自类型实参
+ * （`g(a, <U8>)`）或实参的静态类型，占不占运行期槽也是按这一格分的。
+ * 嵌套在类型拼写里的（`Arr[@Any]`）不是这一档，见 `ref_has_type_param`。 */
 bool is_type_param(const TypeRef& ref) {
     return ref.at && (ref.name == "Type" || ref.name == "Size" || ref.name == "Any");
 }
 
+/* 类型拼写里**任意位置**有类型参数：整格的 `x: @Type`，或嵌套的 `Arr[@Any]`。嵌套那种的绑定只能
+ * 从实参推 —— 参考实测绑的是实参数组的**元素类型**（`docs/facts/semantics.md` 的泛型一条）。 */
+bool ref_has_type_param(const TypeRef& ref) {
+    if (ref.at) return true;
+    return ref.elem != nullptr && ref_has_type_param(*ref.elem);
+}
+
 bool has_type_params(const std::vector<std::unique_ptr<Param>>& params) {
     for (const auto& p : params) {
-        if (p->typ != nullptr && is_type_param(*p->typ)) return true;
+        if (p->typ != nullptr && ref_has_type_param(*p->typ)) return true;
     }
     return false;
 }
@@ -423,6 +431,13 @@ bool same_val_ty(const TyRef& a, const TyRef& b) {
     return a->name == b->name;
 }
 
+/* 类型拼写相同（`ty_key` 是规范拼写，比它就是比结构）。传引用的类型检查用它，不能用
+ * `same_val_ty`：后者对 `Arr[...]` **恒假**（数组值的相等本来就没定义），而 `$arr: Arr[Int]`
+ * 接一个 `Arr[Int]` 实参是同一个类型 —— 两个 `Arr[Int]` 是不同对象，但拼写一样。 */
+bool same_ref_ty(const TyRef& a, const TyRef& b) {
+    return a != nullptr && b != nullptr && ty_key(*a) == ty_key(*b);
+}
+
 /* 一档「具体度」（`pick_def` 的择优用）：3 = 形参与实参静态类型**完全相同**（`same_val_ty`）；
  * 2 = 同为 Int 且名义标记（`is_bool`）一致 —— 位宽不同但同族（`U3` 对 `Uint`）；
  * 1 = 只是种类对得上（`Bool` 对 `U3`、任何 Int 对任何 Int）。
@@ -434,6 +449,34 @@ int match_rank(const TyRef& arg, const TyRef& param) {
         return arg->is_bool == param->is_bool ? 2 : 1;
     }
     return 1;
+}
+
+/* 把形参的类型拼写和实参的静态类型对上，收集**嵌套**在拼写里的类型参数绑定：`Arr[@Any]` 的
+ * `@Any` = 实参数组的元素类型（实测 `docs/facts/semantics.md` 的泛型一条）。整格的 `@Type`
+ * 不走这里（它的绑定规则在 `resolve_inst`，还多一条「类型实参」路线与运行期槽的有无）。
+ * 同名类型参数出两次（`binary ==(a: Arr[@Any], b: Arr[@Any])`）时必须推出同一个类型 ——
+ * 否则这个候选就只能在一种元素类型上说得通，当不匹配算（抛出去让 `pick_def` 跳过它）。 */
+void bind_ref(const TypeRef& ref, const TyRef& arg, std::map<std::string, TyRef>& binds, int line) {
+    if (ref.at) {
+        auto hit = binds.find(ref.name);
+        if (hit == binds.end()) {
+            binds[ref.name] = arg;
+            return;
+        }
+        if (!same_val_ty(hit->second, arg)) {
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line},
+                               "类型参数 @" + ref.name + " 推不出同一个类型（" +
+                                   ty_key(*hit->second) + " 与 " + ty_key(*arg) + "）"};
+        }
+        return;
+    }
+    if (ref.elem == nullptr) return; /* 没有类型参数，没什么可绑 */
+    if (arg == nullptr || arg->kind != TyKind::Array) {
+        throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line},
+                           "形参 " + ref.name + "[…] 要一个数组，拿到 " +
+                               (arg ? ty_key(*arg) : std::string("推不出的类型"))};
+    }
+    bind_ref(*ref.elem, arg->elem, binds, line);
 }
 
 /* `cv` 里「必须是常量」的断言：与 `lower.cc` 的 `need_const` 同名同义（内部失败，不是用户错）。 */
@@ -638,6 +681,9 @@ private:
     /* `depth` 只给别名右手用（现有调用点不改）：`type A B`/`type B A` 这种互指靠它停住。 */
     TyRef ty_of_name(const std::string& name, int line, int depth = 0);
     TyRef ty_of_ref(const TypeRef& ref, int line, int depth = 0);
+    /* 带类型环境的那一份：`binds` 里有的类型参数（`Arr[@Any]` 的 `@Any`）换成绑定的具体类型。 */
+    TyRef ty_of_ref_binds(const TypeRef& ref, const std::map<std::string, TyRef>& binds, int line,
+                          int depth = 0);
     TyRef unify(const TyRef& a, const TyRef& b, int line);
     TyRef arith_ty(const HNode& a, const HNode& b, int line);
 
@@ -705,7 +751,9 @@ private:
     std::string inst_sig(const FunctionDef& d, const Inst& inst);
     TyRef inst_ret_type(const TypeRef* ret, const Inst& inst, int line);
     TyRef defstmt_ret(const DefStmt& st);
-    std::vector<TyRef> defstmt_params(const DefStmt& st);
+    /* 形参类型；类型参数（`Arr[@Any]`）按实参静态类型推型，收进 `binds` 里（实例体要用）。 */
+    std::vector<TyRef> defstmt_params(const DefStmt& st, const ArgList& args,
+                                      std::map<std::string, TyRef>& binds);
     TyRef static_type(const Node& node);
     TyRef type_value_of(const Expr& node, int line);
     TyRef operand_type(const Expr& node, int line);
@@ -713,10 +761,10 @@ private:
     /* 登记一个实例并返回它在 `hir.funcs` 里的下标；体由子上下文（`run_*_def`）算。 */
     int instantiate_top(const FunctionDef& d, const Inst& inst, const Closure& cl);
     int instantiate_nested(const DefStmt& st, const std::vector<TyRef>& param_tys, const Closure& cl,
-                           const std::string& owner_lex);
+                           const std::string& owner_lex, const std::map<std::string, TyRef>& binds);
     void run_top_def(const FunctionDef& d, const Inst& inst, const std::vector<HCapture>& caps, int index);
     void run_nested_def(const DefStmt& st, const std::vector<TyRef>& param_tys, const Closure& cl,
-                        const std::string& lex, int index);
+                        const std::string& lex, int index, const std::map<std::string, TyRef>& binds);
     Closure captures_of(const DefStmt& st, const std::string& owner_lex);
     Closure def_captures(const FunctionDef& d);
     void collect_captures(const Block& body, const std::vector<std::string>& params,
@@ -1002,10 +1050,20 @@ TyRef Analyzer::ty_of_name(const std::string& name, int line, int depth) {
 }
 
 TyRef Analyzer::ty_of_ref(const TypeRef& ref, int line, int depth) {
-    if (ref.at) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "编译期类型参数 " + ref.name};
+    static const std::map<std::string, TyRef> none; /* 没有类型环境：类型参数一律报未实现 */
+    return ty_of_ref_binds(ref, none, line, depth);
+}
+
+TyRef Analyzer::ty_of_ref_binds(const TypeRef& ref, const std::map<std::string, TyRef>& binds,
+                                int line, int depth) {
+    if (ref.at) {
+        auto hit = binds.find(ref.name);
+        if (hit != binds.end()) return hit->second;
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "编译期类型参数 " + ref.name};
+    }
     if (ref.elem != nullptr) {
         if (ref.name != "Arr") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "泛型类型 " + ref.name + "[…]"};
-        return make_array(ty_of_ref(*ref.elem, line, depth));
+        return make_array(ty_of_ref_binds(*ref.elem, binds, line, depth));
     }
     return ty_of_name(ref.name, line, depth);
 }
@@ -1594,7 +1652,7 @@ HNode Analyzer::call_user(const FunctionDef& d, const ArgList& args,
         const Expr& arg = *args[inst.rt_arg[i]];
         if (param_by_ref(*inst.rt_params[i])) {
             HNode place = lvalue(arg);
-            if (!same_val_ty(place.ty, inst.rt_types[i])) {
+            if (!same_ref_ty(place.ty, inst.rt_types[i])) {
                 throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line},
                                    "传引用形参 $" + param_name(*inst.rt_params[i]) +
                                        " 的实参类型 " + ty_key(*place.ty) + " 对不上"};
@@ -1613,15 +1671,26 @@ HNode Analyzer::call_user(const FunctionDef& d, const ArgList& args,
 HNode Analyzer::call_nested(const DefStmt& st, const CallExpr& node, const std::string& owner_lex) {
     const Closure cl = captures_of(st, owner_lex);
     const TyRef ret_ty = defstmt_ret(st);
-    const std::vector<TyRef> param_tys = defstmt_params(st);
-    if (param_tys.size() != node.args.size()) {
+    if (st.params.size() != node.args.size()) {
         throw CompileError{Responsibility::UserSource, Stage::Sema, Span{node.src_line}, st.name + "() 的参数个数对不上"};
     }
-    const int index = instantiate_nested(st, param_tys, cl, owner_lex);
+    std::map<std::string, TyRef> binds; /* 嵌套类型参数（`Arr[@Any]`）按实参推型 */
+    const std::vector<TyRef> param_tys = defstmt_params(st, arg_list(node.args), binds);
+    const int index = instantiate_nested(st, param_tys, cl, owner_lex, binds);
     HNode n = expr_node(HKind::Call, ret_ty, node.src_line);
     n.callee.kind = HCalleeKind::Func;
     n.callee.index = index;
     for (std::size_t i = 0; i < node.args.size(); ++i) {
+        if (param_by_ref(*st.params[i])) {
+            HNode place = lvalue(*node.args[i]);
+            if (!same_ref_ty(place.ty, param_tys[i])) {
+                throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line},
+                                   "传引用形参 $" + param_name(*st.params[i]) +
+                                       " 的实参类型 " + ty_key(*place.ty) + " 对不上"};
+            }
+            n.kids.push_back(std::move(place));
+            continue;
+        }
         n.kids.push_back(convert(e(*node.args[i]), param_tys[i], node.src_line));
     }
     return n;
@@ -1767,13 +1836,22 @@ HNode Analyzer::call_minmax(HBuiltin id, const CallExpr& node) {
  * `n << 16` 的头、载荷零初始化 —— 这些都归 codegen。sema 只给「元素类型 + 长度」：
  * `ty` = `Arr[T]`，kids = `[长度]`（常量就是 `Const`，否则是 i64 的表达式）。
  * 长度**不必**是编译期常量：前缀的 `big_int_add` 写的就是 `array(<U64>, a.len())`，
- * 而参考的分配本来就发生在运行期（`tc_array_alloc(n, …)` 的 n 由运行期算）。 */
+ * 而参考的分配本来就发生在运行期（`tc_array_alloc(n, …)` 的 n 由运行期算）。
+ * 元素类型也可以写成**类型值**（`array(type_of_element(a), n)`，参考实测编译期就折成
+ * `array(<元素类型>, n)`）。 */
 HNode Analyzer::call_array(const CallExpr& node) {
-    if (node.type_args.size() != 1 || node.args.size() != 1) {
+    TyRef elem;
+    const Expr* len = nullptr;
+    if (node.type_args.size() == 1 && node.args.size() == 1) {
+        elem = ty_of_ref(*node.type_args[0], node.src_line);
+        len = node.args[0].get();
+    } else if (node.type_args.empty() && node.args.size() == 2) {
+        elem = type_value_of(*node.args[0], node.src_line);
+        len = node.args[1].get();
+    } else {
         unimplemented("array(<T>, n) 的形态", node.src_line);
     }
-    const TyRef elem = ty_of_ref(*node.type_args[0], node.src_line);
-    const std::optional<HNode> n = const_value(*node.args[0]);
+    const std::optional<HNode> n = const_value(*len);
     if (n.has_value() && n->kind == HKind::Const) {
         if (n->const_bits > (uint64_t{1} << 32)) {
             unimplemented("array 的长度 " + std::to_string(n->const_bits) + " 太大", node.src_line);
@@ -1782,7 +1860,7 @@ HNode Analyzer::call_array(const CallExpr& node) {
                             {const_node(ty_i64(), n->const_bits, node.src_line)}, node.src_line);
     }
     return builtin_node(HBuiltin::Array, make_array(elem),
-                        {convert(e(*node.args[0]), ty_i64(), node.src_line)}, node.src_line);
+                        {convert(e(*len), ty_i64(), node.src_line)}, node.src_line);
 }
 
 /* `lower.cc` 的 `builtin_random`：状态就是前缀的 `var global_seed = Seed 1`（语料自己会写
@@ -2126,15 +2204,23 @@ const FunctionDef* Analyzer::pick_unit(const std::vector<const FunctionDef*>& ca
 }
 
 /* `lower.cc` 的 `resolve_inst`，逐句照搬（含「`<U8>` 不占运行期槽」与 `#v` 后缀）。
- * 区别只有一处：签名那段要读 `params[i]->typ`，缺类型时先报错而不是解引用空指针。 */
+ * 区别有两处：签名那段要读 `params[i]->typ`，缺类型时先报错而不是解引用空指针；
+ * 嵌套在拼写里的类型参数（`Arr[@Any]`）按实参静态类型推型（`bind_ref`），它的类型要等
+ * 全部绑定定下来才能解，所以先占位、循环后再补。 */
 Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, const ArgList& args,
                             const std::vector<TypeRefPtr>& type_args, int line) {
     Inst out;
-    std::vector<std::size_t> tp; /* 类型参数的声明位置（按声明序） */
+    std::vector<std::size_t> tp; /* 整格类型参数的声明位置（按声明序） */
+    bool nested = false;         /* 有嵌套在拼写里的类型参数（`Arr[@Any]`） */
     for (std::size_t i = 0; i < params.size(); ++i) {
-        if (params[i]->typ != nullptr && is_type_param(*params[i]->typ)) tp.push_back(i);
+        if (params[i]->typ == nullptr) continue;
+        if (is_type_param(*params[i]->typ)) {
+            tp.push_back(i);
+        } else if (ref_has_type_param(*params[i]->typ)) {
+            nested = true;
+        }
     }
-    if (tp.empty()) {
+    if (tp.empty() && !nested) {
         if (args.size() != params.size() || !type_args.empty()) {
             throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "实参个数对不上"};
         }
@@ -2159,6 +2245,11 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
     if (tp.size() > 1 && !type_args.empty() && type_args.size() != tp.size()) {
         throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line}, "类型实参个数少于类型参数"};
     }
+    if (nested && !by_value) {
+        /* 嵌套类型参数没有类型实参写法（`f(<U8>, …)` 只能填整格那种）：它只从实参推。 */
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line},
+                           "嵌套类型参数（`Arr[@Type]`）只能用值实参推型"};
+    }
 
     std::size_t ti = 0; /* 下一个待定类型的类型参数（声明序） */
     for (std::size_t i = 0; i < params.size(); ++i) {
@@ -2169,8 +2260,13 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
                 throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "泛型实例化的参数 " + params[i]->name + " 缺类型"};
             }
             out.rt_params.push_back(params[i].get());
-            out.rt_types.push_back(ty_of_ref(*params[i]->typ, line));
+            out.rt_types.push_back(nullptr); /* 等全部绑定定下来再解（见循环后） */
             out.rt_arg.push_back(by_value ? i : i - (ti > tp.size() ? tp.size() : ti));
+            if (ref_has_type_param(*params[i]->typ)) {
+                const TyRef arg_ty = static_type(*args[i]);
+                if (!arg_ty) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "推不出类型 " + params[i]->name};
+                bind_ref(*params[i]->typ, arg_ty, out.binds, line);
+            }
             continue;
         }
         TyRef bound = nullptr;
@@ -2191,6 +2287,10 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
             out.rt_arg.push_back(i);
         }
     }
+    /* 绑定都定完了，再解非类型参数的形参类型（`Arr[@Type]` 的 `@Type` 可能声明在后面）。 */
+    for (std::size_t i = 0; i < out.rt_types.size(); ++i) {
+        if (!out.rt_types[i]) out.rt_types[i] = ty_of_ref_binds(*out.rt_params[i]->typ, out.binds, line);
+    }
     /* 同一 (函数, 实参) 只实例化一次的判据就是这个串（接口 §1）：缓存键与函数名的 `$` 后缀共用。 */
     for (std::size_t i = 0; i < params.size(); ++i) {
         if (i != 0) out.sig += ",";
@@ -2200,7 +2300,7 @@ Inst Analyzer::resolve_inst(const std::vector<std::unique_ptr<Param>>& params, c
         if (is_type_param(*params[i]->typ)) {
             out.sig += "@" + ty_key(*out.binds.at(params[i]->name));
         } else {
-            out.sig += ty_key(*ty_of_ref(*params[i]->typ, line));
+            out.sig += ty_key(*ty_of_ref_binds(*params[i]->typ, out.binds, line));
         }
     }
     if (by_value) out.sig += "#v";
@@ -2220,8 +2320,17 @@ std::optional<std::vector<TyRef>> Analyzer::decl_param_types(const FunctionDef& 
 /* 返回类型写成类型参数（`@Size` / `@Type`）时取**第一个**类型参数的绑定（`lower.cc` 同）。 */
 TyRef Analyzer::inst_ret_type(const TypeRef* ret, const Inst& inst, int line) {
     if (ret == nullptr) return ty_void();
-    if (!is_type_param(*ret)) return ty_of_ref(*ret, line);
-    if (inst.bind_order.empty()) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "返回类型 " + ret->name + " 没有绑定"};
+    if (!is_type_param(*ret)) return ty_of_ref_binds(*ret, inst.binds, line);
+    /* 整格的 `@Type` 返回取**第一个**绑定的类型参数（`lower.cc` 同）；但 `Arr[@Any]` 那种只出现在
+     * 拼写内部的绑定不进 `bind_order`（它不占运行期槽，也没有「第一个类型参数」的说法），
+     * 所以那种只能按名字查。 */
+    if (inst.bind_order.empty()) {
+        auto hit = inst.binds.find(ret->name);
+        if (hit == inst.binds.end()) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "返回类型 " + ret->name + " 没有绑定"};
+        }
+        return hit->second;
+    }
     return inst.bind_order.front();
 }
 
@@ -2229,11 +2338,23 @@ TyRef Analyzer::defstmt_ret(const DefStmt& st) {
     return st.ret != nullptr ? ty_of_ref(*st.ret, st.src_line) : ty_void();
 }
 
-std::vector<TyRef> Analyzer::defstmt_params(const DefStmt& st) {
+std::vector<TyRef> Analyzer::defstmt_params(const DefStmt& st, const ArgList& args,
+                                           std::map<std::string, TyRef>& binds) {
+    /* 嵌套 def 的调用形式没有 `<T>` 类型实参（`call_nested` 只看实参表），所以类型参数只能推型。 */
+    for (std::size_t i = 0; i < st.params.size(); ++i) {
+        const Param& p = *st.params[i];
+        if (p.typ == nullptr) continue; /* 下面统一的缺类型报错 */
+        if (!ref_has_type_param(*p.typ)) continue;
+        const TyRef arg_ty = static_type(*args[i]);
+        if (!arg_ty) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{p.src_line}, "推不出类型 " + p.name};
+        }
+        bind_ref(*p.typ, arg_ty, binds, p.src_line);
+    }
     std::vector<TyRef> out;
     for (const auto& p : st.params) {
         if (p->typ == nullptr) throw CompileError{Responsibility::UserSource, Stage::Sema, Span{p->src_line}, "参数 " + p->name + " 缺类型"};
-        out.push_back(ty_of_ref(*p->typ, p->src_line));
+        out.push_back(ty_of_ref_binds(*p->typ, binds, p->src_line));
     }
     return out;
 }
@@ -2317,9 +2438,13 @@ TyRef Analyzer::static_type(const Node& node) {
                         return nullptr;
                     }
                 }
-                /* `array(<T>, n)`：`var a = array(<U8>, 16)` 的静态类型决定 `a[i]` 的步长。 */
+                /* `array(<T>, n)`：`var a = array(<U8>, 16)` 的静态类型决定 `a[i]` 的步长。
+                 * 两参式是类型值（`array(type_of_element(a), n)`），见 `call_array`。 */
                 if (name == "array" && !n.type_args.empty()) {
                     return make_array(ty_of_ref(*n.type_args[0], n.src_line));
+                }
+                if (name == "array" && n.type_args.empty() && n.args.size() == 2) {
+                    return make_array(type_value_of(*n.args[0], n.src_line));
                 }
                 if ((name == "min" || name == "max" || name == "asr" || name == "clz" ||
                      name == "ror") && !n.args.empty()) {
@@ -2386,12 +2511,24 @@ TyRef Analyzer::static_type(const Node& node) {
     }
 }
 
-/* 类型值只出现在类型实参位置，语料里唯一形态是 `load(type_of(x), p)`。 */
+/* 类型值只出现在类型实参位置，语料里两种形态：`type_of(x)`（`load(type_of(x), p)`）与
+ * `type_of_element(x)`（`array(type_of_element(a), n)`；参考实测 = `x` 的元素类型，编译期就定）。 */
 TyRef Analyzer::type_value_of(const Expr& node, int line) {
     const auto* call = as<CallExpr>(&node);
     if (call == nullptr) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型值形态"};
     const auto* id = as<IdentExpr>(call->callee.get());
-    if (id == nullptr || id->name != "type_of" || call->args.size() != 1) {
+    if (id == nullptr || call->args.size() != 1) {
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型值形态"};
+    }
+    if (id->name == "type_of_element") {
+        const TyRef ty = operand_type(*call->args[0], line);
+        if (ty->kind != TyKind::Array) {
+            throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line},
+                               "type_of_element 用在 " + std::string(ty_kind_name(ty->kind))};
+        }
+        return ty->elem;
+    }
+    if (id->name != "type_of") {
         throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型值形态"};
     }
     return operand_type(*call->args[0], line);
@@ -2482,7 +2619,8 @@ int Analyzer::instantiate_top(const FunctionDef& d, const Inst& inst, const Clos
 }
 
 int Analyzer::instantiate_nested(const DefStmt& st, const std::vector<TyRef>& param_tys,
-                                 const Closure& cl, const std::string& owner_lex) {
+                                 const Closure& cl, const std::string& owner_lex,
+                                 const std::map<std::string, TyRef>& binds) {
     /* 嵌套 def 的键 = **词法**归属 + def 名 + 源码行 + 捕获签名。前三样只由声明位置决定：
      * 换成「调用它的那个实例的键」时，自递归每绕一圈键就长一段、实例无界增长（实测栈溢出），
      * 而词法键让递归与互调都收敛到同一个实例。
@@ -2492,6 +2630,10 @@ int Analyzer::instantiate_nested(const DefStmt& st, const std::vector<TyRef>& pa
     const std::string cap_sig = capture_sig(cl.caps);
     std::string key = lex;
     if (!cap_sig.empty()) key += "|" + cap_sig;
+    /* 类型参数（`Arr[@Any]`）按实参推型 ⇒ 同一个嵌套 def 在不同元素类型上必须是**不同实例**。
+     * 不写进键的话第二次调用会复用第一份（实测：`Arr[U64]` 实参进了形参是 `Arr[U8]` 的那份，
+     * 静默错位）。没有类型参数时 `binds` 是空的，键与改动前一字不差。 */
+    for (const auto& b : binds) key += "@" + b.first + "=" + ty_key(*b.second);
     auto hit = mod_->instance.find(key);
     if (hit != mod_->instance.end()) return hit->second;
     /* 与顶层实例同一道上限：词法键已经让正当的递归收敛，能撞上这条的只有捕获签名一直在变的
@@ -2518,7 +2660,7 @@ int Analyzer::instantiate_nested(const DefStmt& st, const std::vector<TyRef>& pa
     mod_->instance[key] = index;
     if (!cap_sig.empty()) ++mod_->cap_instances[{st.name, st.src_line}];
     Analyzer child(*mod_);
-    child.run_nested_def(st, param_tys, cl, lex, index);
+    child.run_nested_def(st, param_tys, cl, lex, index, binds);
     return index;
 }
 
@@ -2549,9 +2691,11 @@ void Analyzer::run_top_def(const FunctionDef& d, const Inst& inst,
 /* 子上下文：一个嵌套 def 实例的体。先绑被摊平进来的兄弟 def，再绑形参与捕获 —— 同名时变量优先
  * （调用仍能按名查到 def，`call_named` 会往 `root_defs` 再找一遍）。 */
 void Analyzer::run_nested_def(const DefStmt& st, const std::vector<TyRef>& param_tys,
-                              const Closure& cl, const std::string& lex, int index) {
+                              const Closure& cl, const std::string& lex, int index,
+                              const std::map<std::string, TyRef>& binds) {
     ret_ = defstmt_ret(st);
     cur_key_ = lex;
+    ty_binds_ = binds;
     push_scope();
     for (const auto& d : cl.defs) bind_def(d.first->name, d.first, d.second);
     for (std::size_t i = 0; i < st.params.size() && i < param_tys.size(); ++i) {

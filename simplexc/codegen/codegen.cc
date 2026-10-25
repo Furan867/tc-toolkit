@@ -1371,9 +1371,10 @@ V Codegen::builtin_array(const sema::HNode& node) {
     /* `array(<T>, n)`：参考内建，返回定长数组。语义实测（`docs/notes/2026-10-18-array.md`）：
      *   · 值是**指向载荷的指针**，载荷前 8 字节是 Nim 头，`头 >> 16 == n`（与 `.len()` 的读法一致）；
      *   · 载荷**零初始化**，元素按 U-L1 的字节步长紧密排列；
-     *   · 每个调用点得到**自己的**缓冲区（参考在堆上分配，首址固定）。
-     * 我们把它做成**每个调用点一枚私有全局**（头 + 零载荷）：语料里 `array()` 都在「建表」函数里
-     * （每次运行只调一次），所以加载期的零初始化等价于参考的每次分配零初始化。 */
+     *   · 每次求值都**新分配**一块（参考走堆，首址固定）。
+     * 所以这里发一次 `tc_array_alloc`（`runtime/rt_min.cc`，内部是 `VirtualAlloc`）。
+     * 不能做成「每个调用点一枚私有全局」：098 的 `array(<U8>, 256)` 就写在 `run_sim` 的
+     * while 循环体里，每个 tick 都要一块干净的 —— 私有全局在第二轮拿到的是上一轮的残留。 */
     if (node.kids.size() != 1 || node.ty->kind != TyKind::Array) {
         throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "array(<T>, n) 的形态"};
     }
@@ -1384,22 +1385,10 @@ V Codegen::builtin_array(const sema::HNode& node) {
     if (count > (uint64_t{1} << 32)) {
         throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度 " + std::to_string(count) + " 太大"};
     }
-    const uint64_t payload = count * static_cast<uint64_t>(storage_bytes(*elem, node.span));
-    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
-    const uint64_t header = count << 16;
-    std::vector<LLVMValueRef> elems;
-    for (int i = 0; i < 8; ++i) {
-        elems.push_back(LLVMConstInt(i8, (header >> (8 * i)) & 0xFF, 0));
-    }
-    elems.resize(static_cast<size_t>(8 + payload), LLVMConstInt(i8, 0, 0));
-    LLVMTypeRef arrty = LLVMArrayType2(i8, elems.size());
-    const std::string gname = ".array" + std::to_string(node.span.line) + "_" +
-                              std::to_string(array_serial_++);
-    LLVMValueRef g = LLVMAddGlobal(module(), arrty, gname.c_str());
-    LLVMSetLinkage(g, LLVMPrivateLinkage);
-    LLVMSetInitializer(g, LLVMConstArray2(i8, elems.data(), elems.size()));
-    std::vector<LLVMValueRef> gi{const_int(0), const_int(8)};
-    return V::instr(LLVMConstGEP2(arrty, g, gi.data(), 2), make_array(elem));
+    const uint64_t elem_bytes = static_cast<uint64_t>(storage_bytes(*elem, node.span));
+    LLVMValueRef fn = get_extern("tc_array_alloc", ty_ptr(), {ty_i64(), ty_i64()});
+    LLVMValueRef p = emit_call(fn, {const_int(count), const_int(elem_bytes)});
+    return V::instr(p, make_array(elem));
 }
 
 V Codegen::empty_array(const TyRef& arr_ty, int line) {

@@ -18,7 +18,7 @@
 | `timeout-fallback` | 同上但 ours_with_fallback → 转交参考、manifest `impl=fallback` |
 | `ours-budget-ok`   | （超时判据的对照）同一份源码、预算走默认 5 s → ours 成功 |
 | `user-err`         | 用户源码错（`USER_ERR_SRC`）→ `ours: UserError @ sema/…`（三轴都在失败串里）；`ours` 与 `ours_with_fallback` **两种模式都不转交**：`impl=ours_failed`、无 `impl=fallback`、无产物文件 |
-| `undefined-call`   | ours_with_fallback + 调我们没实现的 `hex(2,3)` → **必须转交**：`kind=UnsupportedConstruct`、`impl=fallback`、产物与同进程参考产物逐字节相同 |
+| `undefined-call`   | ours_with_fallback + 调我们没实现的 `log10(U64 3)` → **必须转交**：`kind=UnsupportedConstruct`、`impl=fallback`、产物与同进程参考产物逐字节相同 |
 | `user-syntax-err`  | ours_with_fallback + 真语法错（`USER_SYNTAX_ERR_SRC`）→ `UserError`、**不转交**：`impl=ours_failed`、无 `impl=fallback`、无产物（与上一条成对，才分得清两种坏法） |
 
 `ours-budget-ok` 是 `timeout-ours` 的对照：有了它才能说「超时那条的失败是超预算造成的」，
@@ -129,9 +129,13 @@ SRC = os.path.join(SIMPLEXC, "corpus", "src", "176.si")
 # （`Str 与整数混用`，责任轴 = UserSource）—— 它过了词法/语法，靠 sema 才拒。
 USER_ERR_SRC = b'main: while true {\n    if 1 == "x" { }\n}\n'
 
-# 未实现的内建：`hex` 是前缀格式化，属于 status 里「刻意不做」的那批。这条源码过词法/语法层，
+# 未实现的函数：`log10` 只在前缀里有 `def`，`stdlib = off` 时我们什么都不发。这条源码过词法/语法层，
 # 只在**解析未定义的函数**那一步停 —— 而那一处的责任轴必须是 `Unimplemented`（`4c147ef`）。
-UNDEFINED_CALL_SRC = b'main: while true {\n    let s = hex(2, 3)\n}\n'
+# ⚠ 探针名字是**易腐的**：本 case 依赖「off 路径不实现 `log10`」。哪天补上它，这条要换成下一个
+# 仍未实现的函数（原来的探针是 `hex`，off 路径补上 `str`/`hex`/`bin` 之后就不能用了）。
+# 实参写成 `U64 3` 不是口味：参考实现自己编 `log10(3)`（Int 字面量）会 COMPILER ERROR 崩掉，
+# `log10(U64 3)` 才编得过 —— 而本 case 的判据 ④ 要求「参考那次真的成功」。
+UNDEFINED_CALL_SRC = b'main: while true {\n    let s = log10(U64 3)\n}\n'
 
 # 真语法错（`(` 后面直接 `}`）：责任轴 = UserSource、阶段 = parse → 壳判 `UserError`。
 USER_SYNTAX_ERR_SRC = b'main: while true {\n    let x = (1 + \n}\n'
@@ -842,7 +846,7 @@ def case_user_err(c):
 
 
 def case_undefined_call(c):
-    """未定义的函数（我们没实现的 `hex`）+ ours_with_fallback → **必须转交参考**。
+    """未定义的函数（我们没实现的 `log10`）+ ours_with_fallback → **必须转交参考**。
 
     守的是 `4c147ef` 修的那条回归：这一处若被判成 `UserSource`，壳就会走 `UserError` 那条
     **不转交**的路，游戏里直接报错 —— 而「我们能不能编」的数字看不出来（那组数字只量产物，
@@ -852,9 +856,9 @@ def case_undefined_call(c):
     （否则「逐字节相同」可能只是两边都空）。
     """
     os.environ.pop("TC_OURS_TIMEOUT_MS", None)
-    # 这条 case 的前提是「`hex` 对我们来说没实现」。**`stdlib = on` 时它是有定义的**
-    # —— 前缀里有 `def hex`，我们要真把它编出来（全量语料 98/98 就是这么过的）——
-    # 所以这里把 stdlib 钉在 off：判的是「没实现的名字 → 转交」那条路，不是前缀。
+    # 这条 case 的前提是「`log10` 对我们来说没实现」。**`stdlib = on` 时它是有定义的**
+    # —— 前缀里有 `def log10`，我们就得真把它编出来 —— 所以这里把 stdlib 钉在 off：判的是
+    # 「没实现的名字 → 转交」那条路，不是前缀。换探针的历史见 `UNDEFINED_CALL_SRC` 的注释。
     set_mode("new", "ref", extra="stdlib = off\n")
     dll, before = load_and_snapshot("new")
     raw_ref, ret_ref = call_compile(dll, UNDEFINED_CALL_SRC)
@@ -862,7 +866,7 @@ def case_undefined_call(c):
     show_delta(c, "new", before, "reference ")
     set_mode("new", "ours_with_fallback", extra="stdlib = off\n")
     raw_fb, ret_fb = call_compile(dll, UNDEFINED_CALL_SRC)
-    q_fb, prod_fb = show_result(c, "ours_with_fallback（hex）", raw_fb, ret_fb)
+    q_fb, prod_fb = show_result(c, "ours_with_fallback（log10）", raw_fb, ret_fb)
     rows, recs = show_delta(c, "new", before, "fallback ")
     row = rows[-1] if rows else {}
     seq = row.get("seq", "")
@@ -932,7 +936,7 @@ CASES = OrderedDict([
     ("ours-budget-ok", ("对照：同一份源码 + 默认预算 5 s → ours 成功", case_ours_budget_ok)),
     ("user-err", ("用户源码错 → ours: UserError（三轴在串里）、两种模式都不转交、无产物",
                   case_user_err)),
-    ("undefined-call", ("未定义的函数（hex）+ ours_with_fallback → 必须转交参考、产物与参考逐字节相同",
+    ("undefined-call", ("未定义的函数（log10）+ ours_with_fallback → 必须转交参考、产物与参考逐字节相同",
                         case_undefined_call)),
     ("user-syntax-err", ("真语法错 + ours_with_fallback → UserError、不转交（上一条的对照）",
                          case_user_syntax_err)),

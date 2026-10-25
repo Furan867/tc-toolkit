@@ -55,6 +55,15 @@ enum class HBuiltin {
      * Int 值**，不预 convert）。语义：`obj * 1000000`（纳秒）。常量折不折由 codegen 定（现状 lower
      * 在常量时折、且折的是 `pat_const` 那个按源类型符号性扩过的 64 位值 —— 折法只有一处，归 codegen）。 */
     Ms = 11,
+    /* 以下三个是 `stdlib = off` 时的硬编码 runtime（`Analyzer::call_formatter`）。**只在没拼 stdlib
+     * 前缀时**才会出现：前缀里有它们的 `def`（`str` 有 7 个重载），拼了前缀就永远走那些体。
+     *   Str(x)          kids = [x]（Bool / 有符号整数 / 无符号整数），结果 `Str`：十进制，Bool 是
+     *                   `true`/`false`（与模板插值 `{x}` 同一套渲染，见 codegen 的 `render_part`）
+     *   Hex(n, x)       kids = [n, x]（都是 `Int`），定长十六进制、小写，长度 = `min(n, 16)`
+     *   Bin(n, x)       kids = [n, x]，定长二进制，长度 = `n % 64` */
+    Str = 12,
+    Hex = 13,
+    Bin = 14,
 };
 
 /* dump 与诊断用的拼写；`hir_dump` 只用编号，这个名字是给人看的。 */
@@ -72,6 +81,9 @@ inline const char* hbuiltin_name(HBuiltin b) {
         case HBuiltin::Random: return "random";
         case HBuiltin::Len: return "len";
         case HBuiltin::Ms: return "ms";
+        case HBuiltin::Str: return "str";
+        case HBuiltin::Hex: return "hex";
+        case HBuiltin::Bin: return "bin";
     }
     return "?";
 }

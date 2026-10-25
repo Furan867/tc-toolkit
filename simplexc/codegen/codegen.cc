@@ -47,6 +47,9 @@ constexpr int kBuiltinArray = static_cast<int>(sema::HBuiltin::Array);
 constexpr int kBuiltinRandom = static_cast<int>(sema::HBuiltin::Random);
 constexpr int kBuiltinLen = static_cast<int>(sema::HBuiltin::Len);
 constexpr int kBuiltinMs = static_cast<int>(sema::HBuiltin::Ms);
+constexpr int kBuiltinStr = static_cast<int>(sema::HBuiltin::Str);
+constexpr int kBuiltinHex = static_cast<int>(sema::HBuiltin::Hex);
+constexpr int kBuiltinBin = static_cast<int>(sema::HBuiltin::Bin);
 
 /* 节点类别名（报错文本用，与 `hir.hh` 的 `HKind` 一一对应）。 */
 const char* hkind_name(sema::HKind k) {
@@ -1290,6 +1293,9 @@ V Codegen::call_builtin(const sema::HNode& node) {
         case kBuiltinRandom: return builtin_random(node);
         case kBuiltinLen: return builtin_len(node);
         case kBuiltinMs: return builtin_ms(node);
+        case kBuiltinStr: return builtin_str(node);
+        case kBuiltinHex: return builtin_hex(node);
+        case kBuiltinBin: return builtin_bin(node);
         default: break;
     }
     throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "内建编号 " + std::to_string(node.callee.index)};
@@ -1518,6 +1524,119 @@ V Codegen::builtin_ms(const sema::HNode& node) {
     auto c = pat_const(obj);
     if (c) return V::konst(ty_time(), (*c * kNsPerMs) & kMask64);
     return V::instr(LLVMBuildMul(cur_fn().bd, llv(obj), const_int(kNsPerMs), "ns"), ty_time());
+}
+
+/* ================================================================ 硬编码格式化（`stdlib = off`）
+
+   sema 只在**没拼 stdlib 前缀**时发这三个编号（`Analyzer::call_formatter`）：拼了前缀时
+   `str` / `hex` / `bin` 是前缀里的 `def`，走 `call_func` 编译它们的体 —— 那才是参考的行为，
+   也才有 `on` 的产物字节。 */
+
+LLVMValueRef Codegen::heap_array(LLVMValueRef count, int /*line*/) {
+    /* 与 `builtin_array` 同一条路（`tc_array_alloc`：头 8 字节 = `n << 16`、载荷零初始化）。
+     * 元素宽度恒为 1 —— 这三个函数写的都是字节。
+     * `get_extern` 的返回类型走 `ll_type`（`Ptr` 在那里是 i64），所以这里补一道 inttoptr：
+     * 后面 GEP/写字节要的是真指针（与 `str_concat` 里 `payload` 的形态一致）。 */
+    LLVMValueRef fn = get_extern("tc_array_alloc", ty_ptr(), {ty_i64(), ty_i64()});
+    LLVMValueRef raw = emit_call(fn, {count, const_int(1)});
+    return LLVMBuildIntToPtr(cur_fn().bd, raw, ptr_, "hp");
+}
+
+void Codegen::set_array_len(LLVMValueRef payload, LLVMValueRef end, int line) {
+    /* 按**实际游标**回填 `p[-8]`（`.len()` 读的就是它的高 48 位），与 `str_concat` 同一个口径：
+       缓冲尺寸只是个上界，不必预先知道十进制位数。 */
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMValueRef len =
+        LLVMBuildSub(cur_fn().bd, LLVMBuildPtrToInt(cur_fn().bd, end, i64_, "fl"),
+                     LLVMBuildPtrToInt(cur_fn().bd, payload, i64_, "fp"), "flen");
+    std::vector<LLVMValueRef> gm8{const_int(uint64_t{0} - 8)};
+    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, payload, gm8.data(), 1, "fhd");
+    store_addr(head, V::instr(LLVMBuildShl(cur_fn().bd, len, const_int(16), "fshl"), ty_i64()),
+               ty_i64(), line);
+}
+
+V Codegen::builtin_str(const sema::HNode& node) {
+    /* 十进制与 `true`/`false` 的写法**复用模板插值那一套**（`render_part` + `__simplexc_dec`）：
+       那两条已按参考对齐（`docs/notes/2026-10-18-str-interp.md`），再写一遍只会分叉。
+       缓冲走堆（`tc_array_alloc`）而不是栈：前缀的 `str` 也是 `array(<U8>, …)`，结果可能被存进
+       变量跨语句用，栈缓冲在本帧返回后就没了。 */
+    if (node.kids.size() != 1 || node.ty->kind != TyKind::Str) {
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line},
+                           "（内部）str 的 HIR 形状不对"};
+    }
+    const int line = node.span.line;
+    const V v = e(node.kids[0]);
+    /* 24 字节：20 位十进制 + `'-'` + `true`/`false` 的 5 都装得下。 */
+    LLVMValueRef p = heap_array(const_int(24), line);
+    LLVMValueRef end = render_part(p, v, line);
+    set_array_len(p, end, line);
+    return V::instr(p, ty_str());
+}
+
+V Codegen::radix_string(LLVMValueRef len, LLVMValueRef value, unsigned shift, int line) {
+    /* 定长进制串，**从低位往高位**填（`result[len-1]` 是个位），长度由调用方定（前缀的 `hex`/`bin`
+       就是这么写的）。10 以上用 `'a' - 10` —— 前缀的 `ch_a` 是小写 `a`，所以十六进制是小写。 */
+    LLVMTypeRef i8 = storage_ll(*make_int(8, false));
+    LLVMValueRef p = heap_array(len, line);
+    LLVMValueRef slot_i = alloca_slot(ty_i64(), "ri");
+    store_addr(slot_i, V::instr(len, ty_i64()), ty_i64(), line);
+    LLVMValueRef slot_v = alloca_slot(ty_i64(), "rv");
+    store_addr(slot_v, V::instr(value, ty_i64()), ty_i64(), line);
+    LLVMBasicBlockRef head = br_new_block("rh");
+    LLVMValueRef i = llv(load_addr(slot_i, ty_i64()));
+    LLVMValueRef more = LLVMBuildICmp(cur_fn().bd, LLVMIntUGT, i, const_int(0), "rgt");
+    LLVMBasicBlockRef body = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "rb");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(ctx(), cur_fn().fnref, "rd");
+    LLVMBuildCondBr(cur_fn().bd, more, body, done);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, body);
+    cur_fn().block = body;
+    LLVMValueRef at = LLVMBuildSub(cur_fn().bd, i, const_int(1), "ri1");
+    store_addr(slot_i, V::instr(at, ty_i64()), ty_i64(), line);
+    LLVMValueRef x = llv(load_addr(slot_v, ty_i64()));
+    LLVMValueRef d = LLVMBuildAnd(cur_fn().bd, x, const_int((uint64_t{1} << shift) - 1), "rdg");
+    LLVMValueRef asc = LLVMBuildSelect(
+        cur_fn().bd, LLVMBuildICmp(cur_fn().bd, LLVMIntULT, d, const_int(10), "rlt10"),
+        LLVMBuildAdd(cur_fn().bd, d, const_int('0'), "rd0"),
+        LLVMBuildAdd(cur_fn().bd, d, const_int('a' - 10), "rda"), "ras");
+    std::vector<LLVMValueRef> gi{at};
+    LLVMValueRef dst = LLVMBuildGEP2(cur_fn().bd, i8, p, gi.data(), 1, "rdp");
+    LLVMValueRef st = LLVMBuildStore(cur_fn().bd, LLVMBuildTrunc(cur_fn().bd, asc, i8, "rbt"), dst);
+    LLVMSetAlignment(st, 1);
+    store_addr(slot_v, V::instr(LLVMBuildLShr(cur_fn().bd, x, const_int(shift), "rsr"), ty_i64()),
+               ty_i64(), line);
+    LLVMBuildBr(cur_fn().bd, head);
+    LLVMPositionBuilderAtEnd(cur_fn().bd, done);
+    cur_fn().block = done;
+    return V::instr(p, ty_str());
+}
+
+V Codegen::builtin_hex(const sema::HNode& node) {
+    /* `hex(orig_length, number)`：长度 = `min(orig_length, 16)`（前缀 `def hex(orig_length: Int,
+       number: Int)` 的第一行就是这么截的；两边都是 `Int`，所以按有符号比）。 */
+    if (node.kids.size() != 2 || node.ty->kind != TyKind::Str) {
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line},
+                           "（内部）hex 的 HIR 形状不对"};
+    }
+    const int line = node.span.line;
+    LLVMValueRef len = llv(e(node.kids[0]));
+    const V value = e(node.kids[1]);
+    len = LLVMBuildSelect(cur_fn().bd,
+                          LLVMBuildICmp(cur_fn().bd, LLVMIntSLT, len, const_int(16), "hlt"), len,
+                          const_int(16), "hmin");
+    return radix_string(len, llv(value), 4, line);
+}
+
+V Codegen::builtin_bin(const sema::HNode& node) {
+    /* `bin(orig_length, number)`：长度 = `orig_length % 64`（前缀的体）。 */
+    if (node.kids.size() != 2 || node.ty->kind != TyKind::Str) {
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line},
+                           "（内部）bin 的 HIR 形状不对"};
+    }
+    const int line = node.span.line;
+    LLVMValueRef len = llv(e(node.kids[0]));
+    const V value = e(node.kids[1]);
+    len = LLVMBuildSRem(cur_fn().bd, len, const_int(64), "bmod");
+    return radix_string(len, llv(value), 1, line);
 }
 
 V Codegen::call_prefix(const sema::HirFunc& f, const sema::HNode& node) {

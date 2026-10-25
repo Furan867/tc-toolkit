@@ -212,6 +212,15 @@ protected:
     V builtin_random(const sema::HNode& node);
     V builtin_len(const sema::HNode& node);
     V builtin_ms(const sema::HNode& node);
+    /* `stdlib = off` 时的 `str` / `hex` / `bin`（sema 只在没拼前缀时发这三个编号）。 */
+    V builtin_str(const sema::HNode& node);
+    V builtin_hex(const sema::HNode& node);
+    V builtin_bin(const sema::HNode& node);
+    /* `heap_array` = `tc_array_alloc(n, 1)`，`set_array_len` = 按实际写入的游标回填 `p[-8]` 的头。 */
+    LLVMValueRef heap_array(LLVMValueRef count, int line);
+    void set_array_len(LLVMValueRef payload, LLVMValueRef end, int line);
+    /* 定长进制串（`hex` / `bin` 共用）：`shift` = 每位数几位（十六进制 4、二进制 1）。 */
+    V radix_string(LLVMValueRef len, LLVMValueRef value, unsigned shift, int line);
     /* 前缀函数的五个优化实现（方案 §2f：`HirFunc.pre_body != None` 时**不编译它的体**）。 */
     V call_prefix(const sema::HirFunc& f, const sema::HNode& node);
     LLVMValueRef get_extern(const std::string& name, const TyRef& ret_ty,

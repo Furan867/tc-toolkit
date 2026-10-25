@@ -58,6 +58,10 @@ struct ModuleSource {
     std::vector<AliasSource> aliases;
     /* `extern windows_x64 kernel32` 登记的外部库名（声明本身不给签名，只给「这是库」）。 */
     std::vector<std::string> extern_libs;
+    /* 源码前面已经拼了 stdlib 前缀（`simplexc/corpus/stdlib_prefix.si`）。
+     * 它决定 `str` / `hex` / `bin` 的落点：前缀里有那几个 `def`，那时**必须**走那些体；没拼时才由
+     * sema 展开硬编码实现（`Analyzer::call_formatter`）—— 名字先被谁注册，产物字节就归谁。 */
+    bool stdlib_prefix_included = false;
     std::string source_name;                   /* 只进报错文本 */
 };
 

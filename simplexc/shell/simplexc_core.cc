@@ -215,7 +215,11 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len,
     /* notes 在 lowering **之前**就搬进静态缓冲：它们描述的是前端已经发生的事，
        后面 sema/codegen 失败也不应该把它们弄丢（失败时用户更需要知道「这里被略过了什么」）。 */
     set_last_warnings(owned.notes);
-    const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
+    sm::ModuleSource ms = cg::module_source_of(owned.ast);
+    /* 拼没拼前缀要让 sema 知道：`str` / `hex` / `bin` 的硬编码实现只在没拼时注册（`Analyzer::
+       call_formatter`）；拼了就走前缀里那几个 `def` —— 无条件注册会改掉 `stdlib = on` 的产物字节。 */
+    ms.stdlib_prefix_included = stdlib_path != nullptr;
+    const sm::Hir hir = sm::analyze(ms);
     cg::Program prog(hir);
     prog.build();
     std::vector<uint8_t> module_obj = prog.emit_object();

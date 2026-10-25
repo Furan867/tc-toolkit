@@ -677,6 +677,7 @@ private:
     HNode call_extern(const MemberExpr& callee, const CallExpr& node);
     HNode call_size(const CallExpr& node);
     HNode call_prefix(const std::string& name, const CallExpr& node);
+    HNode call_formatter(const std::string& name, const CallExpr& node);
     HNode builtin_node(HBuiltin id, TyRef ty, std::vector<HNode> kids, int line);
     void def_stmt(HNode& parent, const DefStmt& st);
 
@@ -1545,6 +1546,13 @@ HNode Analyzer::call_named(const std::string& name, const CallExpr& node) {
     if (name == "in_scope" || name == "type_of") {
         throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, name + "() 只支持编译期形态"};
     }
+    /* `stdlib = off` 的硬编码 runtime：只在这三个名字**没有**被拼进来的前缀定义时接管。
+     * 拼了前缀时它们都在 `mod_->defs` 里（`pick_def` 早就在这里返回了），这一条根本不成立 ——
+     * 于是 `on` 的产物字节不会被硬编码实现碰到。 */
+    if (!mod_->src.stdlib_prefix_included &&
+        (name == "str" || name == "hex" || name == "bin")) {
+        return call_formatter(name, node);
+    }
     if (is_prefix_func(name)) return call_prefix(name, node);
     if (mod_->defs.count(name) != 0) {
         throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, name + "() 的重载解析拿不到参数类型"};
@@ -1883,6 +1891,40 @@ HNode Analyzer::call_prefix(const std::string& name, const CallExpr& node) {
     n.callee.index = index;
     n.kids = std::move(args);
     return n;
+}
+
+/* `str` / `hex` / `bin`：`stdlib = off` 时的硬编码实现（拼了前缀就走前缀那几个 `def`，见 `call_named`
+ * 的分派）。语义照 `stdlib_prefix.si` 里的体，只有「`str` 挑哪个重载」这一件事要按**实参的静态
+ * 类型**定（参考也是这么挑的，实测见下）：
+ *
+ *   · 无符号整数（U8、U3 这种枚举值、U64）→ `def str(number: Uint)` 的十进制；
+ *   · 有符号整数 → `def str(number: Sint)`（负数带 `'-'`）；
+ *   · `Bool` → `def str(input: Bool)` 的 `true`/`false`。
+ *
+ * 为什么 `Bool` 不并进整数那条：`Bool` 与 `U1` 在算术语义上等价但渲染不同（`types.hh` 的
+ * `is_bool` 就是为这件事留的）。实测参考（`work/tmp/rt3/probe_str.py`）：`str(false)` 的产物里
+ * 有 ASCII `false`，而 `str(0)` / `str(U3 0)` / `str(U8 7)` 的产物一个字母都没有 —— 所以
+ * 028 的差异是**我们**在拼前缀时把 `str(U3)` 挑成了 `str(Bool)`，不是「Bool 该写 0」。
+ *
+ * `hex` / `bin` 只收 `(orig_length: Int, number: Int)` 那个形态：语料里 17 处全是这么用的。
+ * 前缀里的另外几个（`hex(num: @Size)`、`str(Str|Char|Ptr|Arr)`）不展开，显式报未实现。 */
+HNode Analyzer::call_formatter(const std::string& name, const CallExpr& node) {
+    const int line = node.src_line;
+    if (name == "str") {
+        if (node.args.size() != 1) unimplemented("str(…) 的参数个数", line);
+        const HNode v = e(*node.args[0]);
+        if (!is_int(*v.ty)) {
+            unimplemented("str 的参数类型 " + std::string(ty_kind_name(v.ty->kind)), line);
+        }
+        const TyRef target = v.ty->is_bool ? v.ty : (v.ty->is_signed ? ty_i64() : make_int(64, false));
+        return builtin_node(HBuiltin::Str, ty_str(), {convert(v, target, line)}, line);
+    }
+    if (node.args.size() != 2) unimplemented(name + "(…) 的参数个数", line);
+    std::vector<HNode> kids;
+    kids.push_back(convert(e(*node.args[0]), ty_i64(), line));
+    kids.push_back(convert(e(*node.args[1]), ty_i64(), line));
+    return builtin_node(name == "hex" ? HBuiltin::Hex : HBuiltin::Bin, ty_str(),
+                        std::move(kids), line);
 }
 
 /* `kernel32.'Name'(…)` → 宿主符号 + 源码侧签名。
@@ -2265,6 +2307,14 @@ TyRef Analyzer::static_type(const Node& node) {
                 }
                 auto rd = mod_->root_defs.find(name);
                 if (rd != mod_->root_defs.end()) return defstmt_ret(*rd->second);
+                /* `str` / `hex` / `bin` 在没拼前缀时是内建（见 `call_formatter`），返回 `Str`。
+                 * 排在 `pick_def` / 嵌套 def 之后：用户自己定义了同名函数时那是他的话。
+                 * 漏了这一档，`f(str(x))` 这种实参就推不出类型，连**单候选**的重载都会判成
+                 * 「拿不到参数类型」（与 `random`/`size` 同一类缺口）。 */
+                if (!mod_->src.stdlib_prefix_included &&
+                    (name == "str" || name == "hex" || name == "bin")) {
+                    return ty_str();
+                }
                 return nullptr;
             }
             case NK::Member: {

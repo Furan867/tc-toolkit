@@ -559,6 +559,12 @@ struct Module {
      * `cap_instances` 复现 `lower` 的每 (def, lo) 捕获实例计数（`$c<n>` 的 n 与 64 上限）。 */
     std::map<std::string, int> instance;
     std::map<std::pair<std::string, int>, int> cap_instances;
+    /* `extern <约定> <库>` 登记过的库名。`kernel32.'Name'(…)` 里的 `kernel32` **不是变量**：
+     * 它只在调用点上出现，靠这张表才能与普通 `dot` 成员访问区分开。 */
+    std::set<std::string> extern_libs;
+    /* 源码里的外部名字 → `hir.externs` 下标（同一个名字只登记一次，与 `fns_` 的「一个符号只
+     * 声明一次」同）。 */
+    std::map<std::string, int> extern_index;
 };
 
 class Analyzer {
@@ -641,6 +647,7 @@ private:
     HNode call_array(const CallExpr& node);
     HNode call_random(const CallExpr& node);
     HNode call_method(const MemberExpr& callee, const CallExpr& node);
+    HNode call_extern(const MemberExpr& callee, const CallExpr& node);
     HNode call_size(const CallExpr& node);
     HNode call_prefix(const std::string& name, const CallExpr& node);
     HNode builtin_node(HBuiltin id, TyRef ty, std::vector<HNode> kids, int line);
@@ -729,6 +736,10 @@ void Analyzer::run(const ModuleSource& src) {
     cur_key_ = "main"; /* 根体里的嵌套 def 拿它当 owner（现状同样用 `cur_name_ = "main"`） */
 
     make_types(src);
+    /* `extern <约定> <库>`：只记库名。签名不在声明里（`stdlib_prefix.si:251` 只写
+     * `extern windows_x64 kernel32`），所以每个名字的签名在 `extern_sigs()` 那张显式表里 ——
+     * 表外的名字报「未支持的外部符号」，不推通用规则（`work/tmp/res-k32/report.md` §1 末）。 */
+    for (const std::string& lib : src.extern_libs) mod_->extern_libs.insert(lib);
     scan_scope_names(src); /* 里面把顶层 def（重载表）与根体嵌套 def 登记进 `Module` */
     make_top_level(src.top_vars);
     if (src.label == nullptr) throw CompileError{Responsibility::OurBug, Stage::Sema, Span{}, "没有顶层语句块（程序根）"};
@@ -1456,7 +1467,16 @@ HNode Analyzer::convert(HNode v, const TyRef& target, int line) {
 
 HNode Analyzer::e_call(const CallExpr& node) {
     if (const auto* callee = as<IdentExpr>(node.callee.get())) return call_named(callee->name, node);
-    if (const auto* mem = as<MemberExpr>(node.callee.get())) return call_method(*mem, node);
+    if (const auto* mem = as<MemberExpr>(node.callee.get())) {
+        /* `kernel32.'Sleep'(…)`：**库名 + 带引号的成员名**才是外部符号。普通 `obj.field(…)`
+         * 仍是方法调用 —— 两者在 AST 里是同一个 `MemberExpr`，区分它们的只有「`obj` 是不是
+         * 一个声明过的 `extern` 库名」。 */
+        const auto* lib = as<IdentExpr>(mem->obj.get());
+        if (lib != nullptr && mod_->extern_libs.count(lib->name) != 0) {
+            return call_extern(*mem, node);
+        }
+        return call_method(*mem, node);
+    }
     throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line}, "被调者形态 " + std::string(ast_kind_name(node.callee->kind))};
 }
 
@@ -1788,6 +1808,78 @@ HNode Analyzer::call_prefix(const std::string& name, const CallExpr& node) {
     }
     HNode n = expr_node(HKind::Call, fn_sig.ret, node.src_line);
     n.callee.kind = HCalleeKind::Func;
+    n.callee.index = index;
+    n.kids = std::move(args);
+    return n;
+}
+
+/* `kernel32.'Name'(…)` → 宿主符号 + 源码侧签名。
+ *
+ * 为什么是**一张表**而不是一条归一化规则：`stdlib_prefix.si` 里 9 个唯一名字有 4 个根本不是
+ * kernel32 导出（`_write` 在 ucrtbase，`_virtual_alloc`/`_virtual_free`/
+ * `_get_system_time_precise_as_file_time` 一个显式库里都没有）—— 参考编译器其实自带一层运行时
+ * 符号，归一化的规则本体没见过（`work/tmp/res-k32/report.md` §1）。所以只登记实测过的 7 个名字，
+ * **表外的名字一律报「未支持的外部符号 <名>」**，不按「去下划线 + 忽略大小写」去猜。
+ *
+ * 形参类型按**宿主原型**收：`DWORD`/`UINT` 是 32 位、`SIZE_T` 是 64 位，宽窄差别在调用点由
+ * `convert` 截断（与 `body_sleep` 里那道 `trunc` 同一个口径）。`_write` 是唯一一个源码写 2 参的
+ * （`print_using_stack` 那段注释掉的 asm 也是「`rcx` = 缓冲区、`rdx` = 长度」、没设 fd）——
+ * 参考自带的 `_write(const void*, unsigned)` 不是 CRT 的 `_write(int, const void*, unsigned)`，
+ * 所以我们只能保持原名；宿主解析 kernel32 时找不到它，会报装配期缺符号（报告 §1 #9）。 */
+struct ExternSig {
+    const char* symbol;
+    TyRef ret;
+    std::vector<TyRef> params;
+    HExternShape shape = HExternShape::Direct;
+};
+
+const std::map<std::string, ExternSig>& extern_sigs() {
+    static const std::map<std::string, ExternSig> m{
+        {"ExitProcess", {"ExitProcess", ty_void(), {make_int(32, false)}}},
+        {"ExitThread", {"ExitThread", ty_void(), {make_int(32, false)}}},
+        {"Sleep", {"Sleep", ty_void(), {make_int(32, false)}}},
+        {"_virtual_alloc",
+         {"VirtualAlloc",
+          ty_ptr(),
+          {ty_ptr(), ty_i64(), make_int(32, false), make_int(32, false)}}},
+        {"_virtual_free", {"VirtualFree", ty_void(), {ty_ptr(), ty_i64(), make_int(32, false)}}},
+        {"_write", {"_write", ty_void(), {ty_str(), make_int(32, false)}}},
+        {"_get_system_time_precise_as_file_time",
+         {"GetSystemTimePreciseAsFileTime", ty_i64(), {}, HExternShape::OutParam64}},
+    };
+    return m;
+}
+
+/* `kernel32.'Name'(…)`：HIR 里是一条 `Call{Extern, 下标}`，实参在这里 `convert` 到宿主的形参类型。
+ * 库名（`callee.obj`）只用于确认「这是库」，**不进产物**：参考既不校验它也不把它烘进去。 */
+HNode Analyzer::call_extern(const MemberExpr& callee, const CallExpr& node) {
+    const auto sig = extern_sigs().find(callee.name);
+    if (sig == extern_sigs().end()) {
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line},
+                           "未支持的外部符号 " + callee.name};
+    }
+    const ExternSig& fn_sig = sig->second;
+    if (node.args.size() != fn_sig.params.size()) {
+        throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{node.src_line},
+                           "外部符号 " + callee.name + " 的参数个数（宿主原型收 " +
+                               std::to_string(fn_sig.params.size()) + " 个）"};
+    }
+    std::vector<HNode> args;
+    for (std::size_t i = 0; i < fn_sig.params.size(); ++i) {
+        args.push_back(convert(e(*node.args[i]), fn_sig.params[i], node.src_line));
+    }
+    int index = -1;
+    const auto hit = mod_->extern_index.find(callee.name);
+    if (hit != mod_->extern_index.end()) {
+        index = hit->second;
+    } else {
+        index = static_cast<int>(mod_->hir.externs.size());
+        mod_->hir.externs.push_back(
+            HirExtern{fn_sig.symbol, fn_sig.ret, fn_sig.params, fn_sig.shape});
+        mod_->extern_index[callee.name] = index;
+    }
+    HNode n = expr_node(HKind::Call, fn_sig.ret, node.src_line);
+    n.callee.kind = HCalleeKind::Extern;
     n.callee.index = index;
     n.kids = std::move(args);
     return n;

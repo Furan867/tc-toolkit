@@ -42,6 +42,9 @@ struct ModuleAst {
     std::vector<EnumDecl> enums;
     std::vector<StructDecl> structs;
     std::vector<AliasDecl> aliases;
+    /* `extern windows_x64 kernel32` 声明的**外部库名**。声明只给「这个名字是库、不是变量」，
+     * 不给签名 —— 于是 `kernel32.'Sleep'(…)` 里的 `kernel32` 能被认成库而不是未定义的标识符。 */
+    std::vector<std::string> extern_libs;
     std::string source_name;                     /* 只进报错文本 */
 };
 

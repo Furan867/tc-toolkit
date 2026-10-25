@@ -104,9 +104,10 @@ enum class HBinOp {
  * 真指针转整数、整数转真指针，以及「只换类型标签的位重解释」（`Raw`，指针对整数、枚举等）。 */
 enum class HCastKind { Trunc, Sext, Zext, PtrToInt, IntToPtr, Raw };
 
-/* `Call` 的被调者：实例下标或内建编号（决策 6）。`Func` 的下标进 `Hir.funcs`，`Builtin`
- * 的编号属于 sema 的内建表（②b 才定表，所以这里只保证非负）。 */
-enum class HCalleeKind { Func, Builtin };
+/* `Call` 的被调者：实例下标、内建编号或外部符号下标（决策 6）。`Func` 的下标进 `Hir.funcs`，
+ * `Builtin` 的编号属于 sema 的内建表（②b 才定表，所以这里只保证非负），`Extern` 的下标进
+ * `Hir.externs`（`kernel32.'Sleep'(…)` —— 产物里是对**未定义符号**的调用，由装配器造桩）。 */
+enum class HCalleeKind { Func, Builtin, Extern };
 
 struct HCallee {
     HCalleeKind kind = HCalleeKind::Func;
@@ -247,9 +248,24 @@ struct HirGlobal {
     std::optional<uint64_t> init_bits;
 };
 
+/* 一个外部符号（源码的 `kernel32.'Name'(…)`）。**没有 DLL 维度**：参考既不校验库名、也不把
+ * 它烘进产物（11 处声明里 4 个名字不是 kernel32 导出），`kernel32` 只当「这是库」用，
+ * 符号名就是宿主 `<blob>.stubs` sidecar 里的 `symbol` 列（`work/tmp/res-k32/report.md` §1）。
+ *
+ * 两种形态的差别在**签名对不上**的那几个名字上：
+ *   · `Direct`：源码签名就是宿主原型（`Sleep(DWORD)`），调用点按 `params` 转好、直接 call。
+ *   · `OutParam64`：宿主是「指针出参 → void」，源码写成「无参 → Int」
+ *     （`_get_system_time_precise_as_file_time`）。参考那边是 DLL 里一个自带的小包装函数
+ *     （RVA 0x1350：`sub rsp,0x38` + 出参 alloca + `mov rax,[rsp+0x28]`）；我们没有那个 DLL，
+ *     所以同一件事在 codegen 的调用点现场发（本地槽 + call + load）—— 不是猜语义，
+ *     是它的字面等价物。`ty` 仍是源码看到的返回值。 */
+enum class HExternShape { Direct, OutParam64 };
+
 struct HirExtern {
-    std::string name;
-    TyRef ty;
+    std::string name;          /* 宿主符号名（sidecar 的 `symbol` 列） */
+    TyRef ty;                  /* 源码看到的返回值（`Void` = 没有值） */
+    std::vector<TyRef> params; /* 源码侧形参（调用点已按它 `convert`）；`OutParam64` 为空 */
+    HExternShape shape = HExternShape::Direct;
 };
 
 struct HirString {

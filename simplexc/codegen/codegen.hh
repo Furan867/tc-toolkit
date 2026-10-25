@@ -197,6 +197,10 @@ protected:
     LLVMValueRef ensure_func(int index);
     V call_func(const sema::HNode& node);
     V call_builtin(const sema::HNode& node);
+    /* `kernel32.'Name'(…)`：对**未定义符号**的调用，装配器给它造 12 字节代码桩。 */
+    V call_extern(const sema::HNode& node);
+    /* 实参 → 宿主的 LLVM 形参类型（窄整数 trunc、`Ptr` inttoptr，见定义处）。 */
+    LLVMValueRef extern_arg(const V& v, const TyRef& param_ty);
     V builtin_load(const sema::HNode& node);
     V builtin_store(const sema::HNode& node);
     V builtin_raw_cast(const sema::HNode& node);

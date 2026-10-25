@@ -52,6 +52,8 @@ struct ModuleSource {
     std::vector<EnumSource> enums;
     std::vector<StructSource> structs;
     std::vector<AliasSource> aliases;
+    /* `extern windows_x64 kernel32` 登记的外部库名（声明本身不给签名，只给「这是库」）。 */
+    std::vector<std::string> extern_libs;
     std::string source_name;                   /* 只进报错文本 */
 };
 

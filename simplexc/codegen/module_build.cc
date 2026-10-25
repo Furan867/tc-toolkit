@@ -279,12 +279,15 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
       out.ast.top_vars.push_back(out.vars.back().get());
     } else if (d.kind == "callconv" || d.kind == "extern") {
       /* 元数据声明：`call_conv x86_64 windows_x64 (…)` 与 `extern windows_x64 kernel32`。
-       * 它们不产出任何代码，我们的后端也还没有外部符号这一层（`kernel32.'ExitProcess'(…)`
-       * 这类调用在解析阶段就会掊不住）—— 所以**不当作已支持**，只留痕。
-       * 注意：能走到这一行说明那个 extern 函数没被调用（被调用的语句在解析/语义阶段就会报）；
-       * 所以留痕是「声明本身没进产物」，不是「语义被悄悄改了」。 */
-      out.notes.push_back(d.kind + " '" + d.name + "'（第 " + std::to_string(d.lo) +
-                          " 行）已认形状但未产出代码：外部符号/ABI 这一层还没接");
+       * `extern` 现在**有**下游（登记库名 → sema 的 `kernel32.'Name'(…)` 认得它是库而不是
+       * 未定义标识符），`call_conv` 仍无人读：我们的后端只用平台默认的 Win64 约定，而前缀声明
+       * 的那一组（rcx/rdx/r8/r9 + 40 字节影子空间）与它就是同一套。 */
+      if (d.kind == "extern") {
+        out.ast.extern_libs.push_back(d.name);
+      } else {
+        out.notes.push_back(d.kind + " '" + d.name + "'（第 " + std::to_string(d.lo) +
+                            " 行）已认形状但未产出代码：ABI 这一层还没接（后端用平台默认的 Win64）");
+      }
     }
   }
   out.ast.source_name = std::move(source_name);

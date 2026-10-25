@@ -229,7 +229,11 @@ void dump_node(std::string& out, const HNode& n, int depth) {
             break;
         case HKind::Call:
             out += " ty=" + ty_text(n.ty) + " callee=";
-            out += (n.callee.kind == HCalleeKind::Func ? "func:" : "builtin:");
+            switch (n.callee.kind) {
+                case HCalleeKind::Func: out += "func:"; break;
+                case HCalleeKind::Builtin: out += "builtin:"; break;
+                case HCalleeKind::Extern: out += "extern:"; break;
+            }
             out += std::to_string(n.callee.index);
             break;
         case HKind::Member:
@@ -438,9 +442,10 @@ bool check_refs_func(const HirFunc& fn, std::size_t nglobals, const std::string&
     return check_refs_node(fn.body, scopes, fn, nglobals, where + ".body", err);
 }
 
-/* ③ 被调者：实例下标进 `funcs`（闭包没收敛就会指到不存在的实例），内建编号非负。 */
-bool check_calls_node(const HNode& n, std::size_t nfuncs, const std::string& where,
-                      std::string* err) {
+/* ③ 被调者：实例下标进 `funcs`（闭包没收敛就会指到不存在的实例），内建编号非负，
+ * 外部符号下标进 `externs`。 */
+bool check_calls_node(const HNode& n, std::size_t nfuncs, std::size_t nexterns,
+                      const std::string& where, std::string* err) {
     if (n.kind == HKind::Call) {
         if (n.callee.kind == HCalleeKind::Func) {
             if (n.callee.index < 0 || static_cast<std::size_t>(n.callee.index) >= nfuncs) {
@@ -448,12 +453,18 @@ bool check_calls_node(const HNode& n, std::size_t nfuncs, const std::string& whe
                             "被调实例 funcs[" + std::to_string(n.callee.index) + "] 不在 funcs（" +
                                 std::to_string(nfuncs) + " 个）里 —— 实例闭包没收敛");
             }
+        } else if (n.callee.kind == HCalleeKind::Extern) {
+            if (n.callee.index < 0 || static_cast<std::size_t>(n.callee.index) >= nexterns) {
+                return fail(err, 3, where,
+                            "外部符号 externs[" + std::to_string(n.callee.index) +
+                                "] 不在 externs（" + std::to_string(nexterns) + " 个）里");
+            }
         } else if (n.callee.index < 0) {
             return fail(err, 3, where, "内建编号 " + std::to_string(n.callee.index) + " < 0");
         }
     }
     for (std::size_t i = 0; i < n.kids.size(); ++i) {
-        if (!check_calls_node(n.kids[i], nfuncs, kid_path(where, i), err)) return false;
+        if (!check_calls_node(n.kids[i], nfuncs, nexterns, kid_path(where, i), err)) return false;
     }
     return true;
 }
@@ -682,8 +693,15 @@ std::string dump(const Hir& hir) {
                quoted(hir.globals[i].name) + " ty=" + ty_text(hir.globals[i].ty) + "\n";
     }
     for (std::size_t i = 0; i < hir.externs.size(); ++i) {
-        out += indent_of(1) + "extern[" + std::to_string(i) + "] name=" +
-               quoted(hir.externs[i].name) + " ty=" + ty_text(hir.externs[i].ty) + "\n";
+        const HirExtern& ext = hir.externs[i];
+        out += indent_of(1) + "extern[" + std::to_string(i) + "] name=" + quoted(ext.name) +
+               " ty=" + ty_text(ext.ty) + " shape=" +
+               (ext.shape == HExternShape::OutParam64 ? "outparam64" : "direct") + " params=";
+        for (std::size_t j = 0; j < ext.params.size(); ++j) {
+            if (j != 0) out += ",";
+            out += ty_text(ext.params[j]);
+        }
+        out += "\n";
     }
     for (std::size_t i = 0; i < hir.consts.size(); ++i) {
         const HirConst& c = hir.consts[i];
@@ -734,7 +752,8 @@ bool check_invariants(const Hir& hir, std::string* err) {
     }
     /* ③ 被调实例已收敛 */
     for (const auto& fn : funcs) {
-        if (!check_calls_node(fn.second->body, hir.funcs.size(), fn.first + ".body", e)) {
+        if (!check_calls_node(fn.second->body, hir.funcs.size(), hir.externs.size(),
+                              fn.first + ".body", e)) {
             return false;
         }
     }

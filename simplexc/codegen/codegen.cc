@@ -844,6 +844,7 @@ V Codegen::e_cond(const sema::HNode& node) {
 
 V Codegen::e_call(const sema::HNode& node) {
     if (node.callee.kind == sema::HCalleeKind::Builtin) return call_builtin(node);
+    if (node.callee.kind == sema::HCalleeKind::Extern) return call_extern(node);
     return call_func(node);
 }
 
@@ -1219,6 +1220,48 @@ V Codegen::call_func(const sema::HNode& node) {
     LLVMValueRef ll = emit_call(fnref, vals);
     if (f.ret->kind == TyKind::Void) return V::instr(nullptr, ty_void());
     return V::instr(ll, f.ret);
+}
+
+V Codegen::call_extern(const sema::HNode& node) {
+    /* 产物里就是**对未定义符号的调用**：装配器给它发 12 字节代码桩（`movabs rax,imm64 ; jmp rax`），
+     * 名字进 `<blob>.stubs` sidecar 的 `symbol` 列。参考是 `movabs reg,imm64 ; call reg`，
+     * 差别只在中间那一跳落在谁的镜像里（`docs/facts/forwarding.md`）。*/
+    const int idx = node.callee.index;
+    if (idx < 0 || idx >= static_cast<int>(hir_.externs.size())) {
+        throw CompileError{Responsibility::OurBug, Stage::Codegen, Span{node.span.line},
+                           "（内部）外部符号下标越界"};
+    }
+    const sema::HirExtern& ext = hir_.externs[static_cast<std::size_t>(idx)];
+    if (ext.shape == sema::HExternShape::OutParam64) {
+        /* 宿主是「指针出参 → void」，源码写成「无参 → 返回值」：本地槽 + call + load。
+         * 参考那边同一件事在 DLL 里一个自带的小包装函数里做（报告 §2）。*/
+        LLVMValueRef slot = alloca_slot(make_int(64, false), "ft");
+        LLVMValueRef fn = get_extern(ext.name, ty_void(), {ty_ptr()});
+        emit_call(fn, {slot});
+        return load_addr(slot, ext.ty);
+    }
+    /* 先声明符号再求实参（与 `call_func` 同序）。实参类型已是宿主形参类型（sema 发了 `Cast`）。*/
+    LLVMValueRef fn = get_extern(ext.name, ext.ty, ext.params);
+    std::vector<LLVMValueRef> vals;
+    vals.reserve(node.kids.size());
+    for (std::size_t i = 0; i < node.kids.size(); ++i) {
+        vals.push_back(extern_arg(e(node.kids[i]), ext.params[i]));
+    }
+    LLVMValueRef ll = emit_call(fn, vals);
+    if (ext.ty->kind == TyKind::Void) return V::instr(nullptr, ty_void());
+    return V::instr(ll, ext.ty);
+}
+
+/* 我们的值一律是 i64 位模式（窄整数靠掩码、U-L7），而宿主的形参是真窄宽：
+ *   · 窄整数（`DWORD`/`UINT`）→ `trunc`（与 `body_sleep` 里那道 trunc 同一口径）；
+ *   · `Ptr` → `inttoptr`（内部把地址当 i64 传，`get_extern` 的形参是真指针）。*/
+LLVMValueRef Codegen::extern_arg(const V& v, const TyRef& param_ty) {
+    LLVMValueRef ll = llv(v);
+    if (param_ty->kind == TyKind::Ptr) return LLVMBuildIntToPtr(cur_fn().bd, ll, ptr_, "ap");
+    if (param_ty->kind == TyKind::Int && param_ty->bits < 64) {
+        return LLVMBuildTrunc(cur_fn().bd, ll, storage_ll(*param_ty), "m");
+    }
+    return ll;
 }
 
 V Codegen::call_builtin(const sema::HNode& node) {

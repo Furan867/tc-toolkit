@@ -23,6 +23,7 @@ inline sema::ModuleSource module_source_of(const lower::ModuleAst& ast) {
     out.label = ast.label;
     out.defs = ast.defs;
     out.top_vars = ast.top_vars;
+    out.extern_libs = ast.extern_libs;
     out.source_name = ast.source_name;
     for (const lower::EnumDecl& e : ast.enums) {
         out.enums.push_back(sema::EnumSource{e.name, e.members});

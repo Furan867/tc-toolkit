@@ -54,6 +54,10 @@ REF_DIR = os.path.join(SIMPLEXC, "corpus", "ref")
 DEFAULT_OUT_DIR = os.path.join(ROOT, "work", "tmp", "m5batch")
 MAX_JOBS = 12                     # difftrace README 的实测：16 路只比 12 路快 7%，多占 1.75 GB
 
+# M5 stdlib：拼在每份语料之前一起编译的固定前缀（从 compile_real.dll 原样提取，见
+# recompile_corpus.py 的 extract_stdlib）。只有 `--with-prefix` 时才读。
+PREFIX_PATH = os.path.join(SIMPLEXC, "corpus", "stdlib_prefix.si")
+
 # `run` 一次要装配 291 MB guest 映射 + 灌 142 MB `RESET_DATA`，100 tick 的语料约 0.5 s；
 # 跑到这个数就是卡住了（不是慢），按 host_fail 记，别把整轮拖死。
 RUN_TIMEOUT = 900.0
@@ -63,6 +67,9 @@ STATUS_EQUAL = "equal"
 STATUS_DIFF = "diff"
 STATUS_CLI_FAIL = "cli_fail"
 STATUS_HOST_FAIL = "host_fail"
+# `--with-prefix` 专用：前缀拼上去了、装配也过了。这种行没有差分字段（加前缀后的产物没有参考
+# 产物可对），所以不能归到 `equal` —— 那会把「只装出来了」冒充成「终态等价」。
+STATUS_PREFIX_OK = "prefix_ok"
 
 # 地址段（difftrace 的 `driver.cc` kStackBase/kStackSize 与 `image.hh` kCodeBase）：
 # 栈区两边栈帧布局本来就不一样，代码区镜像里各产物自己的全局也各有各的 —— 差异落在这些段里
@@ -310,6 +317,21 @@ def run_one(task):
         return row
 
     # 1) 装配
+    if task["with_prefix"]:
+        # 加前缀后的产物没有参考产物（corpus/ref/ 那份是**不加前缀**编出来的），所以这个模式
+        # 只做装配这一步，不比差分。拼接结果落地在 blob 旁边，好复现也好清理。
+        joined = blob + ".joined.si"
+        try:
+            with open(PREFIX_PATH, encoding="utf-8") as f:
+                prefix = f.read()
+            with open(src, encoding="utf-8") as f:
+                body = f.read()
+            with open(joined, "w", encoding="utf-8", newline="\n") as f:
+                f.write(prefix + "\n" + body)
+        except OSError as e:
+            return done(STATUS_CLI_FAIL, err_kind="prefix_join",
+                        err_first_line=one_line(f"拼前缀失败：{e}"))
+        src = joined
     rc, cli_ms, out, err, timed_out = run_cli(src, blob, task["cli_timeout"])
     row.update({"cli_rc": "" if rc is None else rc, "cli_ms": cli_ms})
     if timed_out:
@@ -326,6 +348,8 @@ def run_one(task):
         return done(STATUS_CLI_FAIL, err_kind="entry_missing",
                     err_first_line=one_line(f"读不了 {rel(blob)}.entry：{e}"))
 
+    if task["with_prefix"]:
+        return done(STATUS_PREFIX_OK)
     # 2/3) 两侧各跑一遍
     for side, bin_path, seq in (("run_ref", ref, seq_ref), ("run_ours", blob, seq_ours)):
         if os.path.exists(seq):
@@ -427,7 +451,8 @@ def read_tsv(path):
 
 
 def summarize(rows, total, wall_seconds, args):
-    counts = dict.fromkeys((STATUS_EQUAL, STATUS_DIFF, STATUS_CLI_FAIL, STATUS_HOST_FAIL), 0)
+    counts = dict.fromkeys((STATUS_EQUAL, STATUS_DIFF, STATUS_CLI_FAIL, STATUS_HOST_FAIL,
+                            STATUS_PREFIX_OK), 0)
     for row in rows:
         status = str(row.get("status") or "")
         if status in counts:
@@ -479,6 +504,8 @@ def write_report(rows, summary, path, args, total, order):
     w(f"| diff（终态有差异） | {c[STATUS_DIFF]} |")
     w(f"| cli_fail（装不出来） | {c[STATUS_CLI_FAIL]} |")
     w(f"| host_fail（difftrace 报错） | {c[STATUS_HOST_FAIL]} |")
+    if c[STATUS_PREFIX_OK]:
+        w(f"| prefix_ok（前缀拼上去了且装配通过） | {c[STATUS_PREFIX_OK]} |")
     w(f"| 总墙钟 | {summary['wall_seconds']} s（{args.jobs} 路） |")
     w(f"| 每份耗时 | 中位 {summary['seconds_median']} s / 最短 {summary['seconds_min']} s / "
       f"最长 {summary['seconds_max']} s |")
@@ -583,6 +610,9 @@ def main(argv=None):
     ap.add_argument("--report", default=None, help="默认 <out-dir>/report.md")
     ap.add_argument("--cli-timeout", type=float, default=120.0, help="单份装配的超时（秒），超了记 cli_fail(timeout)")
     ap.add_argument("--resume", action="store_true", help="从已有 TSV 里跳过已完成的 id")
+    ap.add_argument("--with-prefix", action="store_true",
+                    help="把 corpus/stdlib_prefix.si 拼在每份语料前再编（M5 stdlib）；"
+                         "这个模式只做装配，不比差分（加前缀后的产物没有参考产物）")
     args = ap.parse_args(argv)
 
     if args.jobs < 1 or args.jobs > MAX_JOBS:
@@ -592,7 +622,8 @@ def main(argv=None):
         args.tsv = os.path.join(args.out_dir, "batch.tsv")
     if args.report is None:
         args.report = os.path.join(args.out_dir, "report.md")
-    for exe in (CLI, DIFFTRACE):
+    need = (CLI,) if args.with_prefix else (CLI, DIFFTRACE)
+    for exe in need:
         if not os.path.exists(exe):
             hint = "python simplexc/tools/build.py simplexc_cli" if exe == CLI else \
                    "python simplexc/tools/build.py difftrace"
@@ -627,7 +658,8 @@ def main(argv=None):
 
     tasks = [{"id": t["id"], "src": t["src"], "ref": t["ref"],
               "blob": os.path.join(blob_dir, t["id"] + ".bin"), "seq_dir": seq_dir,
-              "ticks": args.ticks, "seed": args.seed, "cli_timeout": args.cli_timeout}
+              "ticks": args.ticks, "seed": args.seed, "cli_timeout": args.cli_timeout,
+              "with_prefix": args.with_prefix}
              for t in todo]
 
     wall0 = time.perf_counter()

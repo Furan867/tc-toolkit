@@ -9,8 +9,12 @@
  *
  * 规则（§4）
  * ---------
- *   1. 只接受 `IMAGE_REL_AMD64_REL32` 及其 `_1.._5` 变体；任何其它重定位 → `UnsupportedReloc`
- *      （`.pdata/.xdata` 用的是 `ADDR32NB`，靠**整节丢弃**躲开）。
+ *   1. 接受 `IMAGE_REL_AMD64_REL32` 及其 `_1.._5` 变体，以及 `ADDR64`(0x01)；任何其它重定位 →
+ *      `UnsupportedReloc`（`.pdata/.xdata` 用的是 `ADDR32NB`，靠**整节丢弃**躲开）。
+ *      `ADDR64` 装出来的是 `S + A`，即**相对产物起点**的地址：142 号关卡踩到的就是它
+ *      （LLVM 把「各 case 各存一个字符串指针」降成 `[3 x ptr]`，值指向 `.rdata` 里的本地常量）。
+ *      位置无关要求终端在运行期给它加基址，而产物内部还没有这个机制 → 含 `ADDR64` 的产物
+ *      **装得出但跑不了**（实测见 `work/tmp/coff/notes.md`）。
  *   2. 整节丢弃 `.pdata` / `.xdata` / `.debug*` / `.drectve`。
  *   3. 未定义符号 → 在 `.text` 尾部造 `movabs rax, imm64 ; jmp rax` 桩（12 字节），地址由 `ExternResolver` 给；
  *      名字以 `__imp_` 开头的（mingw 对 `__declspec(dllimport)` 的写法）改造 **8 字节数据槽**，
@@ -53,7 +57,7 @@ enum class AsmStatus {
     Ok,
     BadObject,             /* COFF 解析不了 */
     UndefinedSymbol,       /* 外部符号解析失败 */
-    UnsupportedReloc,      /* 只有 REL32 家族被接受 */
+    UnsupportedReloc,      /* 只有 REL32 家族与 ADDR64 被接受 */
     TooLarge,              /* out_len 超过 AsmOptions::max_blob */
 };
 

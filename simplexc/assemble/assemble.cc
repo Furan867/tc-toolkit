@@ -21,7 +21,7 @@ namespace {
 
 enum Rel : uint16_t {
     REL_ABSOLUTE = 0x00,
-    REL_ADDR64 = 0x01,
+    REL_ADDR64 = 0x01,     /* 值 = S + A（64 位绝对值，**没有** PC 相对项）*/
     REL_ADDR32 = 0x02,
     REL_ADDR32NB = 0x03,
     REL_REL32 = 0x04,      /* 到 REL32_5 = 0x09 */
@@ -60,6 +60,8 @@ uint32_t r16(const uint8_t* p) { return p[0] | (uint32_t(p[1]) << 8); }
 uint32_t r32(const uint8_t* p) {
     return p[0] | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 }
+
+uint64_t r64(const uint8_t* p) { return uint64_t(r32(p)) | (uint64_t(r32(p + 4)) << 32); }
 
 uint32_t align_from_chars(uint32_t chars) {
     /* IMAGE_SCN_ALIGN_* 在 bits 20..23：1→1, 2→2, 3→4, 4→8, 5→16, 6→32, ..., 14→8192 */
@@ -371,7 +373,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
             if (base == UINT64_MAX) continue;                 /* 丢弃的节连同它的重定位一起丢 */
             for (const Reloc& r : sec.relocs) {
                 res.reloc_count++;
-                if (r.type < REL_REL32 || r.type > REL_REL32_5) {
+                if (r.type != REL_ADDR64 && (r.type < REL_REL32 || r.type > REL_REL32_5)) {
                     char buf[128];
                     std::snprintf(buf, sizeof buf, "%s+0x%X 的重定位类型 0x%X 不支持",
                                   sec.name.c_str(), r.offset, unsigned(r.type));
@@ -403,10 +405,22 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
                     }
                 }
                 const uint64_t site = base + r.offset;
-                if (site + 4 > payload.size()) {
+                if (site + (r.type == REL_ADDR64 ? 8 : 4) > payload.size()) {
                     res.status = AsmStatus::BadObject;
                     res.detail = "重定位落在节外";
                     return res;
+                }
+                if (r.type == REL_ADDR64) {
+                    /* 兜底分支：参考产物里没有 ADDR64，正常路径是「switch 查表走**相对表**」——
+                       `@switch.table.rel = [N x i32]` + `llvm.load.relative` 降成
+                       `lea table(%rip) ; movslq (%rt,%ri,4) ; add %rt`，表在 `.text` 内、零重定位。
+                       真出了 ADDR64 就说明有指针常量被摊成了绝对表（LLVM 用「节符号 + 偏置」的
+                       8 字节写法，如 `@.rdata + 0x38`）：这里补进去的只是 **blob 内偏移**，运行期
+                       没有基址可加，产物装得出但跑不了（142 踩过，见 `work/tmp/rel/notes.md`）。
+                       留着它只为「装得出来、偏移填对」，好让症状落到运行期而不是卡在装配。 */
+                    const uint64_t value = target + r64(payload.data() + site);
+                    write_le64(payload.data() + site, value);
+                    continue;
                 }
                 /* COFF 的 addend **是有符号的**：GCC 会用 -1 表示「字面量地址减一」的偏置
                    （它的复制循环再从 +1 读回），当无符号算会直接溢出 ±2GB。 */

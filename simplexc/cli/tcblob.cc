@@ -11,9 +11,10 @@
  *             所以会多读 8 字节 —— blob 的缓冲必须带那 8 字节余量）→ `jmp dest+entry`，
  *             在独立线程里跑（程序根末尾是 thread_exit，会结束该线程）。
  *
- * 外部符号解析：`kernel32.dll` 的导出（`ExitThread` 之类），失败即报错，不静默。
+ * 外部符号解析：按名字在宿主已有的模块里找（顺序见 `win32_export.hh`），失败即报错，不静默。
  */
 #include "../assemble/assemble.hh"
+#include "win32_export.hh"
 
 #include <windows.h>
 
@@ -40,27 +41,14 @@ extern "C" void tc_probe_ok(uint64_t v) {
     g_probe.last = v;
 }
 
-class Kernel32Resolver : public tc::ExternResolver {
+class Win32Resolver : public tc::ExternResolver {
 public:
     bool resolve(std::string_view symbol, uint64_t& addr) override {
-        std::string name(symbol);
-        /* mingw 对 dllimport 的写法是 `__imp_ExitThread` —— 那是指向 IAT 槽的符号，
-           真正要查的是去掉前缀后的 `ExitThread`。 */
-        const std::string imp = "__imp_";
-        if (name.rfind(imp, 0) == 0) name = name.substr(imp.size());
-        if (name == "tc_probe_ok") {          /* 自测探针：不经 kernel32 */
+        if (simplexc_cli::strip_import_prefix(symbol) == "tc_probe_ok") {   /* 自测探针：不经任何模块 */
             addr = reinterpret_cast<uint64_t>(&tc_probe_ok);
             return true;
         }
-        HMODULE k = GetModuleHandleA("kernel32.dll");
-        if (!k) return false;
-        FARPROC p = GetProcAddress(k, name.c_str());
-        if (!p) {
-            std::fprintf(stderr, "外 symbol 解析失败：kernel32!%s\n", name.c_str());
-            return false;
-        }
-        addr = reinterpret_cast<uint64_t>(p);
-        return true;
+        return simplexc_cli::resolve_win32_export(symbol, addr);
     }
 };
 
@@ -166,7 +154,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    Kernel32Resolver resolver;
+    Win32Resolver resolver;
     tc::AsmOptions opt;
     opt.verbose = verbose;
     tc::AsmResult r = tc::assemble(objs, entry, resolver, opt);

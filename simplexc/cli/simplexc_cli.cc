@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "cli/win32_export.hh"
 #include "codegen/codegen.hh"
 #include "codegen/module_build.hh"
 #include "codegen/module_source.hh"
@@ -39,23 +40,12 @@ namespace sm = simplexc::sema;
 namespace {
 
 // ---------------------------------------------------------------- 外部符号
-/* 与 `cli/tcblob.cc` 的 `Kernel32Resolver` 同形（那边多了个自测探针分支，这里不需要）。
-   `__imp_X` 是 mingw 对 dllimport 的写法：装配器把它造成 8 字节数据槽，要查的仍是 `X`。 */
-class Kernel32Resolver : public tc::ExternResolver {
+/* 与 `cli/tcblob.cc` 同形（那边多了个自测探针分支，这里不需要）：查名字的细节在
+   `cli/win32_export.hh`，`__imp_X` 的剥离也在那里。 */
+class Win32Resolver : public tc::ExternResolver {
  public:
   bool resolve(std::string_view symbol, uint64_t& addr) override {
-    std::string name(symbol);
-    const std::string imp = "__imp_";
-    if (name.rfind(imp, 0) == 0) name = name.substr(imp.size());
-    HMODULE k = GetModuleHandleA("kernel32.dll");
-    if (!k) return false;
-    FARPROC p = GetProcAddress(k, name.c_str());
-    if (!p) {
-      std::fprintf(stderr, "外部符号解析失败：kernel32!%s\n", name.c_str());
-      return false;
-    }
-    addr = reinterpret_cast<uint64_t>(p);
-    return true;
+    return simplexc_cli::resolve_win32_export(symbol, addr);
   }
 };
 
@@ -237,7 +227,7 @@ int main(int argc, char** argv) {
       }
       objs.push_back(std::move(of));
     }
-    Kernel32Resolver resolver;
+    Win32Resolver resolver;
     tc::AsmOptions opt;
     opt.verbose = verbose;
     tc::AsmResult r = tc::assemble(objs, "__tc_entry", resolver, opt);

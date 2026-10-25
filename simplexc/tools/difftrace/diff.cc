@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -14,6 +15,8 @@ constexpr char kMagic[8] = {'d', 'i', 'f', 'f', 't', 'r', '0', '1'};
 constexpr uint32_t kVersion = 1;
 constexpr size_t kHeaderBytes = 8 + 4 + 8;
 constexpr size_t kRecordBytes = 8 + 8 + 4 + 8;
+// 落盘缓冲一块多少条：65536 × 28 B ≈ 1.8 MB，小到不拖内存，大到不会把 write 叫成万次。
+constexpr size_t kSaveChunkRecords = 1u << 16;
 
 void put_u32(std::string& out, uint32_t v) {
     for (int shift = 0; shift < 32; shift += 8) out.push_back(static_cast<char>((v >> shift) & 0xff));
@@ -23,24 +26,24 @@ void put_u64(std::string& out, uint64_t v) {
     for (int shift = 0; shift < 64; shift += 8) out.push_back(static_cast<char>((v >> shift) & 0xff));
 }
 
+// 小端解码走 memcpy：一次一个字节地拼会在 77 M 条的序列上把时间全花在移位上
+// （10000 tick 的 088 是 2.17 GB），而 x86-64 本身就是小端，memcpy 出来的就是那个值。
+uint64_t load_le64(const char* p) {
+    uint64_t v = 0;
+    std::memcpy(&v, p, sizeof(v));
+    return v;
+}
+
 uint32_t read_u32(const std::string& in, size_t& off, const std::string& path) {
-    uint32_t v = 0;
     if (in.size() < off + 4) throw std::runtime_error("difftrace: 序列文件被截断: " + path);
-    for (int shift = 0; shift < 32; shift += 8) {
-        v |= static_cast<uint32_t>(static_cast<unsigned char>(in[off + static_cast<size_t>(shift) / 8]))
-             << shift;
-    }
+    const uint32_t v = static_cast<uint32_t>(load_le64(in.data() + off));
     off += 4;
     return v;
 }
 
 uint64_t read_u64(const std::string& in, size_t& off, const std::string& path) {
-    uint64_t v = 0;
     if (in.size() < off + 8) throw std::runtime_error("difftrace: 序列文件被截断: " + path);
-    for (int shift = 0; shift < 64; shift += 8) {
-        v |= static_cast<uint64_t>(static_cast<unsigned char>(in[off + static_cast<size_t>(shift) / 8]))
-             << shift;
-    }
+    const uint64_t v = load_le64(in.data() + off);
     off += 8;
     return v;
 }
@@ -84,20 +87,30 @@ std::optional<Divergence> first_divergence(const std::vector<Store>& a, const st
 }
 
 void save(const std::string& path, const std::vector<Store>& stores) {
-    std::string bytes;
-    bytes.reserve(kHeaderBytes + stores.size() * kRecordBytes);
-    bytes.append(kMagic, sizeof(kMagic));
-    put_u32(bytes, kVersion);
-    put_u64(bytes, stores.size());
-    for (const Store& s : stores) {
-        put_u64(bytes, s.pc);
-        put_u64(bytes, s.addr);
-        put_u32(bytes, s.size);
-        put_u64(bytes, s.value);
-    }
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("difftrace: 打不开序列文件写: " + path);
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    // 头部单独写，记录按块写。梯度上限不是为了好看：整份先攒进一个 `std::string` 再一次性
+    // `write` 在超过 2 GiB 时不返回 —— 实测 10000 tick 的 088（2.17 GB）文件已经完整落盘，
+    // 进程却在那个 write 里烧了 15 分钟 CPU 再也要不回控制权，batch 只能记成超时。
+    std::string buf;
+    buf.reserve(kHeaderBytes + kSaveChunkRecords * kRecordBytes);
+    buf.append(kMagic, sizeof(kMagic));
+    put_u32(buf, kVersion);
+    put_u64(buf, stores.size());
+    out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    for (size_t begin = 0; begin < stores.size(); begin += kSaveChunkRecords) {
+        const size_t stop = std::min(begin + kSaveChunkRecords, stores.size());
+        buf.clear();
+        for (size_t i = begin; i < stop; ++i) {
+            const Store& s = stores[i];
+            put_u64(buf, s.pc);
+            put_u64(buf, s.addr);
+            put_u32(buf, s.size);
+            put_u64(buf, s.value);
+        }
+        out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+        if (!out) throw std::runtime_error("difftrace: 写序列文件失败: " + path);
+    }
     out.close();
     if (!out) throw std::runtime_error("difftrace: 写序列文件失败: " + path);
 }
@@ -208,6 +221,47 @@ size_t memory_diff(const Memory& a, const Memory& b, size_t max, std::vector<Byt
         ++count;
     }
     return count;
+}
+
+SegmentTally tally_by_segment(const Memory& a, const Memory& b, const SegBounds& bounds,
+                              size_t top_prefixes) {
+    SegmentTally tally;
+    std::map<uint64_t, size_t> prefixes;
+    // 键升序合并、缺的键按 0 算 —— 与 `memory_diff` 同口径（这里要的是分账，不是差异清单）。
+    auto ia = a.begin();
+    auto ib = b.begin();
+    while (ia != a.end() || ib != b.end()) {
+        uint64_t addr = 0;
+        std::optional<uint8_t> left;
+        std::optional<uint8_t> right;
+        if (ia != a.end() && ib != b.end() && ia->first == ib->first) {
+            addr = ia->first;
+            left = ia->second;
+            right = ib->second;
+            ++ia;
+            ++ib;
+        } else if (ib == b.end() || (ia != a.end() && ia->first < ib->first)) {
+            addr = ia->first;
+            left = ia->second;
+            ++ia;
+        } else {
+            addr = ib->first;
+            right = ib->second;
+            ++ib;
+        }
+        if (left.value_or(0) == right.value_or(0)) continue;
+        if (!tally.first_addr) tally.first_addr = addr;
+        if (addr >= bounds.stack_lo && addr < bounds.stack_hi) {
+            ++tally.stack;
+        } else if (addr >= bounds.code_lo && addr < bounds.code_hi) {
+            ++tally.code;
+        } else {
+            ++tally.game;
+            ++prefixes[addr >> 32];
+        }
+    }
+    tally.game_prefixes = ranked(prefixes, top_prefixes);
+    return tally;
 }
 
 std::vector<TickSpan> split_ticks(const std::vector<Store>& seq, uint64_t tick_addr) {

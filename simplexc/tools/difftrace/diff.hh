@@ -36,6 +36,8 @@ std::optional<Divergence> first_divergence(const std::vector<Store>& a, const st
 
 // 落盘格式：magic `"difftr01"`(8) + u32 版本(1) + u64 条数 + 每条 28 字节（pc/addr/size/value），
 // 全部小端。逐字段编码而不是整块 memcpy：结构体有 4 字节填充，字节表示不能跟着编译器变。
+// 分块带缓冲写：整份序列先攒进一个 `std::string` 再一次性 `write` 会在超过 2 GiB 时写成不返回
+// （实测 10000 tick 的 088：文件 2.17 GB 已完整落盘，进程却再也要不回控制权），峰值内存也翻倍。
 void save(const std::string& path, const std::vector<Store>& stores);
 
 // magic / 版本不对、被截断、尾部多余、`size` 不是 1、2、4、8、16 → 抛 std::runtime_error。
@@ -72,6 +74,34 @@ using ByteDiff = std::pair<uint64_t, std::pair<std::optional<uint8_t>, std::opti
 // 两份内存逐字节比：缺的键按 0 算（一边没写过 vs 另一边写了 0 不是差异）。差异总数是返回值，
 // 写进 `out` 的条数受 `max` 限制（`max == 0` = 不截断）。
 size_t memory_diff(const Memory& a, const Memory& b, size_t max, std::vector<ByteDiff>& out);
+
+// ---- 差异按地址段分账 --------------------------------------------------------
+//
+// 诊断用，**不进判据**：判据只看差异总数。段界由调用方给 —— 两边栈帧布局本来就不一样，代码区里
+// 各产物自己的镜像也各有各的，差异落在这两段里与落在游戏内存里含义完全不同。
+struct SegBounds {
+    uint64_t stack_lo = 0;
+    uint64_t stack_hi = 0;
+    uint64_t code_lo = 0;
+    uint64_t code_hi = 0;
+};
+
+struct SegmentTally {
+    size_t stack = 0;
+    size_t code = 0;
+    size_t game = 0;  // 其余（游戏状态 + 参考侧分配器向宿主拿的页 + 宿主帧）
+    std::optional<uint64_t> first_addr;  // 最小的差异地址（升序扫到的第一个）
+    // `game` 段的 `addr >> 32` 计数：计数降序、同计数按 key 升序（与 `histogram_*` 同一条确定性规则）。
+    // 带它出去是因为「game N 字节」会被读成「游戏状态不等」，而它还包括 0x4009…/0x7ff9… 那些页。
+    std::vector<std::pair<uint64_t, size_t>> game_prefixes;
+
+    size_t total() const { return stack + code + game; }
+};
+
+// 与 `memory_diff` 同口径（缺的键按 0 算）把差异按段计数，不产出差异清单。
+// `top_prefixes == 0` 表示全部。
+SegmentTally tally_by_segment(const Memory& a, const Memory& b, const SegBounds& bounds,
+                              size_t top_prefixes = 6);
 
 // 一个 tick 占写的下标区间 `[begin, end)`。
 struct TickSpan {

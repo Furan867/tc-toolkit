@@ -23,7 +23,11 @@
 
 `first_diff_tick` 恒为 `n/a`：逐 tick 要 `--tick-mark`（每 tick 写一次的地址，98 份各不相同），
 按上面的口径不传，difftrace 只报终态。差异的定位信息仍给：`first_diff_addr` + 按地址段分的字节数
-（`diff_stack` / `diff_code` / `diff_game`，段界见 `classify_addr`）。
+（`diff_stack` / `diff_code` / `diff_game`；段界与 `game` 段的地址前缀统计都在
+`difftrace diff --classify` 里，只那一处定义）。
+
+判据、整份总数、按段分账都来自**同一次** `difftrace diff --classify`（一遍读盘）。三趟分开时
+10000 tick 下光读两条序列就要 3 × 5 s（001 的参考序列 2.0 GB）。
 
 并发：`--jobs` 走 `ProcessPoolExecutor`，每份一个子进程；子进程里顺序起三个 exe（`uc_engine` 每进程一个、
 无共享状态）。main 进程只汇总与落盘，**每完成一份就重写 TSV**（中断可续跑，`--resume` 跳过已完成的）。
@@ -40,7 +44,6 @@ import argparse
 import contextlib
 import json
 import os
-import struct
 import subprocess
 import sys
 import time
@@ -76,23 +79,20 @@ STATUS_HOST_FAIL = "host_fail"
 # `--with-prefix` 时只有一种失败跟它有关：拼前缀本身写不出去（记 cli_fail + err_kind=prefix_join）。
 STATUS_PREFIX_OK = "prefix_ok"
 
-# 地址段（difftrace 的 `driver.cc` kStackBase/kStackSize 与 `image.hh` kCodeBase）：
-# 栈区两边栈帧布局本来就不一样，代码区镜像里各产物自己的全局也各有各的 —— 差异落在这些段里
-# 与落在游戏内存里，含义完全不同，所以按段分开数（不是判据，判据是 `diff_bytes_raw`）。
-# 栈 = kStackBase + kStackSize（8 MB）；代码 = kCodeBase 起 16 MB（产物镜像 ≪ 16 MB，
-# 这条带只用来把「写进自己镜像的字节」跟游戏内存分开）。
-STACK_LO, STACK_HI = 0x4000_0000, 0x4080_0000
-CODE_LO, CODE_HI = 0x1000_0000, 0x1100_0000
+# 地址段的段界不在本脚本里定义 —— 它在 `difftrace/main.cc` 的 `kSegBounds`（栈 = driver.cc 的
+# kStackBase/kStackSize，代码 = image.hh 的 kCodeBase 起 16 MB）。本脚本只拿 `--classify` 的
+# 三个数；段界抄两份就会出现「同一份语料两个分类」。
 
 TSV_COLUMNS = ["id", "status", "ticks", "seed", "cli_rc", "cli_ms", "blob_bytes", "entry",
                "stores_ref", "stores_ours", "diff_bytes_raw", "diff_stack", "diff_code",
                "diff_game", "diff_game_prefixes", "first_diff_addr", "first_diff_tick",
-               "src_kept_a", "src_kept_b", "err_kind", "err_first_line", "seconds"]
+               "src_kept_a", "src_kept_b", "err_kind", "err_first_line", "seconds",
+               "run_ms", "diff_ms", "diff_load_ms", "diff_fold_ms"]
 
 INT_COLUMNS = ("cli_rc", "blob_bytes", "ticks", "stores_ref", "stores_ours",
                "diff_bytes_raw", "diff_stack", "diff_code", "diff_game", "src_kept_a", "src_kept_b")
 # `cli_ms` 写的时候就是四舍五入到 0.1 ms 的浮点（容不下就丢信息，而 int 会把整张表读崩）。
-FLOAT_COLUMNS = ("cli_ms", "seconds")
+FLOAT_COLUMNS = ("cli_ms", "seconds", "run_ms", "diff_ms", "diff_load_ms", "diff_fold_ms")
 
 Row = dict[str, object]
 
@@ -171,17 +171,27 @@ def run_diff(bin_path, src, ticks, seed, save):
     return payload, error
 
 
-def diff_states(path_a, path_b, src):
-    """`difftrace diff --state`。返回 (equal, payload, error_line)；src 为空就不做 regions 过滤。"""
-    cmd = [DIFFTRACE, "diff", "--state", path_a, path_b, "--json"]
+def format_prefixes(rows):
+    """`[{"prefix":562,"count":88}, …]` → `0x232:88 0x4009:34`（TSV 里的样子，与旧版一致）。"""
+    return " ".join(f"0x{int(p['prefix']):X}:{int(p['count'])}" for p in rows)
+
+
+def diff_report(path_a, path_b, src):
+    """`difftrace diff --state --classify`：一次调用、一遍读盘，拿全部三组数。
+
+    三组：判据（带 `--src` 的 `equal` / `diff_bytes`）、整份总数（不过滤的 `raw_diff_bytes`）、
+    按地址段分账（`raw_stack` / `raw_code` / `raw_game` + game 段的地址前缀）。以前是三趟：
+    判据一趟、总数一趟、Python 里再把两条序列读一遍折一遍做分类 —— 10000 tick 下 001 的两条
+    序列是 2.0 GB / 230 MB，每趟都要重新读盘，光读盘就约 5 s。
+    """
+    cmd = [DIFFTRACE, "diff", "--state", path_a, path_b, "--json", "--classify"]
     if src:
         cmd += ["--src", src]
     payload, error = call_json(cmd, DIFF_TIMEOUT)
     if payload is None:
-        return (None, None, error)
+        return (None, error)
     # diff 的退出码 1 = 「算完了，结论是不等」，不是错误 —— 只有 `ok:false` 才是（`call_json` 已判）。
-    # 不能拿 `payload is None` 概掉错误：异常路径的 JSON 也是完整对象，只是 `ok:false` + `error`。
-    return (bool(payload.get("equal")), payload, error)
+    return (payload, error)
 
 
 def call_json(cmd, timeout):
@@ -215,84 +225,25 @@ def call_json(cmd, timeout):
 
 # ---- 终态差异的诊断（只分地址段，不改判据） ------------------------------------
 
-SEQ_MAGIC = b"difftr01"
-SEQ_VERSION = 1
-SEQ_HEADER = 8 + 4 + 8
-SEQ_RECORD = 8 + 8 + 4 + 8
+# ---- 终态差异的诊断（只分地址段，不改判据） ------------------------------------
+# 分账全在 `difftrace diff --classify` 里算（段界与游戏前缀的排序规则也只有那一处定义）：
+# 一次调用、读一次盘就同时给判据、整份总数与三段字节数。
 
+def classify_mismatch(row):
+    """防线：按段分类的合计必须等于整份差异总数。
 
-def load_stores(path):
-    """读 difftrace 的序列文件（格式见 `difftrace/diff.cc` 的 `save`）。→ [(addr, size, value)]。"""
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        raise OSError(f"读不了序列 {rel(path)}：{e}") from e
-    if len(data) < SEQ_HEADER or data[:8] != SEQ_MAGIC:
-        raise OSError(f"{rel(path)} 不是 difftrace 序列文件（magic 不符）")
-    version, count = struct.unpack_from("<IQ", data, 8)
-    if version != SEQ_VERSION:
-        raise OSError(f"{rel(path)} 的序列版本是 {version}，本脚本只认 {SEQ_VERSION}")
-    if len(data) - SEQ_HEADER != count * SEQ_RECORD:
-        raise OSError(f"{rel(path)} 的序列长度对不上：头里 {count} 条，"
-                      f"实际 {(len(data) - SEQ_HEADER) / SEQ_RECORD:.0f} 条")
-    off = SEQ_HEADER
-    stores = []
-    for _ in range(count):
-        _pc, addr, size = struct.unpack_from("<QQI", data, off)
-        off += 20
-        (value,) = struct.unpack_from("<Q", data, off)
-        off += 8
-        stores.append((addr, size, value))
-    return stores
-
-
-def fold_bytes(stores):
-    """折叠成终态的 `{addr: byte}`：后写覆盖先写，一条 `size` 字节的 store 摊成小端字节。
-
-    与 `difftrace/diff.cc` 的 `tc::fold` 同语义；这里只用它把差异按地址段分类，
-    verdict 一律取 difftrace 自己算的 `diff_bytes_raw`（两边总数必须相等，见 `classify_rows`）。
+    两边现在都来自 difftrace 同一次折叠 —— 它不再能发现「两边折叠语义不一致」，但仍然能发现
+    分类本身漏账（漏一段、前缀统计错）。不回退成 equals：不对就是不对。
     """
-    mem: dict[int, int] = {}
-    for addr, size, value in stores:
-        for i in range(size):
-            mem[addr + i] = (value >> (8 * i)) & 0xFF
-    return mem
-
-
-def classify_addr(addr):
-    if STACK_LO <= addr < STACK_HI:
-        return "stack"
-    if CODE_LO <= addr < CODE_HI:
-        return "code"
-    return "game"
-
-
-def classify_diff(seq_ref, seq_ours, top=6):
-    """→ (("stack","code","game") 三个字节数, 第一个不同地址, 总差异字节数, game 类的地址前缀)。
-
-    `game` = 其余 —— 里面既有 `#SIMULATION_STATE` 那一段（0x2328…），也有参考侧分配器向宿主
-    `VirtualAlloc` 拿的页（0x4009…/0x400b…，旧口径叫 extern_only）与宿主帧（0x7ff9…）。
-    所以额外把 game 类的 `addr >> 32` 前几名一并带出去：不然「game N 字节」会被读成「游戏状态不等」。
-    """
-    a = fold_bytes(load_stores(seq_ref))
-    b = fold_bytes(load_stores(seq_ours))
-    counts = {"stack": 0, "code": 0, "game": 0}
-    prefixes: dict[int, int] = {}
-    first = None
-    total = 0
-    for addr in sorted(set(a) | set(b)):          # 缺失当 0，与 memory_diff 同口径
-        if a.get(addr, 0) == b.get(addr, 0):
-            continue
-        total += 1
-        if first is None:
-            first = addr
-        cls = classify_addr(addr)
-        counts[cls] += 1
-        if cls == "game":
-            prefixes[addr >> 32] = prefixes.get(addr >> 32, 0) + 1
-    ranked = sorted(prefixes.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
-    return counts, first, total, ranked
+    parts = (row.get("diff_stack"), row.get("diff_code"), row.get("diff_game"))
+    raw = row.get("diff_bytes_raw")
+    if raw == "" or any(p == "" for p in parts):
+        return None
+    total = sum(int(p) for p in parts)
+    if total == int(raw):
+        return None
+    return (f"按段分类合计 {total} B ≠ difftrace diff_bytes "
+            f"{raw} B —— 三段之和必须等于整份差异")
 
 
 # ---- 一份语料 ----------------------------------------------------------------
@@ -304,6 +255,10 @@ def blank_row():
     return row
 
 
+def ms_since(t0):
+    return round((time.perf_counter() - t0) * 1000, 1)
+
+
 def run_one(task):
     """跑完一份语料，返回它那一行（字段全是标量，好进 TSV / 跨进程传）。"""
     t0 = time.perf_counter()
@@ -312,8 +267,11 @@ def run_one(task):
     seq_ref = os.path.join(task["seq_dir"], cid + ".ref.seq")
     seq_ours = os.path.join(task["seq_dir"], cid + ".ours.seq")
     row = blank_row()
+    # 分项计时：`seconds` 只回答「整份多慢」，回答不了「哪一段慢」。这几列跟着行一起写出去，
+    # 每份都有了就不用为了定位瓶颈去单跑一份。
     row.update({"id": cid, "ticks": task["ticks"], "seed": task["seed"],
-                "first_diff_tick": "n/a", "status": ""})
+                "first_diff_tick": "n/a", "status": "",
+                "run_ms": "", "diff_ms": "", "diff_load_ms": "", "diff_fold_ms": ""})
 
     def done(status, **kw):
         row.update(kw)
@@ -355,6 +313,7 @@ def run_one(task):
                     err_first_line=one_line(f"读不了 {rel(blob)}.entry：{e}"))
 
     # 2/3) 两侧各跑一遍
+    run_ms = 0.0
     for side, bin_path, seq in (("run_ref", ref, seq_ref), ("run_ours", blob, seq_ours)):
         if os.path.exists(seq):
             try:
@@ -365,14 +324,20 @@ def run_one(task):
         if side == "run_ref" and not os.path.exists(bin_path):
             return done(STATUS_HOST_FAIL, err_kind="ref_missing",
                         err_first_line=one_line(f"参考产物不在：{rel(bin_path)}"))
+        t_run = time.perf_counter()
         payload, error = run_diff(bin_path, src, task["ticks"], task["seed"], seq)
+        run_ms += ms_since(t_run)
         if payload is None or error:
             return done(STATUS_HOST_FAIL, err_kind=side,
                         err_first_line=error or "run 没有 JSON 结果")
         row["stores_ref" if side == "run_ref" else "stores_ours"] = payload.get("store_count", "")
 
-    # 4) 终态判据：**带 `--src`**（只比 `[game_lo, game_hi)`）——理由见模块 docstring。
-    equal, payload, error = diff_states(seq_ref, seq_ours, src)
+    # 4) 终态判据 + 诊断：**一次调用**。判据取带 `--src` 的那一份（只比 `[game_lo, game_hi)`，
+    # 理由见模块 docstring）；`--classify` 顺带给出不带 `--src` 的整份总数与按地址段的分账。
+    t_diff = time.perf_counter()
+    payload, error = diff_report(seq_ref, seq_ours, src)
+    row["diff_ms"] = ms_since(t_diff)
+    row["run_ms"] = round(run_ms, 1)
     if error or payload is None:
         # 过滤器自己会拒绝荒谬的地址空间（与代码区重叠 / 跨度 > 4 GiB），那不是「相等」。
         row["err_kind"] = "src_filter"
@@ -380,30 +345,27 @@ def run_one(task):
         return done(STATUS_HOST_FAIL)
     row["src_kept_a"] = payload.get("kept_a", "")
     row["src_kept_b"] = payload.get("kept_b", "")
-
-    # 参考列：不带 `--src` 的总差异（含 stack / code），用来看「差在哪一段」与交叉验证。
-    _eq_raw, payload_raw, _error_raw = diff_states(seq_ref, seq_ours, None)
-    row["diff_bytes_raw"] = "" if payload_raw is None else payload_raw.get("diff_bytes", "")
+    row["diff_load_ms"] = payload.get("load_ms", "")
+    row["diff_fold_ms"] = payload.get("classify_ms", "")
+    equal = bool(payload.get("equal"))
+    first = payload.get("raw_first_diff_addr")
+    row.update({"diff_bytes_raw": payload.get("raw_diff_bytes", ""),
+                "diff_stack": payload.get("raw_stack", ""),
+                "diff_code": payload.get("raw_code", ""),
+                "diff_game": payload.get("raw_game", ""),
+                "diff_game_prefixes": format_prefixes(payload.get("raw_game_prefixes") or []),
+                "first_diff_addr": "" if first in (None, "") else f"0x{int(first):X}"})
+    mismatch = classify_mismatch(row)
+    if mismatch:
+        row["err_kind"] = "classify_mismatch"
+        row["err_first_line"] = one_line(mismatch)
 
     if equal:
         for seq in (seq_ref, seq_ours):           # equal 的序列没有定位价值，别留着占 GB
             with contextlib.suppress(OSError):
                 os.remove(seq)
-        return done(STATUS_EQUAL, diff_stack=0, diff_code=0, diff_game=0, diff_game_prefixes="")
+        return done(STATUS_EQUAL)
 
-    # diff：按地址段把差异分类（诊断用；总数必须等于 difftrace 的 diff_bytes_raw）
-    try:
-        counts, first, total, prefixes = classify_diff(seq_ref, seq_ours)
-    except OSError as e:
-        return done(STATUS_DIFF, err_kind="classify", err_first_line=one_line(str(e)))
-    row.update({"diff_stack": counts["stack"], "diff_code": counts["code"],
-                "diff_game": counts["game"],
-                "diff_game_prefixes": " ".join(f"0x{hi:X}:{n}" for hi, n in prefixes),
-                "first_diff_addr": "" if first is None else f"0x{first:X}"})
-    if total != row["diff_bytes_raw"]:
-        row["err_kind"] = "classify_mismatch"
-        row["err_first_line"] = one_line(f"按段分类合计 {total} B ≠ difftrace diff_bytes "
-                                        f"{row['diff_bytes_raw']} B")
     return done(STATUS_DIFF)
 
 
@@ -489,9 +451,9 @@ def write_report(rows, summary, path, args, total, order):
       f"{'' if summary['done'] == total else ' · **中途快照（还没跑完）**'}"
       f" · `--jobs {args.jobs}` · {args.ticks} tick · seed `{args.seed}`\n")
     w("判据口径：装配 `build/simplexc_cli.exe`；两侧各 `difftrace run --save` 跑同样 tick 数；"
-      "`difftrace diff --state` 比折叠后的内存终态。**verdict 取不传 `--src` 的那次**"
-      "（`diff_bytes_raw`）。`--src` 那次只为留证据：这批 `.si` 里没有 `memory_copy`，"
-      "`Spec::regions()` 只剩退化成单点的标量，过滤会把两边全部写丢掉 → 平凡的 equal。"
+      "`difftrace diff --state --src <si> --classify` 比折叠后的内存终态。"
+      "**verdict 取带 `--src` 的那次**（只比 `[game_lo, game_hi)`，见模块 docstring 里 2026-10-25 的修订）；"
+      "`diff_bytes_raw` 是不带 `--src` 的整份差异，只是参考列。"
       "`first_diff_tick` 一律 `n/a`（逐 tick 要 `--tick-mark`，这批不传）。\n")
     w("机器可读：`" + rel(args.tsv) + "` · 重跑：`python simplexc/tools/m5/batch.py --jobs 12`\n")
 
@@ -514,8 +476,9 @@ def write_report(rows, summary, path, args, total, order):
     diffs = [r for r in rows if r.get("status") == STATUS_DIFF]
     w(f"## diff 明细（{len(diffs)} 份）\n")
     if diffs:
-        w("差异字节按地址段分：`stack` = 0x40000000–0x40800000（两边栈帧布局本来就不一样）、"
-          "`code` = 0x10000000 起 16 MB（各产物自己的代码/全局镜像）、`game` = 其余。"
+        w("差异字节按地址段分：`stack` = 栈区（8 MB）、"
+          "`code` = 代码区（产物镜像，`kCodeBase` 起 16 MB）、`game` = 其余；段界只在"
+          "`difftrace/main.cc` 的 `kSegBounds` 里定义一处。"
           "`src_kept_a/b` 是带 `--src` 那次两边留下的写条数（0/0 = 那个过滤器在这份上是空的）。\n")
         w("`game` 那一列不是「游戏状态」：它还包括参考侧分配器向宿主拿的页（`0x4009…` / `0x400b…`，"
           "旧口径叫 `extern_only`）与宿主帧（`0x7ff9…`）。真正的 `#SIMULATION_STATE` 段在 `0x2328…`，"
@@ -563,19 +526,21 @@ def write_report(rows, summary, path, args, total, order):
     odd = [r for r in rows
            if r.get("seconds") != "" and (float(r["seconds"]) > 5.0 or float(r["seconds"]) < 0.2)]
     if odd:
-        w("慢的一份要定位到「哪一阶段慢」得把 `run` 拆开看：`seconds` 是整份（装配 + 两次 run + 两次 diff +"
-          "按段分类）；`cli_ms` 与两侧 stores 列能排除装配与序列规模。"
-          "实测唯一 > 5 s 的 180：“我们”的启动期跑了 368 M 条指令（参考 8.4 M），detail 见 notes.md。\n")
-        w("| id | 秒 | CLI ms | blob B | stores ref/ours | 归类 | 说明 |")
-        w("| --- | --- | --- | --- | --- | --- | --- |")
+        w("每行的耗时已拆成 `cli_ms`（装配）/ `run_ms`（两侧各起一次 `difftrace run --save`，含落盘）/"
+          " `diff_ms`（一次 `diff --classify`，里面再分 `diff_load_ms` 读盘+过滤 与 `diff_fold_ms` 折叠），"
+          "不用再去单跑一份定位。\n")
+        w("| id | 秒 | CLI ms | run ms | diff ms（读盘/折叠） | stores ref/ours | 归类 | 说明 |")
+        w("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for r in odd:
             status = str(r.get("status") or "")
             if float(r["seconds"]) < 0.2:
                 why = ("装配就被拒（sema / 装配期），三个 exe 都没起" if status == STATUS_CLI_FAIL
                        else "小份：blob 几 KB、store 序列百条量级")
             else:
-                why = "慢在 `run`：看两侧 stores 与指令数，不是装配"
-            w(f"| {r['id']} | {r['seconds']} | {r.get('cli_ms')} | {r.get('blob_bytes')} | "
+                why = ("看 run_ms 与 diff_ms 哪边大：10000 tick 下序列是 GB 级，"
+                       "run 与折叠都会被它拖起来")
+            w(f"| {r['id']} | {r['seconds']} | {r.get('cli_ms')} | {r.get('run_ms')} | "
+              f"{r.get('diff_ms')}（{r.get('diff_load_ms')}/{r.get('diff_fold_ms')}） | "
               f"{r.get('stores_ref')}/{r.get('stores_ours')} | {status} | {why} |")
     else:
         w("（没有）")
@@ -588,7 +553,7 @@ def write_report(rows, summary, path, args, total, order):
       "build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin work/tmp/m5batch/blobs/<id>.bin "
       f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ours.seq --json\n"
       "build/difftrace.exe diff --state work/tmp/m5batch/seq/<id>.ref.seq "
-      "work/tmp/m5batch/seq/<id>.ours.seq --json\n"
+      "work/tmp/m5batch/seq/<id>.ours.seq --src simplexc/corpus/src/<id>.si --classify --json\n"
       "```\n")
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as f:

@@ -643,6 +643,15 @@ size_t count_writes_at(const std::vector<tc::Store>& seq, u64 addr) {
     return n;
 }
 
+// 差异按地址段分账的段界（**唯一一处**）：栈区取 driver.cc 的 kStackBase/kStackSize，
+// 代码区取 image.hh 的 kCodeBase 起 16 MB（产物镜像 ≪ 16 MB，这条带只用来把「写进自己镜像的
+// 字节」跟游戏内存分开）。段界是常量，不随语料变 —— 所以能跟「不带 --src 的整份折叠」一起算。
+constexpr uint64_t kStackSize = 0x800000;
+constexpr uint64_t kSegmentCodeHi = kCodeBase + 0x1000000;
+constexpr size_t kGamePrefixTop = 6;
+
+const tc::SegBounds kSegBounds{kStackBase, kStackBase + kStackSize, kCodeBase, kSegmentCodeHi};
+
 // ---- run --------------------------------------------------------------------
 
 void usage_all(const char* argv0) {
@@ -695,7 +704,7 @@ void usage_run(const char* argv0) {
 
 void usage_diff(const char* argv0) {
     std::printf(
-        "用法: %s diff --state <a.seq> <b.seq> [--src <si>] [--tick-mark <hex>] [--json]\n"
+        "用法: %s diff --state <a.seq> <b.seq> [--src <si>] [--tick-mark <hex>] [--classify] [--json]\n"
         "      %s diff --trace <a.seq> <b.seq> [--json]\n"
         "  --state      按内存状态比：整段序列折叠成终态、逐字节比（主判据）。两边产物结构不同\n"
         "               也成立，是「与参考等价」的判据\n"
@@ -703,6 +712,9 @@ void usage_diff(const char* argv0) {
         "  --src        比哪些地址由它定：游戏地址空间 `[game_lo, game_hi)` 里的一切写都比，\n"
         "               代码区（我们产物被改写的导入槽）与区间外（栈区 / DLL 槽位）不比。\n"
         "               不给就不过滤，结论只会更严；区间退化或跨 4 GiB → 报错\n"
+        "  --classify   把**不过滤**的整份差异按地址段（stack / code / game）分账，\n"
+        "               连第一个不同地址与 game 段的地址前缀一起给。诊断用，不改判据；\n"
+        "               它跟判据共用同一次读盘，不必为了这两组数把两条序列再读一遍\n"
         "  --tick-mark  每 tick 写一次的地址，只用来切逐 tick 线索。不给就不做逐 tick；\n"
         "               给了但该地址在过滤后的序列里没出现过 → 报错（不许静默退化成终态比）\n"
         "  --json       结果输出成一个 JSON 对象到 stdout\n"
@@ -944,6 +956,16 @@ struct StateReport {
     size_t final_diff_bytes = 0;
     std::vector<tc::ByteDiff> final_rows;
 
+    // 分账（`--classify`）：**不过滤**的整份折叠逐字节比，再按地址段分类。诊断用，不进判据。
+    // 它跟判据共用同一次读盘：以前 batch.py 为了拿这两组数把两条序列读了两遍又折了一遍（Python 里）。
+    bool classified = false;
+    size_t raw_diff_bytes = 0;
+    tc::SegmentTally raw_tally;
+
+    // 耗时（`--classify` 时填）：pid 重启也要能看出时间花在「读盘」还是「折叠」上。
+    std::optional<u64> load_ms;
+    std::optional<u64> classify_ms;
+
     // 逐 tick 线索（只在给了 `--tick-mark` 时有意义）
     bool tick_marked = false;
     u64 tick_mark = 0;
@@ -974,14 +996,21 @@ bool tick_count_mismatch(const StateReport& r) {
 
 size_t tick_diff_bytes(const StateReport& r) { return r.tick_diff ? r.tick_diff->mismatch_count : 0; }
 
+u64 ms_between(std::chrono::steady_clock::time_point from,
+               std::chrono::steady_clock::time_point to) {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count());
+}
+
 // 先算、后渲染：这里只往结构体里写，不出一个字节。
 StateReport state_report(const std::string& path_a, const std::string& path_b,
-                         const std::string& src, const std::optional<u64>& tick_mark) {
+                         const std::string& src, const std::optional<u64>& tick_mark,
+                         bool classify) {
     StateReport r;
     r.path_a = path_a;
     r.path_b = path_b;
     r.src = src;
 
+    const auto t_load = std::chrono::steady_clock::now();
     const std::vector<tc::Store> raw_a = tc::load(path_a);
     const std::vector<tc::Store> raw_b = tc::load(path_b);
     r.stores_a = raw_a.size();
@@ -1039,10 +1068,25 @@ StateReport state_report(const std::string& path_a, const std::string& path_b,
     }
 
     // 判据：折完整序列的终态。不靠界标，所以界标选错也不会把结论带偏，所以它是第一行。
+    if (classify)
+        r.load_ms = ms_between(t_load, std::chrono::steady_clock::now());
     const tc::Memory final_a = tc::fold(a, 0, a.size());
     const tc::Memory final_b = tc::fold(b, 0, b.size());
     r.final_diff_bytes = tc::memory_diff(final_a, final_b, kMaxMismatchPrint, r.final_rows);
     r.equal = r.final_diff_bytes == 0;
+
+    // 分账要的是**不过滤**的整份折叠：没给 `--src` 时它跟判据那两份是同一次折叠，别折第二遍。
+    if (classify) {
+        const auto t_classify = std::chrono::steady_clock::now();
+        r.classified = true;
+        r.raw_tally = src.empty()
+                          ? tc::tally_by_segment(final_a, final_b, kSegBounds, kGamePrefixTop)
+                          : tc::tally_by_segment(tc::fold(raw_a, 0, raw_a.size()),
+                                                 tc::fold(raw_b, 0, raw_b.size()), kSegBounds,
+                                                 kGamePrefixTop);
+        r.raw_diff_bytes = r.raw_tally.total();
+        r.classify_ms = ms_between(t_classify, std::chrono::steady_clock::now());
+    }
 
     // 逐 tick：不给界标就不做（宁可不给线索，也不给一条看着像判据的假线索）。
     if (r.tick_marked) {
@@ -1071,6 +1115,24 @@ void print_state_text(const Io& io, const StateReport& r) {
             hex(r.space->code_lo).c_str(), hex(r.space->code_hi).c_str());
         say(io, "保留条数         : kept_a %zu / kept_b %zu（丢 A %zu / B %zu，其中代码区 A %zu / B %zu）\n",
             r.kept_a, r.kept_b, r.dropped_a, r.dropped_b, r.dropped_code_a, r.dropped_code_b);
+    }
+    // 分账：整份（不过滤）折叠后的差异按地址段分。它跟判据不是同一个数：`--src` 判据会把栈区
+    // 与代码区的差异排除，而这里全算（所以 equal 的行这两行数字也可能不是 0）。
+    if (r.classified) {
+        say(io, "整份差异         : %zu 字节（stack %zu / code %zu / game %zu）\n",
+            r.raw_diff_bytes, r.raw_tally.stack, r.raw_tally.code, r.raw_tally.game);
+        if (r.raw_tally.first_addr)
+            say(io, "第一个不同地址   : %s\n", hex(*r.raw_tally.first_addr).c_str());
+        if (!r.raw_tally.game_prefixes.empty()) {
+            say(io, "game 段地址前缀  :");
+            for (const auto& [hi, n] : r.raw_tally.game_prefixes)
+                say(io, " 0x%llX:%zu", static_cast<unsigned long long>(hi), n);
+            say(io, "（不是「游戏状态不等」：它还包括参考侧分配器向宿主拿的页与宿主帧）\n");
+        }
+        if (r.load_ms && r.classify_ms)
+            say(io, "耗时             : 读盘+过滤 %llu ms / 分账折叠 %llu ms\n",
+                static_cast<unsigned long long>(*r.load_ms),
+                static_cast<unsigned long long>(*r.classify_ms));
     }
 
     if (!r.tick_marked) {
@@ -1133,6 +1195,24 @@ void print_state_json(const StateReport& r) {
     }
     j.flag("filtered", !r.src.empty());
     j.text("src", r.src);
+    j.flag("classified", r.classified);
+    if (r.classified) {
+        j.size("raw_diff_bytes", r.raw_diff_bytes);
+        j.opt_num("raw_first_diff_addr", r.raw_tally.first_addr);
+        j.size("raw_stack", r.raw_tally.stack);
+        j.size("raw_code", r.raw_tally.code);
+        j.size("raw_game", r.raw_tally.game);
+        std::string prefixes = "[";
+        for (size_t i = 0; i < r.raw_tally.game_prefixes.size(); ++i) {
+            if (i) prefixes += ',';
+            prefixes += "{\"prefix\":" + std::to_string(r.raw_tally.game_prefixes[i].first) +
+                        ",\"count\":" + std::to_string(r.raw_tally.game_prefixes[i].second) + "}";
+        }
+        prefixes += ']';
+        j.put("raw_game_prefixes", prefixes);
+        j.opt_num("load_ms", r.load_ms);
+        j.opt_num("classify_ms", r.classify_ms);
+    }
     j.put("final_diff", byte_diff_json(r.final_rows));
     j.put("tick_diff", r.tick_diff && !r.tick_diff->tick_count
                               ? byte_diff_json(r.tick_diff->mismatches)
@@ -1145,6 +1225,7 @@ int cmd_diff(int argc, char** argv) {
     std::optional<u64> tick_mark;
     bool trace = false;
     bool have_state = false;
+    bool classify = false;
     Io io;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1167,6 +1248,8 @@ int cmd_diff(int argc, char** argv) {
             src = argv[++i];
         } else if (a == "--tick-mark" && i + 1 < argc) {
             tick_mark = parse_u64(argv[++i], "--tick-mark");
+        } else if (a == "--classify") {
+            classify = true;
         } else if (a == "--json") {
             io.json = true;
         } else {
@@ -1183,6 +1266,7 @@ int cmd_diff(int argc, char** argv) {
     if (trace) {
         if (tick_mark) throw std::runtime_error("--tick-mark 只跟 --state 一起用（--trace 是逐条比，没有 tick）");
         if (!src.empty()) throw std::runtime_error("--trace 不读 --src（逐条比不看 region 集合）");
+        if (classify) throw std::runtime_error("--classify 只跟 --state 一起用（--trace 只比逐条）");
         const std::vector<tc::Store> a = tc::load(path_a);
         const std::vector<tc::Store> b = tc::load(path_b);
         const std::optional<tc::Divergence> div = tc::first_divergence(a, b);
@@ -1227,7 +1311,7 @@ int cmd_diff(int argc, char** argv) {
         return equal ? kExitOk : kExitDiff;
     }
 
-    const StateReport r = state_report(path_a, path_b, src, tick_mark);
+    const StateReport r = state_report(path_a, path_b, src, tick_mark, classify);
     print_state_text(io, r);
     if (io.json) print_state_json(r);
     // 判据设施自相矛盾：结论一个都不能用，且不能让调用方以为「跑完了，只是不等」。

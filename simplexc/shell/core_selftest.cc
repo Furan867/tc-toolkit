@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "cli/win32_export.hh"
 #include "codegen/codegen.hh"
 #include "codegen/module_build.hh"
 #include "codegen/module_source.hh"
@@ -64,17 +65,16 @@ bool read_file(const std::string& path, std::string& out) {
   return true;
 }
 
-/* 与 `cli/simplexc_cli.cc` / `shell/simplexc_core.cc` 的 `Kernel32Resolver` 同形：
-   `__imp_X` 是 mingw 对 dllimport 的写法（装配器给 `__imp_*` 造 8 字节数据槽），要查的仍是 `X`。 */
-class Kernel32Resolver : public tc::ExternResolver {
+/* 与 `shell/simplexc_core.cc` 的 `Win32Resolver` 逐字相同：查表与 `__imp_` 的剥法都在
+   `cli/win32_export.hh`，模块顺序（kernel32 → ucrtbase → msvcrt）只在那里定义。
+   失败静默（调 `find_export` 而非 `resolve_win32_export`），与壳在游戏进程里的行为一致 ——
+   这个判据入口要复现的是那条路，不是 cli 那条。 */
+class Win32Resolver : public tc::ExternResolver {
  public:
   bool resolve(std::string_view symbol, uint64_t& addr) override {
-    std::string name(symbol);
-    const std::string imp = "__imp_";
-    if (name.rfind(imp, 0) == 0) name = name.substr(imp.size());
-    HMODULE k = GetModuleHandleA("kernel32.dll");
-    if (k == nullptr) return false;
-    FARPROC p = GetProcAddress(k, name.c_str());
+    std::string looked; /* `find_export` 的出参，静默路径上用不上 */
+    const FARPROC p =
+        simplexc_cli::find_export(simplexc_cli::strip_import_prefix(symbol), looked);
     if (p == nullptr) return false;
     addr = reinterpret_cast<uint64_t>(p);
     return true;
@@ -108,7 +108,7 @@ tc::AsmResult assemble_collecting_stubs(const std::string& text) {
   rt.bytes.assign(sh::kRtMinObj, sh::kRtMinObj + sh::kRtMinObjSize);
   objs.push_back(std::move(rt));
 
-  Kernel32Resolver resolver;
+  Win32Resolver resolver;
   return tc::assemble(objs, "__tc_entry", resolver);
 }
 

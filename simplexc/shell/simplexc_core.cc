@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "assemble/assemble.hh"
+#include "cli/win32_export.hh"
 #include "codegen/codegen.hh"
 #include "codegen/module_build.hh"
 #include "codegen/module_source.hh"
@@ -78,17 +79,18 @@ constexpr std::size_t kTailPadding = 8;
 /* `Blob::bytes` 的头 8 字节（bit62 → 游戏不 free 我们的缓冲，主设计 §2.3）。 */
 constexpr std::size_t kHeaderBytes = 8;
 
-/* 与 `cli/tcblob.cc` 的 `Kernel32Resolver` 同形：`__imp_X` 是 mingw 对 dllimport 的写法
- * （装配器给 `__imp_*` 造 8 字节数据槽），要查的仍是 `X`。 */
-class Kernel32Resolver : public tc::ExternResolver {
+/* 与 CLI 同一份查表（`cli/win32_export.hh`：kernel32 → ucrtbase → msvcrt），`__imp_X` 的剥法与
+ * 模块顺序都只在那边定义。
+ *
+ * 为什么调 `find_export` 而不是 `resolve_win32_export`：后者失败时会往 stderr 打「查过哪些模块」，
+ * 而壳在游戏进程里跑，stderr 进的是 hook.log —— 那是唯一一份记录型日志，多一行就多一处噪声。
+ * 壳的失败信息已经由 `assemble()` 的 `res.detail`（符号名）经 `[simplexc] 装配失败：…` 报出。 */
+class Win32Resolver : public tc::ExternResolver {
  public:
   bool resolve(std::string_view symbol, uint64_t& addr) override {
-    std::string name(symbol);
-    const std::string imp = "__imp_";
-    if (name.rfind(imp, 0) == 0) name = name.substr(imp.size());
-    HMODULE k = GetModuleHandleA("kernel32.dll");
-    if (k == nullptr) return false;
-    FARPROC p = GetProcAddress(k, name.c_str());
+    std::string looked; /* `find_export` 的出参，静默路径上用不上 */
+    const FARPROC p =
+        simplexc_cli::find_export(simplexc_cli::strip_import_prefix(symbol), looked);
     if (p == nullptr) return false;
     addr = reinterpret_cast<uint64_t>(p);
     return true;
@@ -186,7 +188,7 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
     prog.build();
     std::vector<uint8_t> module_obj = prog.emit_object();
 
-    Kernel32Resolver resolver;
+    Win32Resolver resolver;
     tc::AsmResult assembled = tc::assemble(assemble_inputs(std::move(module_obj)), "__tc_entry",
                                            resolver);
     if (assembled.status != tc::AsmStatus::Ok) {

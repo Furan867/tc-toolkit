@@ -544,26 +544,94 @@ void print_byte_diffs(const Io& io, const std::vector<tc::ByteDiff>& rows, size_
     }
 }
 
-// 只留落在 `spec.regions()` 里的写。被排除的两类固定下来：
-//   - 栈区（0x4000_0000 起那 8 MB，与 driver.cc 的 kStackBase/kStackSize 同）：两边栈帧布局
-//     本来就不会一样；
-//   - 我们代码区里被改写成 magic 的导入槽：它们本来就应该不同，永远比不等。
-// 两类都不在 regions 里，所以一条规则就够了。
-std::vector<tc::Store> keep_regions(const std::vector<tc::Store>& seq,
-                                   const std::vector<std::pair<u64, u64>>& regions,
-                                   size_t& dropped) {
-    std::vector<tc::Store> out;
-    out.reserve(seq.size());
+// 判据范围：游戏地址空间 `[game_lo, game_hi)` 里的一切写都比，区间外的一律不比。
+//
+// 逐 region 命中（旧的 `spec.regions()` 过滤）做不到这件事：没有 memop 的语料只拿到标量与数组头，
+// 标量区里 `store(a + k*8, v)` 这类展开写一条都不命中 —— 实测 001 的两份序列各留 0 条，
+// equal 平凡成立。所以判据改成区间，不是逐 region 命中。
+//
+// 被排除的三类固定下来：
+//   - 栈区（driver.cc 的 kStackBase/kStackSize，0x4000_0000 起 8 MB）：两边栈帧布局本来就不会一样；
+//   - 代码区（`[kCodeBase, 序列里最高的代码区写 + 它的宽度)`）：我们产物在自己代码区里的导入槽
+//     被改写成 magic，参考产物没这一步，它们本来就该不同；
+//   - 其余（DLL 槽位、host 地址）：在游戏区间之外。
+constexpr uint64_t kMaxGameSpan = 4ull << 30;  // 4 GiB
+constexpr uint64_t kStackBase = 0x40000000;    // 与 driver.cc 的 kStackBase 同（栈从这里开始）
+
+// 判据的地址空间（打印与 JSON 都要用）。
+struct GameSpace {
+    uint64_t lo = 0;       // game_lo
+    uint64_t hi = 0;       // game_hi
+    uint64_t code_lo = 0;  // kCodeBase
+    uint64_t code_hi = 0;  // 序列里最高的代码区写 + 它的宽度
+};
+
+struct FilterOut {
+    std::vector<tc::Store> stores;
+    size_t dropped = 0;       // 游戏区间外（栈 / DLL 槽位 / host）
+    size_t dropped_code = 0;  // 代码区
+};
+
+// 代码区的上界只能从序列推：diff 没有 `--bin`，拿不到 `image.code.size()`；序列里的 pc 也不够用
+// —— 跑进 DLL 里的真函数时 pc 在 baked 空间（rv32im 的 rva 0x1350/0x1380），按「最高 pc」算会把
+// 整块 DLL 算成代码区。所以取「`code_base` 与栈底之间最高的写地址 + 它的宽度」：代码区在
+// 任何语料的游戏区间之外，这个上界偏一点也不改变一条游戏写的去留。
+uint64_t code_hi_of(const std::vector<tc::Store>& seq) {
+    uint64_t hi = kCodeBase;
+    for (const tc::Store& s : seq)
+        if (s.addr >= kCodeBase && s.addr < kStackBase) hi = std::max(hi, s.addr + s.size);
+    return hi;
+}
+
+// 荒谬的 `--src` 一律报错，不默默放行也不默默丢弃：区间退化（`game_lo == game_hi`）时任何写都
+// 不在里面，放行就是又一次「两边各留 0 条 → equal」；区间跨 GB 时不是游戏地址空间。
+GameSpace game_space_of(const Spec& spec, const std::vector<tc::Store>& raw_a,
+                        const std::vector<tc::Store>& raw_b) {
+    GameSpace space;
+    space.lo = spec.game_lo();
+    space.hi = spec.game_hi();
+    space.code_lo = kCodeBase;
+    space.code_hi = std::max(code_hi_of(raw_a), code_hi_of(raw_b));
+    char msg[1024];
+    if (space.hi <= space.lo) {
+        std::snprintf(msg, sizeof(msg),
+                      "`--src` 的游戏地址空间是 0 字节（game_lo == game_hi == %s）："
+                      "按区间过滤时任何写都不在里面，判据会平凡成立。要的是同一块游戏状态上的一批地址，"
+                      "不是同一个地址",
+                      hex(space.lo).c_str());
+        throw std::runtime_error(msg);
+    }
+    if (space.hi - space.lo > kMaxGameSpan) {
+        std::snprintf(msg, sizeof(msg),
+                      "`--src` 的游戏地址空间是 %llu 字节（%s .. %s），超过 4 GiB："
+                      "地址声明里混进了非游戏地址（DLL / host），不能按区间过滤",
+                      static_cast<unsigned long long>(space.hi - space.lo), hex(space.lo).c_str(),
+                      hex(space.hi).c_str());
+        throw std::runtime_error(msg);
+    }
+    if (space.lo < space.code_hi && space.code_lo < space.hi) {
+        std::snprintf(msg, sizeof(msg),
+                      "`--src` 的游戏地址空间 [%s, %s) 与代码区 [%s, %s) 重叠："
+                      "排除代码区会把游戏写一起丢掉",
+                      hex(space.lo).c_str(), hex(space.hi).c_str(), hex(space.code_lo).c_str(),
+                      hex(space.code_hi).c_str());
+        throw std::runtime_error(msg);
+    }
+    return space;
+}
+
+FilterOut keep_game_space(const std::vector<tc::Store>& seq, const GameSpace& space) {
+    FilterOut out;
+    out.stores.reserve(seq.size());
     for (const tc::Store& s : seq) {
-        bool inside = false;
-        for (const auto& [lo, hi] : regions) {
-            if (s.addr >= lo && s.addr < hi) {
-                inside = true;
-                break;
-            }
+        // 代码区先判：代码区任何语料都在游戏区间之外，先判区间会让「代码区写」永远计成「区间外」。
+        if (s.addr >= space.code_lo && s.addr < space.code_hi) {
+            ++out.dropped_code;
+        } else if (s.addr < space.lo || s.addr >= space.hi) {
+            ++out.dropped;
+        } else {
+            out.stores.push_back(s);
         }
-        if (inside) out.push_back(s);
-        else ++dropped;
     }
     return out;
 }
@@ -629,8 +697,9 @@ void usage_diff(const char* argv0) {
         "  --state      按内存状态比：整段序列折叠成终态、逐字节比（主判据）。两边产物结构不同\n"
         "               也成立，是「与参考等价」的判据\n"
         "  --trace      逐条比 (pc, addr, size, value)：只对「同一编译器前后两版」成立\n"
-        "  --src        比哪些地址由 spec.regions() 定（栈区、导入槽不算）。不给就不过滤，\n"
-        "               结论只会更严\n"
+        "  --src        比哪些地址由它定：游戏地址空间 `[game_lo, game_hi)` 里的一切写都比，\n"
+        "               代码区（我们产物被改写的导入槽）与区间外（栈区 / DLL 槽位）不比。\n"
+        "               不给就不过滤，结论只会更严；区间退化或跨 4 GiB → 报错\n"
         "  --tick-mark  每 tick 写一次的地址，只用来切逐 tick 线索。不给就不做逐 tick；\n"
         "               给了但该地址在过滤后的序列里没出现过 → 报错（不许静默退化成终态比）\n"
         "  --json       结果输出成一个 JSON 对象到 stdout\n"
@@ -920,21 +989,33 @@ int cmd_diff(int argc, char** argv) {
 
     const std::vector<tc::Store> raw_a = tc::load(path_a);
     const std::vector<tc::Store> raw_b = tc::load(path_b);
-    std::vector<tc::Store> a;
-    std::vector<tc::Store> b;
-    size_t dropped_a = 0;
-    size_t dropped_b = 0;
+    std::optional<GameSpace> space;
+    FilterOut keep_a;
+    FilterOut keep_b;
     if (src.empty()) {
-        a = raw_a;
-        b = raw_b;
+        keep_a.stores = raw_a;
+        keep_b.stores = raw_b;
     } else {
-        const std::vector<std::pair<u64, u64>> regions = Spec::parse(src).regions();
-        a = keep_regions(raw_a, regions, dropped_a);
-        b = keep_regions(raw_b, regions, dropped_b);
+        space = game_space_of(Spec::parse(src), raw_a, raw_b);
+        keep_a = keep_game_space(raw_a, *space);
+        keep_b = keep_game_space(raw_b, *space);
+    }
+    const std::vector<tc::Store>& a = keep_a.stores;
+    const std::vector<tc::Store>& b = keep_b.stores;
+
+    // 根因防线：过滤把两边都清空时 equal 是平凡成立的（001 就是这么假绿过）。
+    // 局限在这一个场景：一边非零另一边为 0 时差异还看得见，报错只会把真结论捂起来。
+    if (space && (!raw_a.empty() || !raw_b.empty()) && a.empty() && b.empty()) {
+        char msg[1024];
+        std::snprintf(msg, sizeof(msg),
+                      "过滤后两边都是 0 条写（原始 A %zu / B %zu 条）：判据会平凡成立，不能当 equal。"
+                      "游戏地址空间 [%s, %s) 里一条写都没有，查 `--src` 对不对",
+                      raw_a.size(), raw_b.size(), hex(space->lo).c_str(), hex(space->hi).c_str());
+        throw std::runtime_error(msg);
     }
 
     // 界标先验：界标不在过滤后的序列里 = `split_ticks` 只会给出一段，逐 tick 会静默退化成终态比。
-    // 这正是「传了标量地址（region 是 (a,a)，恒不过滤）」踩过的坑，所以它在任何结论打印之前就报错。
+    // 也正是「传了个没人写的地址」踩过的坑，所以它在任何结论打印之前就报错。
     size_t mark_a = 0;
     size_t mark_b = 0;
     size_t mark_raw_a = 0;
@@ -949,9 +1030,9 @@ int cmd_diff(int argc, char** argv) {
             std::snprintf(msg, sizeof(msg),
                           "--tick-mark %s 在过滤后的序列里出现 A %zu 次 / B %zu 次"
                           "（原始序列 A %zu / B %zu）；该地址出现 0 次。"
-                          "如果是标量地址，它不在 regions 里（`s.addr < hi` 判归属，标量 region 是 "
-                          "(addr,addr) 恒不匹配），逐 tick 需要的是序列里真被写过的地址。",
-                          hex(*tick_mark).c_str(), mark_a, mark_b, mark_raw_a, mark_raw_b);
+                          "逐 tick 需要的是序列里真被写过的地址，且要落在游戏区间 [%s, %s) 内。",
+                          hex(*tick_mark).c_str(), mark_a, mark_b, mark_raw_a, mark_raw_b,
+                          space ? hex(space->lo).c_str() : "-", space ? hex(space->hi).c_str() : "-");
             throw std::runtime_error(msg);
         }
     }
@@ -968,11 +1049,16 @@ int cmd_diff(int argc, char** argv) {
     say(io, "A                : %s（%zu 条写，留下 %zu）\n", path_a.c_str(), raw_a.size(), a.size());
     say(io, "B                : %s（%zu 条写，留下 %zu）\n", path_b.c_str(), raw_b.size(), b.size());
     if (src.empty()) {
-        say(io, "范围             : 没给 --src → 不做 spec.regions() 过滤（栈区与导入槽也进比对）\n");
+        say(io, "范围             : 没给 --src → 不过滤（栈区与代码区也进比对）\n");
     } else {
-        say(io, "排除项           : spec.regions() 之外的写不比（栈区 / 我们代码区的导入槽）；"
-                   "丢掉 A %zu / B %zu 条\n",
-            dropped_a, dropped_b);
+        say(io, "游戏地址空间     : [%s, %s)（game_lo / game_hi，%llu 字节）\n",
+            hex(space->lo).c_str(), hex(space->hi).c_str(),
+            static_cast<unsigned long long>(space->hi - space->lo));
+        say(io, "代码区           : [%s, %s)（上界 = 序列里最高的代码区写 + 宽度；代码区里的写不比）\n",
+            hex(space->code_lo).c_str(), hex(space->code_hi).c_str());
+        say(io, "保留条数         : kept_a %zu / kept_b %zu（丢 A %zu / B %zu，其中代码区 A %zu / B %zu）\n",
+            a.size(), b.size(), keep_a.dropped, keep_b.dropped, keep_a.dropped_code,
+            keep_b.dropped_code);
     }
 
     // 逐 tick：不给界标就不做（宁可不给线索，也不给一条看着像判据的假线索）。
@@ -1034,8 +1120,16 @@ int cmd_diff(int argc, char** argv) {
         j.size("stores_b", raw_b.size());
         j.size("kept_a", a.size());
         j.size("kept_b", b.size());
-        j.size("dropped_a", dropped_a);
-        j.size("dropped_b", dropped_b);
+        j.size("dropped_a", keep_a.dropped);
+        j.size("dropped_b", keep_b.dropped);
+        j.size("dropped_code_a", keep_a.dropped_code);
+        j.size("dropped_code_b", keep_b.dropped_code);
+        if (space) {
+            j.num("game_lo", space->lo);
+            j.num("game_hi", space->hi);
+            j.num("code_lo", space->code_lo);
+            j.num("code_hi", space->code_hi);
+        }
         j.flag("filtered", !src.empty());
         j.text("src", src);
         j.put("final_diff", byte_diff_json(final_rows));

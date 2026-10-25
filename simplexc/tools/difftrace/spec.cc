@@ -126,6 +126,11 @@ std::vector<std::pair<uint64_t, uint64_t>> Spec::regions() const {
     // 先放 memop 区间，再退化的单点，顺序与 simspec.regions() 一致（合并前不许去重）。
     std::vector<std::pair<uint64_t, uint64_t>> out = ranges_;
     out.reserve(ranges_.size() + scalars_.size() + arrays_.size());
+    // 标量留零长 `(a, a)`：driver 的 merge_ranges 把零长读成「只知道地址、不知道多大」并给 1 MB，
+    // 而一块协议区常在一个标量之后展开几十 KB（001 的 ui_buffer 被写到 +146 KB）。改成槽宽
+    // `(a, a+8)` 会把映射从 1 MB 缩到一页 —— 实测 001 直接 UC_ERR_READ_UNMAPPED、0 条 store。
+    // 所以零长是**映射语义**，不等于「宽度为零的区间」；判归属（一条写算不算游戏状态）不能用它，
+    // 要用 game_lo()/game_hi() 的区间，见 main.cc 的 keep_game_space()。
     for (const auto& [name, addr] : scalars_) out.emplace_back(addr, addr);
     for (const auto& arr : arrays_) {
         // 数组的 seq 头在 p-8（`.len()` = `load i64, p-8`）。地址落在页边界上时 p-8 掉进

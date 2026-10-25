@@ -276,32 +276,42 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 - 调用点漏 `$` 报错：`1st will get modified, so put '$' in front when calling it.`；
 - 体内读它拿到调用者的当前值、赋值后立刻读到新值 ⇒ **引用/别名语义**（不是值拷贝 + 写回）；
 - **写回时机仍未验**（全被内联 + SROA 成寄存器，观测不到）；
-- `$`→`$` 转发规则不一致：标量 `inner8($s)` / `$s.inner8()` 被拒（后者是**无行号的裸 `COMPILER ERROR`**），
-  但前缀自己的 `sort($arr) { quick_sort($arr) }`（`Arr[@Any]`）能过。
-验证：`docs/notes/2026-10-18-routea-semantics.md` 与 `…-semantics-batch.md`
-最后验证：2026-10-18
+- **（2026-10-25 更正）** 旧记录「标量 `$`→`$` 转发被拒」**没复现**：换成普通形参的 `r17` 作反例，报的是同一句
+  `No function matched …` ⇒ 真实原因是「`dot` 单元不能自由调用」，与 `$` 无关。
+验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-sugar/`）
+最后验证：2026-10-25
 
 ### 泛型 `@Type`/`@Size`/`@Any`：按实参具体类型实例化，`size()` 折成编译期常数（**单位 = 位**）
 `gs(load(<U8>))` → 立即数 8111、`gs(load(<Int>))` → 64111（同名的两个实例化）。`@Type` 既能收 `<U8>` 也能收值（推型）。
 **嵌套泛型 `<@Type>` 不透明传**：`ginner(<@Type>)` 里 `size()` 塔成 **-1**。
 `@Size` 当**返回类型**时 = 该实例的绑定类型（实测 `gtr(<U8>/<U16>/<Int>)` → 参考产物立即数 `0x89` / `0x6789` / `0x123456789`）。
 「同一 (函数, 实参) 只实例化一次」**未验**（参考全内联，看不到共享体）。
-验证：`docs/notes/2026-10-18-routea-semantics.md`
-最后验证：2026-10-18
+`@Any` **完全等价于 `@Type`**（两者产物的字节比完全相同）。
+**`return @Type random()` 本身就非法**（参考报 `Expected Type here.`，合法拼法是 `@<param-name>`）；
+前缀能编过只因 `random(@Type)` 从未被实例化 —— 参考对泛型体是**惰性检查**。
+验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-type/`）
+最后验证：2026-10-25
 
 ### `asm` 块**不是原样内联**：参考会把块重新汇编
 操作数名换成寄存器/立即数，周围插保存恢复（`mov rcx,32` → `mov rdx,rcx; mov ecx,0x20`），`$result` 解析到该变量所在寄存器；
 前缀 `memory_copy` 里内联出 `rep movs BYTE PTR es:[rdi],…`，`mov al,0` 被规范成 `mov eax,0x0`。
 ⇒ 要支持它得写一个「认识名字操作数」的小汇编器。
-验证：`docs/notes/2026-10-18-routea-semantics.md`
-最后验证：2026-10-18
+**助记符是白名单**（`nop` 被拒：`Unsupported instruction nop.`）；活路径只用得上 7 条：
+`mov` / `idiv` / `shl` / `or` / `rdtsc` / `rep movsb` / `rep stosb`，无内存操作数、无标签、无 `define`。
+`asm aarch64 { … }` 这类**非目标架构的块整块丢弃且不验证内容**（塞垃圾也照样编过，产物与没有该块相同）。
+验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-asm/`；编码器见 `codegen/asm_x64.*`）
+最后验证：2026-10-25
 
 ### 顶层算子单元接管运算符（`binary + (Int,Int)` 之类）
 `binary + (Int,Int)` **接管**了 `Int` 上的 `+`（产物里没有 add，只有单元的 4242 存储 + 存 return 0）；
-`dot foo` 按接收者静态类型解析；但 **`index_read` 没有接管 `Arr[Int]` 的 `a[0]`**（走内建 `[rcx+rax*8]`，单元没被调）。
-⇒ 要支持它得建算子单元表 + 在调用点做重载解析。
-验证：`docs/notes/2026-10-18-routea-semantics.md`
-最后验证：2026-10-18
+`dot foo` 按接收者静态类型解析。**同名多个版本时返回什么由「后声明的胜」决定，不是按具体度选**
+（`a02`/`a02b`/`a02d` 三个 `binary +` 各自单独存在时 → `0xBBBB` / `0xAAAA` / `0xCCCC`）。
+**`index_read`/`index_write` 在参考里是死的**：5 种配置（`Str`、`Arr[U8]`、U32 下标、命名数组类型、
+写路径）全走内建，单元体的标记 store 从不出现；索引非数组基还会直接崩
+（`base_type.kind in {typ_array, typ_fixed_array}`）⇒ 这一块不用实现。
+⇒ 要支持算子单元得建表 + 在调用点做重载解析。
+验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-bare/`）
+最后验证：2026-10-25
 
 ### 窄位宽 / 移位语义：真条件测清了一部分，但**对 98 份没有可测收益**（这条线收口）
 参考实测（`docs/notes/2026-10-18-width-cond.md` · `…-width-180.md`）：

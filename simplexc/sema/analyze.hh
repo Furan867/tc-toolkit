@@ -48,6 +48,10 @@ struct AliasSource {
 struct ModuleSource {
     const FunctionDef* label = nullptr;  /* 程序根（`run_sim:`，`form == "label"`）；空 → `CompileError{OurBug,…}` */
     std::vector<const FunctionDef*> defs;
+    /* `dot <名字>($接收者: T, …) R { … }` 方法单元，按源码顺序。这种头不是 `def`（也没有关键字），
+     * 声明扫描（`frontend/decls.cc` 的 `match_def`）认不到 —— 由 `codegen/module_build.cc` 从
+     * 源码行里切出来、按 `def` 的形状解析。方法调用的分派表就建在这张表上。 */
+    std::vector<const FunctionDef*> dot_units;
     std::vector<const VarDeclStmt*> top_vars;  /* 顶层 var / const，按源码顺序 */
     std::vector<EnumSource> enums;
     std::vector<StructSource> structs;

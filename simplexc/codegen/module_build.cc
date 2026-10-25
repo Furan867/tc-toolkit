@@ -224,6 +224,109 @@ void take_notes(OwnedModule& out, const Decl& d, const ParsedDef& pd) {
   }
 }
 
+/* `dot <名字>($接收者: T, …) R { … }` 的**头行**。
+ * 为什么要在这里认：`decls.cc` 的 `match_decl` 只认 `def` / `type` / `const` / `var` / 标签 /
+ * `call_conv` / `extern` / `#if`，而 `dot` 头同时不是其中任何一种 —— 它又开了一个 `{`，于是整条
+ * 声明（连体）按「花括号体」被跳过，既不进声明表、也不报未支持（`scan` 只在 `depth == 0` 时记
+ * `unsupported`，而这一行结束时 `depth` 已经是 1）。方法单元只能在这里补。
+ * 只认顶层（`depth == 0`）：体里的同名行是另一回事，不是声明。 */
+bool match_dot_head(const std::string& code, std::string& name) {
+  size_t i = 0;
+  while (i < code.size() && (code[i] == ' ' || code[i] == '\t')) ++i;
+  if (code.compare(i, 3, "dot") != 0) return false;
+  i += 3;
+  if (i < code.size() && (is_ident_char(code[i]) || code[i] == '$')) return false;
+  const size_t after_kw = i;
+  i = skip_ws(code, i);
+  if (i == after_kw) return false; /* `dot` 后面必须有空白 */
+  name = read_ident(code, i);
+  if (name.empty()) return false;
+  i = skip_ws(code, i);
+  return i < code.size() && code[i] == '(';
+}
+
+/* 一个顶层 `dot` 单元在源码里的位置（头行 + 收口行 + 方法名）。 */
+struct DotHead {
+  int lo = 0;
+  int hi = 0;
+  std::string name;
+};
+
+/* 顶层 `dot` 头行，按源码顺序。`hi` 靠花括号配平（头行开的那一个 `{` 回到深度 0 的行）。 */
+std::vector<DotHead> dot_heads(const std::vector<std::string>& code_lines) {
+  std::vector<DotHead> out;
+  int depth = 0;
+  for (size_t i = 0; i < code_lines.size(); ++i) {
+    const std::string& code = code_lines[i];
+    std::string name;
+    if (depth == 0 && match_dot_head(code, name)) {
+      /* 从头行本身开始配平：它是唯一把深度从 0 推到 1 的那一行。 */
+      int inner = 0;
+      int hi = static_cast<int>(i) + 1;
+      for (size_t j = i; j < code_lines.size(); ++j) {
+        for (char c : code_lines[j]) {
+          if (c == '{') {
+            ++inner;
+          } else if (c == '}' && inner > 0) {
+            --inner;
+          }
+        }
+        if (inner == 0) {
+          hi = static_cast<int>(j) + 1;
+          break;
+        }
+      }
+      out.push_back(DotHead{static_cast<int>(i) + 1, hi, name});
+    }
+    for (char c : code) {
+      if (c == '{') {
+        ++depth;
+      } else if (c == '}' && depth > 0) {
+        --depth;
+      }
+    }
+  }
+  return out;
+}
+
+/* 把一个 `dot` 单元按 `def` 的形状解析（`dot` 关键字吃掉之后，`名字(形参) 返回类型 { 体 }`
+ * 与 `def` 逐字相同，`parse_def_head` + `parse_block` 直接能接）。
+ * 不回填声明表的 `Decl`：那种记录属于前端，而这里只需要一棵能交给 sema 的 AST。 */
+FunctionDef* parse_dot_unit(const Frontend& fe, int lo, OwnedModule& out) {
+  std::vector<Tok> toks;
+  int last = lo;
+  for (const Tok& t : fe.toks) {
+    if (t.line >= lo) {
+      toks.push_back(t);
+      last = t.line;
+    }
+  }
+  Tok eof;
+  eof.kind = "eof";
+  eof.line = last;
+  eof.col = 1;
+  eof.gap = true;
+  toks.push_back(eof);
+  Parser p(std::move(toks), fe.type_names);
+  p.expect("ident", "dot", "'dot'");
+  auto fd = std::make_unique<FunctionDef>(lo);
+  std::string name;
+  std::vector<std::unique_ptr<Param>> params;
+  TypeRefPtr ret;
+  p.parse_def_head(name, params, ret);
+  fd->name = name;
+  fd->form = "dot";
+  fd->params = std::move(params);
+  fd->ret = std::move(ret);
+  fd->body = p.parse_block();
+  fd->lo = lo;
+  fd->hi = fd->body->close_line;
+  for (const std::string& note : p.notes) {
+    out.notes.push_back("dot '" + name + "'（第 " + std::to_string(lo) + " 行）：" + note);
+  }
+  return out.keep(std::move(fd));
+}
+
 }  // namespace
 
 FunctionDef* OwnedModule::keep(std::unique_ptr<FunctionDef> fn) {
@@ -247,13 +350,25 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
     throw CompileError{Responsibility::Unimplemented, Stage::Parse, Span{first.first},
                        "顶层这一行既不是声明也不是语句（未支持）：" + first.second};
   }
+  /* `dot` 单元：声明扫描看不见它们（见 `match_dot_head` 的注释），所以在这里按顶层头行逐个
+   * 解析。解析是**渴望**的：单元体里的语法错当场报，不等到调用点 —— 否则一个从未被调用的单元
+   * 会静默沉掉，而它需要的语义（比如 `$` 形参）就没人知道还差着。 */
+  const std::vector<DotHead> units = dot_heads(fe.code_lines);
+  /* 可达性必须把单元体当**根**重算：`Frontend::live` 只从顶层语句与 `tc_main` 出发，而单元体不
+   * 在声明表里 —— 否则 `dot next` 调的 `xorshift` 会被当不可达而整条丢掉（真语料里
+   * `xorshift` 只有这一个调用点），到调用点就变成「未定义的函数」。 */
+  LineSet roots = strict_root_lines(fe.decls, LineSet());
+  for (const DotHead& h : units) {
+    for (int ln = h.lo; ln <= h.hi; ++ln) roots.insert(ln);
+  }
+  const Closure live = closure(fe.decls, fe.code_lines, roots, false);
   for (size_t i = 0; i < fe.decls.size(); ++i) {
     const Decl& d = fe.decls[i];
     const int idx = static_cast<int>(i);
     if (d.kind == "type" && d.depth == 0) {
       scan_type(fe.code_lines, d, out);
     } else if (d.kind == "def" && d.depth == 0) {
-      if (fe.live.count(d.name) == 0) {
+      if (live.live.count(d.name) == 0) {
         /* 不可达：不解析、不进模块 —— 于是它体内的语法错不会报。这是**保真行为**（参考实现同样
          * 不报，`docs/notes/2026-10-18-m3-0-scope.md:298-305`），改成报错会与逐 tick 差分判据分叉。
          * 但「悄悄跳过」不行：名字与行号必须留痕，否则事后无从判断某个错是没报还是不存在。 */
@@ -288,6 +403,20 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
         out.notes.push_back(d.kind + " '" + d.name + "'（第 " + std::to_string(d.lo) +
                             " 行）已认形状但未产出代码：ABI 这一层还没接（后端用平台默认的 Win64）");
       }
+    }
+  }
+  /* `dot` 单元：声明扫描看不见它们（见 `match_dot_head` 的注释），所以在这里按顶层头行逐个
+   * 解析。解析是**渴望**的：单元体里的语法错当场报，不等到调用点 —— 否则一个从未被调用的单元
+   * 会静默沉掉，而它需要的语义（比如 `$` 形参）就没人知道还差着。 */
+  for (const DotHead& head : units) {
+    /* 单元体里有我们**前端还不认**的语法时（前缀 `dot cstring` 的 `return <Cstring> result`
+     * 就是：尖括号转换还没接）不能因此让整个文件编不过 —— 那种单元只要没人调就与产物无关。
+     * 但也不能静默吞掉：记一条 note（壳会写进 hook.log），调用点仍然照实报「方法 .x() 未实现」。 */
+    try {
+      out.ast.dot_units.push_back(parse_dot_unit(fe, head.lo, out));
+    } catch (const CompileError& e) {
+      out.notes.push_back("dot '" + head.name + "'（第 " + std::to_string(head.lo) +
+                          " 行）解析失败已跳过：" + e.detail);
     }
   }
   out.ast.source_name = std::move(source_name);

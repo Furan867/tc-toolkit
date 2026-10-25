@@ -22,6 +22,7 @@ inline sema::ModuleSource module_source_of(const lower::ModuleAst& ast) {
     sema::ModuleSource out;
     out.label = ast.label;
     out.defs = ast.defs;
+    out.dot_units = ast.dot_units;
     out.top_vars = ast.top_vars;
     out.extern_libs = ast.extern_libs;
     out.source_name = ast.source_name;

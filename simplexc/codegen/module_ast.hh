@@ -38,6 +38,10 @@ struct AliasDecl {
 struct ModuleAst {
     const FunctionDef* label = nullptr;          /* 程序根（`form == "label"`）；空 → CompileFail */
     std::vector<const FunctionDef*> defs;        /* 顶层 def */
+    /* `dot <名字>($接收者: T, …) R { … }` 方法单元（`form == "dot"`）。这种头不是 `def`，
+     * 声明扫描（`frontend/decls.cc` 的 `match_def`）看不到它 —— 由 `module_build.cc` 的
+     * `collect_dot_units` 从源码行里切出来。 */
+    std::vector<const FunctionDef*> dot_units;
     std::vector<const VarDeclStmt*> top_vars;    /* 顶层 var / const / let */
     std::vector<EnumDecl> enums;
     std::vector<StructDecl> structs;

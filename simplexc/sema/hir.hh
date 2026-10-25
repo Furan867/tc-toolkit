@@ -198,8 +198,13 @@ struct HNode {
 enum class HPreBody { None, GetTime, Sleep, MemoryClear, MemoryCopy, ThreadExit };
 
 struct HParam {
+    /* 裸名：源码的 `$name` 里 `$` 不是名字的一部分（「这个存储会被改」的标记），sema 在建 HParam
+     * 时就剥掉 —— 体内一律写裸名（`res-sugar` 报告的 13 处无一例外）。 */
     std::string name;
     TyRef ty;
+    /* 源码写成 `$name` 的形参：**按引用**。codegen 把它变成一个指针形参，体内读写都落在
+     * 调用者的存储上（别名，不是拷贝 + 写回）。 */
+    bool by_ref = false;
 };
 
 struct HCapture {

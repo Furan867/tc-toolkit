@@ -1155,7 +1155,7 @@ LLVMValueRef Codegen::ensure_func(int index) {
         if (hit != nested_fnrefs_.end()) return hit->second;
     }
     std::vector<LLVMTypeRef> ptypes;
-    for (const sema::HParam& p : f.params) ptypes.push_back(val_ll(*p.ty));
+    for (const sema::HParam& p : f.params) ptypes.push_back(p.by_ref ? ptr_ : val_ll(*p.ty));
     for (std::size_t j = 0; j < f.caps.size(); ++j) ptypes.push_back(ptr_);
     LLVMTypeRef rty = f.ret->kind == TyKind::Void ? void_ty_ : val_ll(*f.ret);
     const std::string gname = symbol_of(f);
@@ -1174,6 +1174,13 @@ LLVMValueRef Codegen::ensure_func(int index) {
     for (std::size_t i = 0; i < f.params.size(); ++i) {
         const std::string& pname = f.params[i].name;
         const TyRef& ty = f.params[i].ty;
+        if (f.params[i].by_ref) {
+            /* 传引用形参：形参就是这个**指向调用者存储**的指针，不再开槽、不再 store——
+             * 体内每一次读/写（`e_local` / `lvalue`）都直接落在调用者那边，所以是别名语义，
+             * 不是拷贝 + 写回（两者在「写完再读」上不等价）。 */
+            bind_root_scope(pname, Binding::local(LLVMGetParam(fnref, static_cast<unsigned>(i)), ty));
+            continue;
+        }
         LLVMValueRef a = alloca_slot(ty, pname);
         store_addr(a, V::instr(LLVMGetParam(fnref, static_cast<unsigned>(i)), ty), ty,
                    f.body.span.line);
@@ -1205,7 +1212,12 @@ V Codegen::call_func(const sema::HNode& node) {
     LLVMValueRef fnref = ensure_func(idx);
     std::vector<LLVMValueRef> vals;
     for (std::size_t i = 0; i < node.kids.size(); ++i) {
-        /* 实参已经是形参类型（sema 在调用点发了 `Cast`；捕获指针另算，见下）。 */
+        /* 实参已经是形参类型（sema 在调用点发了 `Cast`；捕获指针另算，见下）。传引用形参
+         * （`$x`）没有值：发它的**地址**（`sema` 已经把实参降成了左值节点）。 */
+        if (i < f.params.size() && f.params[i].by_ref) {
+            vals.push_back(lvalue(node.kids[i]).first);
+            continue;
+        }
         const V arg = e(node.kids[i]);
         vals.push_back(arg.ty->kind == TyKind::Struct ? arg.ll : llv(arg));
     }

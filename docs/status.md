@@ -48,12 +48,13 @@ verdict **带 `--src`**，只比 `[game_lo, game_hi)`。旧口径比全内存，
 
 - **069 / 080 跑不起来**：都指向 `0x40800000`（`kStackBase + kStackSize`，栈区上界外一页）。
   069 是 LLVM 内联的 memcpy 向量循环读越界（`rsp` 只在栈顶下 16 KB，不是栈溢出）；080 是重复映射。
-- **5 份真差异**：028(124 B) / 034(198) / 084(30) / 096(30) / 098(29)。096/098 是已知的随机流错位，
-  差 34 次抽取（`docs/bugs/2026-10-25-random-stream-offset.md`）。
-- 17 份 `cli_fail` 是刻意不做的三类（`hex` / `str` / `bin`）。
+- **5 份真差异**：028(124 B) / 034(198) / 084(30) / 096(30) / 098(29)。
+  - **028 的根因已查明**（`430c46c`）：**与 stdlib 开关无关**。参考对 `str` 按**静态类型分派**
+    （实测 `str(false)` → `"false"`、`str(U3 0)` → `"0"`），而 `pick_def` 在 7 个 `def str` 里只分
+    「泛型 / 非泛型」两档、档内按声明序，于是 `str(U3 0)` 挑成了 `str(Bool)`。
+  - 096/098 是随机流错位，差 34 次抽取（`docs/bugs/2026-10-25-random-stream-offset.md`）。
+  - 034 / 084 未查。
 - `thread_exit.1` 符号碰撞（`docs/bugs/`）：隐式收尾与前缀的 `def thread_exit` 同名。
-- `_virtual_alloc` / `_virtual_free` / `_get_system_time_precise_as_file_time` 三个名字在 kernel32 /
-  ucrtbase / msvcrt 里都没有导出（要名字归一化，规则本体没见过）。
 - runtime 整块链接：不用 `array()` 的语料也带 `tc_array_alloc` 的 200 B + 一个 `__imp_VirtualAlloc` 槽。
 
 ## 环境

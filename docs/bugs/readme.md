@@ -23,3 +23,4 @@
 | 文件 | 状态 | 一句话 |
 | --- | --- | --- |
 | `2026-10-25-random-stream-offset.md` | 未修 | 096/098 的随机流错位 34 次抽取，tick 37 首次可观测 |
+| `2026-10-25-thread-exit-collision.md` | 未修 | 隐式收尾与前缀的 `def thread_exit` 同名，撞出 `thread_exit.1` |

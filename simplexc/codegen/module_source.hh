@@ -30,6 +30,9 @@ inline sema::ModuleSource module_source_of(const lower::ModuleAst& ast) {
     for (const lower::StructDecl& s : ast.structs) {
         out.structs.push_back(sema::StructSource{s.name, s.fields});
     }
+    for (const lower::AliasDecl& a : ast.aliases) {
+        out.aliases.push_back(sema::AliasSource{a.name, a.target});
+    }
     return out;
 }
 

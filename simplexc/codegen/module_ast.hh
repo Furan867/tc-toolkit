@@ -29,12 +29,19 @@ struct EnumDecl {
     std::vector<std::string> members;   /* 按声明序 = 序号（sema 把它们当整数常量） */
 };
 
+/* `type X <类型拼写>`：右手是源码拼写（`U64` / `Arr[Char]`），解析在 sema。 */
+struct AliasDecl {
+    std::string name;
+    const TypeRef* target;
+};
+
 struct ModuleAst {
     const FunctionDef* label = nullptr;          /* 程序根（`form == "label"`）；空 → CompileFail */
     std::vector<const FunctionDef*> defs;        /* 顶层 def */
     std::vector<const VarDeclStmt*> top_vars;    /* 顶层 var / const / let */
     std::vector<EnumDecl> enums;
     std::vector<StructDecl> structs;
+    std::vector<AliasDecl> aliases;
     std::string source_name;                     /* 只进报错文本 */
 };
 

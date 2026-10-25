@@ -1379,15 +1379,17 @@ V Codegen::builtin_array(const sema::HNode& node) {
         throw CompileError{Responsibility::Unimplemented, Stage::Codegen, Span{node.span.line}, "array(<T>, n) 的形态"};
     }
     const TyRef& elem = node.ty->elem;
-    auto count_opt = pat_const(e(node.kids[0]));
-    if (!count_opt) throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度不是常量"};
-    const uint64_t count = *count_opt;
-    if (count > (uint64_t{1} << 32)) {
-        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度 " + std::to_string(count) + " 太大"};
-    }
+    /* 长度可以是运行期值（前缀的 `array(<U64>, a.len())`）：求值顺序与常量路径逐句相同 ——
+     * 常数那次产物逐字节不变是主判据（`blob_baseline`），多发一条指令都不行。 */
+    V count_v = e(node.kids[0]);
+    const std::optional<uint64_t> count_opt = pat_const(count_v);
     const uint64_t elem_bytes = static_cast<uint64_t>(storage_bytes(*elem, node.span));
+    if (count_opt && *count_opt > (uint64_t{1} << 32)) {
+        throw CompileError{Responsibility::UserSource, Stage::Codegen, Span{node.span.line}, "array 的长度 " + std::to_string(*count_opt) + " 太大"};
+    }
     LLVMValueRef fn = get_extern("tc_array_alloc", ty_ptr(), {ty_i64(), ty_i64()});
-    LLVMValueRef p = emit_call(fn, {const_int(count), const_int(elem_bytes)});
+    LLVMValueRef count = count_opt ? const_int(*count_opt) : llv(count_v);
+    LLVMValueRef p = emit_call(fn, {count, const_int(elem_bytes)});
     return V::instr(p, make_array(elem));
 }
 

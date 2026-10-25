@@ -39,12 +39,19 @@ struct EnumSource {
     std::vector<std::string> members;
 };
 
+/* 一个 `type X <类型拼写>` 别名：右手仍是源码拼写，按**用点**解（所以不看声明顺序）。 */
+struct AliasSource {
+    std::string name;
+    const TypeRef* target;
+};
+
 struct ModuleSource {
     const FunctionDef* label = nullptr;  /* 程序根（`run_sim:`，`form == "label"`）；空 → `CompileError{OurBug,…}` */
     std::vector<const FunctionDef*> defs;
     std::vector<const VarDeclStmt*> top_vars;  /* 顶层 var / const，按源码顺序 */
     std::vector<EnumSource> enums;
     std::vector<StructSource> structs;
+    std::vector<AliasSource> aliases;
     std::string source_name;                   /* 只进报错文本 */
 };
 

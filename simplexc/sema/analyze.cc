@@ -546,6 +546,10 @@ struct Module {
     std::map<std::string, TyRef> enums;                      /* 枚举类型名 → 类型 */
     std::map<std::string, std::pair<std::string, int>> enum_member; /* 成员 → (枚举, 序号) */
     std::map<std::string, StructLayout> structs;             /* struct 名 → 布局 */
+    /* `type X <拼写>` 别名：名字 → 右手的拼写。只登记不立刻解 —— 右手可能引用后声明的类型；
+     * 解析结果按名字备一份（`alias_ty`）。 */
+    std::map<std::string, const TypeRef*> aliases;
+    std::map<std::string, TyRef> alias_ty;
     std::map<std::pair<std::string, bool>, int> string_ids;  /* (字节, cstring) → 串池下标 */
     /* `in_scope` 的 ① 档：整单元预扫的名字表（`lower.cc` 的 `mod_->in_scope_names`）。必须在任何剪枝
      * 之前建好，而且只能看**未经裁剪的** AST（U-L14 的 F1/F2）。 */
@@ -585,8 +589,9 @@ private:
     int intern_string(const std::string& bytes);
 
     /* ---- 类型 */
-    TyRef ty_of_name(const std::string& name, int line);
-    TyRef ty_of_ref(const TypeRef& ref, int line);
+    /* `depth` 只给别名右手用（现有调用点不改）：`type A B`/`type B A` 这种互指靠它停住。 */
+    TyRef ty_of_name(const std::string& name, int line, int depth = 0);
+    TyRef ty_of_ref(const TypeRef& ref, int line, int depth = 0);
     TyRef unify(const TyRef& a, const TyRef& b, int line);
     TyRef arith_ty(const HNode& a, const HNode& b, int line);
 
@@ -756,6 +761,8 @@ void Analyzer::make_types(const ModuleSource& src) {
         mod_->hir.structs.push_back(HirStruct{d.name, lay.ty->bits, lay.fields});
         mod_->structs[d.name] = std::move(lay);
     }
+    /* 别名只登记名字 → 右手拼写，不在这里解：右手可能指向后声明的 struct/枚举（按用点解，见 `ty_of_name`）。 */
+    for (const AliasSource& d : src.aliases) mod_->aliases[d.name] = d.target;
 }
 
 /* `in_scope` ① 档的整单元预扫（`lower.cc` 的 `scan_scope_names`）。名字表取**未经 `in_scope`
@@ -887,8 +894,11 @@ HNode Analyzer::const_decl_value(const VarDeclStmt& decl) {
 /* ---------------------------------------------------------------- 类型 */
 
 /* `lower.cc` 的 `ty_of_name`。`mod_->enums` / `mod_->structs` 的查表位置与它一致（在 `U*`/`S*` 数字档
- * 之前）—— 枚举/struct 名与位宽拼写不能混。 */
-TyRef Analyzer::ty_of_name(const std::string& name, int line) {
+ * 之前）—— 枚举/struct 名与位宽拼写不能混。
+ * 别名（`type X <拼写>`）放在内建名之后：内建同名（`Str`/`Ptr`/`Time`/`Seed`…）必须继续拿到自己的
+ * 名义类型 —— `Str` 是 `TyKind::Str` 而不是 `Arr[Char]`，`Ptr` 是 `TyKind::Ptr` 而不是 `U64`，
+ * 改了这两条字符串/指针的语义就全变（stdlib 里这六个别名与内建名逐个重叠，见 log）。 */
+TyRef Analyzer::ty_of_name(const std::string& name, int line, int depth) {
     if (!name.empty() && name[0] == '@') throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "编译期类型参数 " + name};
     if (name == "Int") return ty_i64();
     if (name == "Uint" || name == "Sint") return ty_i64(); /* 重载族约束（接口 §1） */
@@ -898,6 +908,18 @@ TyRef Analyzer::ty_of_name(const std::string& name, int line) {
     if (name == "Time") return ty_time();
     if (name == "Seed") return ty_seed();
     if (name == "None" || name == "Void") return ty_void();
+    const auto al = mod_->aliases.find(name);
+    if (al != mod_->aliases.end()) {
+        const auto memo = mod_->alias_ty.find(name);
+        if (memo != mod_->alias_ty.end()) return memo->second;
+        if (depth >= 64) {
+            throw CompileError{Responsibility::UserSource, Stage::Sema, Span{line},
+                               "类型别名 " + name + " 自引用或套得太深（超过 64 层）"};
+        }
+        const TyRef t = ty_of_ref(*al->second, line, depth + 1);
+        mod_->alias_ty[name] = t;
+        return t;
+    }
     if (mod_->enums.count(name) != 0) return mod_->enums.at(name);
     if (mod_->structs.count(name) != 0) return mod_->structs.at(name).ty;
     if ((name[0] == 'U' || name[0] == 'S') && name.size() > 1) {
@@ -916,13 +938,13 @@ TyRef Analyzer::ty_of_name(const std::string& name, int line) {
     throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "类型 " + name};
 }
 
-TyRef Analyzer::ty_of_ref(const TypeRef& ref, int line) {
+TyRef Analyzer::ty_of_ref(const TypeRef& ref, int line, int depth) {
     if (ref.at) throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "编译期类型参数 " + ref.name};
     if (ref.elem != nullptr) {
         if (ref.name != "Arr") throw CompileError{Responsibility::Unimplemented, Stage::Sema, Span{line}, "泛型类型 " + ref.name + "[…]"};
-        return make_array(ty_of_ref(*ref.elem, line));
+        return make_array(ty_of_ref(*ref.elem, line, depth));
     }
-    return ty_of_name(ref.name, line);
+    return ty_of_name(ref.name, line, depth);
 }
 
 /* `lower.cc` 的 `unify` 逐行照搬（含每一条错误文本）。 */
@@ -1641,23 +1663,25 @@ HNode Analyzer::call_minmax(HBuiltin id, const CallExpr& node) {
 }
 
 /* `lower.cc` 的 `builtin_array`：`array(<T>, n)` 的值是「指向载荷的指针」，载荷前 8 字节是
- * `n << 16` 的头、载荷零初始化 —— 这些都归 codegen（每调用点一枚私有全局）。sema 只给
- * 「元素类型 + 长度（已折成常量）」：`ty` = `Arr[T]`，kids = `[Const n]`。
- * 长度必须是编译期常量（`builtin_array` 走 `need_const(cv(…))` 同一条口径）。 */
+ * `n << 16` 的头、载荷零初始化 —— 这些都归 codegen。sema 只给「元素类型 + 长度」：
+ * `ty` = `Arr[T]`，kids = `[长度]`（常量就是 `Const`，否则是 i64 的表达式）。
+ * 长度**不必**是编译期常量：前缀的 `big_int_add` 写的就是 `array(<U64>, a.len())`，
+ * 而参考的分配本来就发生在运行期（`tc_array_alloc(n, …)` 的 n 由运行期算）。 */
 HNode Analyzer::call_array(const CallExpr& node) {
     if (node.type_args.size() != 1 || node.args.size() != 1) {
         unimplemented("array(<T>, n) 的形态", node.src_line);
     }
     const TyRef elem = ty_of_ref(*node.type_args[0], node.src_line);
     const std::optional<HNode> n = const_value(*node.args[0]);
-    if (!n.has_value() || n->kind != HKind::Const) {
-        unimplemented("array(<T>, n) 的长度不是编译期常量", node.src_line);
-    }
-    if (n->const_bits > (uint64_t{1} << 32)) {
-        unimplemented("array 的长度 " + std::to_string(n->const_bits) + " 太大", node.src_line);
+    if (n.has_value() && n->kind == HKind::Const) {
+        if (n->const_bits > (uint64_t{1} << 32)) {
+            unimplemented("array 的长度 " + std::to_string(n->const_bits) + " 太大", node.src_line);
+        }
+        return builtin_node(HBuiltin::Array, make_array(elem),
+                            {const_node(ty_i64(), n->const_bits, node.src_line)}, node.src_line);
     }
     return builtin_node(HBuiltin::Array, make_array(elem),
-                        {const_node(ty_i64(), n->const_bits, node.src_line)}, node.src_line);
+                        {convert(e(*node.args[0]), ty_i64(), node.src_line)}, node.src_line);
 }
 
 /* `lower.cc` 的 `builtin_random`：状态就是前缀的 `var global_seed = Seed 1`（语料自己会写

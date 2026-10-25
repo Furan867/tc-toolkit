@@ -167,6 +167,12 @@ bool match_type(const std::string& s, std::string& name, std::string& kw) {
     kw = "Struct";
     return true;
   }
+  /* 剩下的形态是 `type X <类型拼写>`（别名）：右手拼写由 `scan_type` 切，这里只判「名字后面
+     还有东西」。`type X` 后面空着的仍然算看不懂的一行 —— 那是拼错，不给别名兜底。 */
+  if (m < s.size()) {
+    kw = "alias";
+    return true;
+  }
   return false;
 }
 
@@ -199,6 +205,27 @@ bool match_var(const std::string& s, std::string& name) {
   std::size_t m = end;
   while (m < s.size() && is_hspace(s[m])) ++m;
   return m < s.size() && s[m] == '=';
+}
+
+/* `call_conv x86_64 windows_x64 (` 与 `extern windows_x64 kernel32`：两条**元数据声明**，
+   说的是外部符号的 ABI 与所在的库。名字取第二个词（约定名 / 库名）。 */
+bool match_two_word_decl(const std::string& s, const char* kw, std::string& name) {
+  const std::size_t len = std::string(kw).size();
+  std::size_t i = skip_indent(s);
+  if (s.compare(i, len, kw) != 0 || !word_boundary(s, i + len)) return false;
+  i += len;
+  const std::size_t after_kw = i;
+  while (i < s.size() && is_hspace(s[i])) ++i;
+  if (i == after_kw) return false;
+  std::size_t end = 0;
+  if (eat_word(s, i, end) == kNone) return false; /* 第一个词（架构 / 调用约定） */
+  const std::size_t after_first = end;
+  i = end;
+  while (i < s.size() && is_hspace(s[i])) ++i;
+  if (i == after_first) return false;
+  if (eat_word(s, i, end) == kNone) return false;
+  name = s.substr(i, end - i);
+  return true;
 }
 
 bool match_label(const std::string& s, std::string& name) {
@@ -290,6 +317,27 @@ bool match_decl(const std::string& code, const std::string& raw, int ln_no, int 
   }
 
   if (!at_decl_level) return false;
+
+  /* 元数据声明：认得形状就收（不产出代码），不认得的词照样落进「未支持的顶层构造」。 */
+  std::string conv_name;
+  if (match_two_word_decl(code, "call_conv", conv_name)) {
+    out = Decl{};
+    out.kind = "callconv";
+    out.name = conv_name;
+    out.lo = ln_no;
+    out.depth = depth;
+    out.enclosing = enclosing;
+    return true;
+  }
+  if (match_two_word_decl(code, "extern", conv_name)) {
+    out = Decl{};
+    out.kind = "extern";
+    out.name = conv_name;
+    out.lo = ln_no;
+    out.depth = depth;
+    out.enclosing = enclosing;
+    return true;
+  }
 
   std::string tname, tkw;
   if (match_type(code, tname, tkw)) {
@@ -418,6 +466,12 @@ ScanResult scan(const std::vector<std::string>& code_lines,
   int bracket = 0;               /* 未闭合 '[' 的个数 */
   std::vector<int> open_braces;  /* 未闭合 '{' 所在行号 */
   std::vector<int> open_decls;   /* 已开体、还没收口的声明下标 */
+  /* `call_conv … (` / `extern … (` 的括号体（arguments / save_restore 那几张表）在顶层跨行，
+     里面的行既不是声明也不是语句 —— 不算进声明的行范围就会被当成「未支持的顶层构造」。
+     只对这两种元数据声明开这条路：别的声明（def/const/var/type/label）的括号配平已经有
+     `inspect_defs` 在管，把那里的括号也算进来会改已有语料的 hi 与可达性。 */
+  bool paren_body = false;
+  int paren = 0;
 
   for (std::size_t li = 0; li < code_lines.size(); ++li) {
     const int ln_no = static_cast<int>(li) + 1;
@@ -427,6 +481,7 @@ ScanResult scan(const std::vector<std::string>& code_lines,
 
     Decl started;
     const bool hit = match_decl(code, raw, ln_no, d0, res.decls, open_decls, started);
+    if (hit && d0 == 0 && (started.kind == "callconv" || started.kind == "extern")) paren_body = true;
 
     /* 花括号配平（字面量与注释已被掩码，所以只剩结构性的 {}）；
        '[' 一起算，因为 `type Char Enum[` 的成员表就跨好几行 —— 不算的话那段成员行
@@ -447,6 +502,10 @@ ScanResult scan(const std::vector<std::string>& code_lines,
         ++bracket;
       } else if (ch == ']' && bracket > 0) {
         --bracket;
+      } else if (paren_body && ch == '(') {
+        ++paren;
+      } else if (paren_body && ch == ')' && paren > 0) {
+        --paren;
       }
     }
 
@@ -462,18 +521,19 @@ ScanResult scan(const std::vector<std::string>& code_lines,
           }
         }
       }
-      if (depth > d0 || bracket > 0) {
+      if (depth > d0 || bracket > 0 || paren > 0) {
         open_decls.push_back(idx);
       } else {
         res.decls[idx].hi = ln_no;
       }
     }
 
-    /* 收口：本行结束后回到（或越过）声明起始深度、且 '[' 也配平了的，说明体已闭合 */
-    while (!open_decls.empty() && bracket == 0 &&
+    /* 收口：本行结束后回到（或越过）声明起始深度、且 '[' 与括号体也配平了的，说明体已闭合 */
+    while (!open_decls.empty() && bracket == 0 && paren == 0 &&
            depth <= res.decls[open_decls.back()].depth) {
       res.decls[open_decls.back()].hi = ln_no;
       open_decls.pop_back();
+      paren_body = false;
     }
 
     /* 未支持：声明层上既不是声明、也不是单独的闭合括号/空行/注释 */

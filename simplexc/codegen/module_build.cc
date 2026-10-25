@@ -79,10 +79,53 @@ std::unique_ptr<TypeRef> make_type_ref(const std::string& word, int line) {
   return t;
 }
 
-/* `type X Enum [A, B, C]` 与 `type X Struct { f: T, g: U }` —— 生成代码子集里只有这两种。 */
+/* 别名右手的类型拼写：`U64` / `@Size` / `Arr[Char]` / `Arr[Arr[U8]]`。
+ * 与 `make_type_ref` 的区别：那个吃一个词，这个按 `Arr[…]` 递归到闭环。 */
+std::unique_ptr<TypeRef> parse_type_spelling(const std::string& s, size_t& i, int line) {
+  i = skip_ws(s, i);
+  auto t = std::make_unique<TypeRef>();
+  t->src_line = line;
+  if (i < s.size() && s[i] == '@') {
+    t->at = true;
+    ++i;
+  }
+  t->name = read_ident(s, i);
+  if (t->name.empty()) {
+    throw CompileError{Responsibility::UserSource, Stage::Parse, Span{line}, "类型别名缺右手的类型：" + s};
+  }
+  i = skip_ws(s, i);
+  if (i < s.size() && s[i] == '[') {
+    ++i;
+    t->elem = parse_type_spelling(s, i, line);
+    i = skip_ws(s, i);
+    if (i >= s.size() || s[i] != ']') {
+      throw CompileError{Responsibility::UserSource, Stage::Parse, Span{line}, "类型别名的 '[' 没闭合：" + s};
+    }
+    ++i;
+  }
+  return t;
+}
+
+/* `type X Enum [A, B, C]` / `type X Struct { f: T, g: U }` / `type X <类型拼写>`。 */
 void scan_type(const std::vector<std::string>& code_lines, const Decl& d, OwnedModule& out) {
   const JoinedDecl joined = join_lines(code_lines, d.lo, d.hi);
   const std::string& text = joined.text;
+  if (d.note == "alias") {
+    size_t i = skip_ws(text, 0);
+    read_ident(text, i); /* `type` */
+    i = skip_ws(text, i);
+    read_ident(text, i); /* 别名自己 */
+    AliasDecl a;
+    a.name = d.name;
+    a.target = out.keep_type(parse_type_spelling(text, i, d.lo));
+    i = skip_ws(text, i);
+    if (i < text.size()) {
+      throw CompileError{Responsibility::UserSource, Stage::Parse, Span{d.lo},
+                         "类型别名 " + d.name + " 的右手后面还有东西：" + text.substr(i)};
+    }
+    out.ast.aliases.push_back(a);
+    return;
+  }
   if (d.note == "Enum") {
     const size_t lb = text.find("Enum");
     const size_t l = lb == std::string::npos ? std::string::npos : text.find('[', lb);
@@ -234,6 +277,14 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
     } else if ((d.kind == "var" || d.kind == "const") && d.depth == 0) {
       out.vars.push_back(parse_top_var(fe, d));
       out.ast.top_vars.push_back(out.vars.back().get());
+    } else if (d.kind == "callconv" || d.kind == "extern") {
+      /* 元数据声明：`call_conv x86_64 windows_x64 (…)` 与 `extern windows_x64 kernel32`。
+       * 它们不产出任何代码，我们的后端也还没有外部符号这一层（`kernel32.'ExitProcess'(…)`
+       * 这类调用在解析阶段就会掊不住）—— 所以**不当作已支持**，只留痕。
+       * 注意：能走到这一行说明那个 extern 函数没被调用（被调用的语句在解析/语义阶段就会报）；
+       * 所以留痕是「声明本身没进产物」，不是「语义被悄悄改了」。 */
+      out.notes.push_back(d.kind + " '" + d.name + "'（第 " + std::to_string(d.lo) +
+                          " 行）已认形状但未产出代码：外部符号/ABI 这一层还没接");
     }
   }
   out.ast.source_name = std::move(source_name);

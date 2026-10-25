@@ -2006,7 +2006,11 @@ V Codegen::array_literal(const sema::HNode& node) {
     /* 载荷前必须带 8 字节 Nim 头（`p[-8] = len << 16`，读法见 `len_of` 与 facts §数组/字符串布局）：
      * 少了它，`.len()` 那条越界的**常量** `load` 在 O2 里是 undef，靠它判分支的整条 `if`
      * 会被折掉 —— 实测 008 的 `check_output` 因此恒返回 fail（`docs/notes/2026-10-18-test-result-chain.md`）。
-     * 头低 16 位是 log2 容量，静态数据取 0（与 `array(<T>, n)` / `empty_array` 同口径）。 */
+     * 头低 16 位是 log2 容量，静态数据取 0（与 `array(<T>, n)` / `empty_array` 同口径）。
+     *
+     * 这枚全局**不能**是 `LLVMGlobalConstant`：数组值是可写的（`var a = [0,0]; a[1] = 5`），
+     * 参考那边字面量求值出来是一枚新 seq。加了常量属性就是「写只读内存」，O2 把写丢掉、把
+     * `load` 折成初始化式 —— 写后读回初始值（096/098/100 的 `registers[3]` 恒为 0）。 */
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     const uint64_t header = elems.size() << 16;
     std::vector<LLVMValueRef> head;
@@ -2015,10 +2019,10 @@ V Codegen::array_literal(const sema::HNode& node) {
     LLVMTypeRef payload_ty = LLVMArrayType2(el, elems.size());
     LLVMTypeRef fields[2] = {head_ty, payload_ty};
     LLVMTypeRef sty = LLVMStructTypeInContext(ctx(), fields, 2, 0);
-    const std::string gname = ".arr" + std::to_string(node.span.line);
+    const std::string gname =
+        ".arr" + std::to_string(node.span.line) + "_" + std::to_string(array_serial_++);
     LLVMValueRef g = LLVMAddGlobal(module(), sty, gname.c_str());
     LLVMSetLinkage(g, LLVMPrivateLinkage);
-    LLVMSetGlobalConstant(g, 1);
     LLVMValueRef parts[2] = {LLVMConstArray2(i8, head.data(), head.size()),
                              LLVMConstArray2(el, elems.data(), elems.size())};
     LLVMSetInitializer(g, LLVMConstStructInContext(ctx(), parts, 2, 0));

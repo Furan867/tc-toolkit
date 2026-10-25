@@ -1,0 +1,16 @@
+// 局部数组**字面量**是可写内存：`var a = [0, 0, 0, 0]; a[1] = 5` 之后 `a[1]` 必须读到 5。
+// 参考那边字面量求值出来是一枚可写的 seq；我们把载荷放成私有全局，一旦给它加
+// `LLVMGlobalConstant` 属性就成了「写只读内存」—— O2 把写丢掉、把 `load` 折成初始化式，
+// 写后读回初始值（实测：096/098/100 的 `registers[3]` 恒为 0，见
+// `work/tmp/regarray/notes.md`）。所以这条用例断言的是**那枚全局不带 `constant`**，
+// 以及常量下标写、动态下标写（步长 8 = 元素宽度）都落到字面量那块内存上。
+// 期望见 `11-local-array-literal.irkeys`。
+run_sim: while true {
+  var a = [0, 0, 0, 0]
+  a[1] = 5
+  var i = 2
+  a[i] = 7
+  let v = a[1] + a[i]
+  store(U64 4104, U64 v)
+  break
+}

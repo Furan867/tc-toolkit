@@ -81,3 +81,23 @@ COFF 对象文件里 `.bss` 是 `SizeOfRawData=N / PointerToRawData=0` —— �
 （status / blob_len / entry / stub_count / norm_sha256 / stubs_sha256），`raw_sha256` 只记不比；
 反向对照：改 1 个非槽字节 → 恰好命中 1 份并报出字节区间，改槽内字节 → 仍判等。
 最后验证：2026-10-24
+
+### switch 降成**相对表**，产物里没有绝对地址表
+
+LLVM 的 `SimplifyCFG` 在 O2 里会把「每个 case 各存一个指针/字符串」降成查表。降成哪一种取决于
+`case` 块能不能合并成「一条 store」：
+
+- 能合并 ⇒ 绝对表 `@switch.table = [N x ptr]`（存 8 字节绝对地址）⇒ COFF 里出 `ADDR64`(0x01)
+  重定位。产物被拷到编译期未知的 JIT 基址，**装得出但跑不了**。
+- 不能合并 ⇒ 相对表 `@switch.table.rel = [N x i32]` + `llvm.load.relative` ⇒ 产物是
+  `lea table(%rip) ; movslq (%rt,%ri,4) ; add %rt`，表在 `.text` 内、**零重定位**。
+
+`str_concat` / `template_expr` 的缓冲改走堆（`0c2b498`）之后，case 块不再是一条 store 可合并的
+形状，LLVM 自己挑了相对表 —— 142 号关卡因此从「装得出跑不了」变成能跑。**所以「形状」不是唯一
+变量，别从等价 C 的形状反推 pass 行为**（上一轮猜过「必须 phi + 一次 store 才走相对表」，被推翻）。
+
+`assemble` 侧对 `ADDR64` 留了兜底分支（填 `S + A`，即 blob 内偏移）：它只是让症状落到运行期
+而不是卡在装配，不代表支持。98 份语料的 `.obj` 里 `ADDR64` 总数是 0。
+验证：`objdump -r <obj> | grep -c ADDR64`；142 的产物 `objdump -d` 应见 `lea/movslq/add` 三连、
+`.rdata` 无 RELOC；`difftrace run --src <含字符串 switch 的 .si> --bin <产物> --target 60` 应 ok
+最后验证：2026-10-25

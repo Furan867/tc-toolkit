@@ -274,7 +274,7 @@ def mapped_region(addr):
 def detour_name(symbol):
     """sidecar 里的符号名 → detour 表里的名字：`__imp_X` 要去掉前缀。
 
-    与 `cli/tcblob.cc` 的 `Kernel32Resolver::resolve` 同一规则 —— 两处不一致会让
+    与 `cli/tcblob.cc` 的 `Win32Resolver::resolve` 同一规则 —— 两处不一致会让
     「同一个符号一半命中一半不命中」，那种错极难查。
     """
     return symbol[6:] if symbol.startswith("__imp_") else symbol

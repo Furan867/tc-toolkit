@@ -1,0 +1,687 @@
+#!python3
+"""M5 S3：98 份语料的并行差分驱动 —— 一份语料一行，回答「装得出来吗 / 终态等价吗」。
+
+每份做四步（后三步只在装配成功后才做）：
+
+  1. **装配**：`build/simplexc_cli.exe --src <si> --out <blob>`（产物旁会有 `.entry` / `.stubs`）。
+     失败记 `cli_fail` + 原始错误首行；超过 `--cli-timeout` 记 `cli_fail(timeout)`，不重试。
+  2. **参考侧跑**：`difftrace run --bin corpus/ref/<id>.bin --save <ref.seq>`。
+  3. **我们侧跑**：`difftrace run --bin <blob> --save <ours.seq>`（entry 由 `<blob>.entry` 自动定）。
+  4. **比终态**：`difftrace diff --state <ref.seq> <ours.seq>` —— 退出码 0=equal / 1=diff / 2=错误。
+
+判据口径（2026-10-25 负责人定）：verdict 取**不传 `--src`** 的那次 diff，即 `diff_bytes_raw`。
+`--src` 会按 `Spec::regions()` 过滤，而这一批语料的 `.si` 里**没有 `memory_copy`**、游戏状态
+（`#SIMULATION_STATE` 那一段）落在退化成单点 `(a,a)` 的标量上 —— 过滤会把两边**全部**写丢掉，
+比出平凡的 equal（实测 001：放弃 A 719797 / B 83465 条，留下 0 / 0）。所以带 `--src` 的那次仍然跑，
+但只用来留 `src_kept_a` / `src_kept_b` 两列当证据：0/0 就是「这个过滤器在这批语料上是空的」。
+
+`first_diff_tick` 恒为 `n/a`：逐 tick 要 `--tick-mark`（每 tick 写一次的地址，98 份各不相同），
+按上面的口径不传，difftrace 只报终态。差异的定位信息仍给：`first_diff_addr` + 按地址段分的字节数
+（`diff_stack` / `diff_code` / `diff_game`，段界见 `classify_addr`）。
+
+并发：`--jobs` 走 `ProcessPoolExecutor`，每份一个子进程；子进程里顺序起三个 exe（`uc_engine` 每进程一个、
+无共享状态）。main 进程只汇总与落盘，**每完成一份就重写 TSV**（中断可续跑，`--resume` 跳过已完成的）。
+`.seq` 是逐条 store 的原始序列（100 tick 的语料约 20 MB/侧），`equal` 的行跑完就删，`diff` / `host_fail`
+的行留着给 `difftrace where` 定位。
+
+    python simplexc/tools/m5/batch.py --limit 3 --jobs 1     # 验脚本
+    python simplexc/tools/m5/batch.py --jobs 12              # 全量 98 份
+    python simplexc/tools/m5/batch.py --jobs 12 --resume     # 中断后接着跑
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import struct
+import subprocess
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import NoReturn
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+TOOLS = os.path.dirname(HERE)                                 # simplexc/tools/
+SIMPLEXC = os.path.dirname(TOOLS)                             # simplexc/
+ROOT = os.path.dirname(SIMPLEXC)                              # reversing/
+
+CLI = os.path.join(ROOT, "build", "simplexc_cli.exe")
+DIFFTRACE = os.path.join(ROOT, "build", "difftrace.exe")
+MANIFEST = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
+REF_DIR = os.path.join(SIMPLEXC, "corpus", "ref")
+
+DEFAULT_OUT_DIR = os.path.join(ROOT, "work", "tmp", "m5batch")
+MAX_JOBS = 12                     # difftrace README 的实测：16 路只比 12 路快 7%，多占 1.75 GB
+
+# `run` 一次要装配 291 MB guest 映射 + 灌 142 MB `RESET_DATA`，100 tick 的语料约 0.5 s；
+# 跑到这个数就是卡住了（不是慢），按 host_fail 记，别把整轮拖死。
+RUN_TIMEOUT = 900.0
+DIFF_TIMEOUT = 900.0
+
+STATUS_EQUAL = "equal"
+STATUS_DIFF = "diff"
+STATUS_CLI_FAIL = "cli_fail"
+STATUS_HOST_FAIL = "host_fail"
+
+# 地址段（difftrace 的 `driver.cc` kStackBase/kStackSize 与 `image.hh` kCodeBase）：
+# 栈区两边栈帧布局本来就不一样，代码区镜像里各产物自己的全局也各有各的 —— 差异落在这些段里
+# 与落在游戏内存里，含义完全不同，所以按段分开数（不是判据，判据是 `diff_bytes_raw`）。
+# 栈 = kStackBase + kStackSize（8 MB）；代码 = kCodeBase 起 16 MB（产物镜像 ≪ 16 MB，
+# 这条带只用来把「写进自己镜像的字节」跟游戏内存分开）。
+STACK_LO, STACK_HI = 0x4000_0000, 0x4080_0000
+CODE_LO, CODE_HI = 0x1000_0000, 0x1100_0000
+
+TSV_COLUMNS = ["id", "status", "ticks", "seed", "cli_rc", "cli_ms", "blob_bytes", "entry",
+               "stores_ref", "stores_ours", "diff_bytes_raw", "diff_stack", "diff_code",
+               "diff_game", "diff_game_prefixes", "first_diff_addr", "first_diff_tick",
+               "src_kept_a", "src_kept_b", "err_kind", "err_first_line", "seconds"]
+
+INT_COLUMNS = ("cli_rc", "blob_bytes", "ticks", "stores_ref", "stores_ours",
+               "diff_bytes_raw", "diff_stack", "diff_code", "diff_game", "src_kept_a", "src_kept_b")
+# `cli_ms` 写的时候就是四舍五入到 0.1 ms 的浮点（容不下就丢信息，而 int 会把整张表读崩）。
+FLOAT_COLUMNS = ("cli_ms", "seconds")
+
+Row = dict[str, object]
+
+
+def fail(msg, rc) -> NoReturn:
+    print(msg, file=sys.stderr)
+    raise SystemExit(rc)
+
+
+def rel(path):
+    try:
+        return os.path.relpath(path, ROOT).replace("\\", "/")
+    except ValueError:
+        return path
+
+
+def one_line(text, limit=200):
+    """错误文本压成一行（TSV 的单元格里不能有 tab / 换行），超长截断。"""
+    flat = " ".join((text or "").split())
+    return flat[:limit] + ("…" if len(flat) > limit else "")
+
+
+def first_error_line(stdout, stderr):
+    """失败原因首行：先 stderr（错误都在那儿），没有再退回 stdout。"""
+    for blob in (stderr, stdout):
+        for line in (blob or "").splitlines():
+            if line.strip():
+                return one_line(line)
+    return ""
+
+
+def load_manifest():
+    """`corpus/manifest.tsv` → 目标列表（98 份唯一语料，顺序照表）。"""
+    try:
+        with open(MANIFEST, encoding="utf-8") as f:
+            rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+    except OSError as e:
+        fail(f"读不了语料清单 {rel(MANIFEST)}：{e}", 2)
+    head = rows[0]
+    try:
+        ci = {name: head.index(name) for name in ("id", "file", "entry")}
+    except ValueError as e:
+        fail(f"{rel(MANIFEST)} 的表头缺列（要 id / file / entry）：{e}", 2)
+    return [{"id": row[ci["id"]],
+             "src": os.path.join(SIMPLEXC, "corpus", row[ci["file"]]),
+             "ref": os.path.join(REF_DIR, row[ci["id"]] + ".bin")}
+            for row in rows[1:]]
+
+
+def run_cli(src, blob, timeout):
+    """装配一次。返回 (rc, ms, stdout, stderr, timed_out)。"""
+    for suffix in ("", ".entry", ".stubs"):        # 别让上一次的 sidecar 冒充这一次
+        try:
+            os.remove(blob + suffix)
+        except OSError as e:
+            if not isinstance(e, FileNotFoundError):
+                return (None, 0.0, "", f"删不了上一轮留下的产物 {rel(blob + suffix)}：{e}", False)
+    t0 = time.perf_counter()
+    try:
+        proc = subprocess.run([CLI, "--src", src, "--out", blob], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return (None, round((time.perf_counter() - t0) * 1000, 1), "",
+                f"CLI 超时（{timeout:.0f} s）", True)
+    except OSError as e:
+        return (None, round((time.perf_counter() - t0) * 1000, 1), "", f"起不了 CLI：{e}", False)
+    return (proc.returncode, round((time.perf_counter() - t0) * 1000, 1), proc.stdout,
+            proc.stderr, False)
+
+
+def run_diff(bin_path, src, ticks, seed, save):
+    """`difftrace run --save`。返回 (payload, error_line)。payload 是这份的 JSON 结果。"""
+    cmd = [DIFFTRACE, "run", "--src", src, "--bin", bin_path, "--target", str(ticks),
+           "--seed", seed, "--save", save, "--json"]
+    payload, error = call_json(cmd, RUN_TIMEOUT)
+    return payload, error
+
+
+def diff_states(path_a, path_b, src):
+    """`difftrace diff --state`。返回 (equal, payload, error_line)；src 为空就不做 regions 过滤。"""
+    cmd = [DIFFTRACE, "diff", "--state", path_a, path_b, "--json"]
+    if src:
+        cmd += ["--src", src]
+    payload, error = call_json(cmd, DIFF_TIMEOUT)
+    if payload is None:
+        return (None, None, error)
+    # diff 的退出码 1 = 「算完了，结论是不等」，不是错误 —— 只有 `ok:false` 才是（`call_json` 已判）。
+    # 不能拿 `payload is None` 概掉错误：异常路径的 JSON 也是完整对象，只是 `ok:false` + `error`。
+    return (bool(payload.get("equal")), payload, error)
+
+
+def call_json(cmd, timeout):
+    """跑一个 `--json` 子命令。返回 (payload, error_line)。失败时 payload 为 None。
+
+    difftrace 的错误有两种形态：异常路径给 `{"ok":false,"error":"…"}` + stderr 一行；
+    `run` 没跑完 target 时给完整 JSON 但 `ok:false`（没有 error 键）—— 两种都要留下原始行。
+    """
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return (None, f"difftrace 超时（{timeout:.0f} s）：{' '.join(cmd[1:3])}")
+    except OSError as e:
+        return (None, f"起不了 difftrace：{e}")
+    payload = None
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                payload = None
+    if payload is None:
+        return (None, first_error_line(proc.stdout, proc.stderr) or f"difftrace rc={proc.returncode}")
+    if not payload.get("ok"):
+        return (payload, payload.get("error") or first_error_line(proc.stdout, proc.stderr)
+                or f"difftrace rc={proc.returncode}")
+    return (payload, None)
+
+
+# ---- 终态差异的诊断（只分地址段，不改判据） ------------------------------------
+
+SEQ_MAGIC = b"difftr01"
+SEQ_VERSION = 1
+SEQ_HEADER = 8 + 4 + 8
+SEQ_RECORD = 8 + 8 + 4 + 8
+
+
+def load_stores(path):
+    """读 difftrace 的序列文件（格式见 `difftrace/diff.cc` 的 `save`）。→ [(addr, size, value)]。"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise OSError(f"读不了序列 {rel(path)}：{e}") from e
+    if len(data) < SEQ_HEADER or data[:8] != SEQ_MAGIC:
+        raise OSError(f"{rel(path)} 不是 difftrace 序列文件（magic 不符）")
+    version, count = struct.unpack_from("<IQ", data, 8)
+    if version != SEQ_VERSION:
+        raise OSError(f"{rel(path)} 的序列版本是 {version}，本脚本只认 {SEQ_VERSION}")
+    if len(data) - SEQ_HEADER != count * SEQ_RECORD:
+        raise OSError(f"{rel(path)} 的序列长度对不上：头里 {count} 条，"
+                      f"实际 {(len(data) - SEQ_HEADER) / SEQ_RECORD:.0f} 条")
+    off = SEQ_HEADER
+    stores = []
+    for _ in range(count):
+        _pc, addr, size = struct.unpack_from("<QQI", data, off)
+        off += 20
+        (value,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        stores.append((addr, size, value))
+    return stores
+
+
+def fold_bytes(stores):
+    """折叠成终态的 `{addr: byte}`：后写覆盖先写，一条 `size` 字节的 store 摊成小端字节。
+
+    与 `difftrace/diff.cc` 的 `tc::fold` 同语义；这里只用它把差异按地址段分类，
+    verdict 一律取 difftrace 自己算的 `diff_bytes_raw`（两边总数必须相等，见 `classify_rows`）。
+    """
+    mem: dict[int, int] = {}
+    for addr, size, value in stores:
+        for i in range(size):
+            mem[addr + i] = (value >> (8 * i)) & 0xFF
+    return mem
+
+
+def classify_addr(addr):
+    if STACK_LO <= addr < STACK_HI:
+        return "stack"
+    if CODE_LO <= addr < CODE_HI:
+        return "code"
+    return "game"
+
+
+def classify_diff(seq_ref, seq_ours, top=6):
+    """→ (("stack","code","game") 三个字节数, 第一个不同地址, 总差异字节数, game 类的地址前缀)。
+
+    `game` = 其余 —— 里面既有 `#SIMULATION_STATE` 那一段（0x2328…），也有参考侧分配器向宿主
+    `VirtualAlloc` 拿的页（0x4009…/0x400b…，旧口径叫 extern_only）与宿主帧（0x7ff9…）。
+    所以额外把 game 类的 `addr >> 32` 前几名一并带出去：不然「game N 字节」会被读成「游戏状态不等」。
+    """
+    a = fold_bytes(load_stores(seq_ref))
+    b = fold_bytes(load_stores(seq_ours))
+    counts = {"stack": 0, "code": 0, "game": 0}
+    prefixes: dict[int, int] = {}
+    first = None
+    total = 0
+    for addr in sorted(set(a) | set(b)):          # 缺失当 0，与 memory_diff 同口径
+        if a.get(addr, 0) == b.get(addr, 0):
+            continue
+        total += 1
+        if first is None:
+            first = addr
+        cls = classify_addr(addr)
+        counts[cls] += 1
+        if cls == "game":
+            prefixes[addr >> 32] = prefixes.get(addr >> 32, 0) + 1
+    ranked = sorted(prefixes.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
+    return counts, first, total, ranked
+
+
+# ---- 一份语料 ----------------------------------------------------------------
+
+def blank_row():
+    """一整行空值（列集合只由 `TSV_COLUMNS` 定义，行里的取值全是标量）。"""
+    row: Row = {}
+    row.update(dict.fromkeys(TSV_COLUMNS, ""))
+    return row
+
+
+def run_one(task):
+    """跑完一份语料，返回它那一行（字段全是标量，好进 TSV / 跨进程传）。"""
+    t0 = time.perf_counter()
+    cid = task["id"]
+    src, ref, blob = task["src"], task["ref"], task["blob"]
+    seq_ref = os.path.join(task["seq_dir"], cid + ".ref.seq")
+    seq_ours = os.path.join(task["seq_dir"], cid + ".ours.seq")
+    row = blank_row()
+    row.update({"id": cid, "ticks": task["ticks"], "seed": task["seed"],
+                "first_diff_tick": "n/a", "status": ""})
+
+    def done(status, **kw):
+        row.update(kw)
+        row["status"] = status
+        row["seconds"] = round(time.perf_counter() - t0, 2)
+        return row
+
+    # 1) 装配
+    rc, cli_ms, out, err, timed_out = run_cli(src, blob, task["cli_timeout"])
+    row.update({"cli_rc": "" if rc is None else rc, "cli_ms": cli_ms})
+    if timed_out:
+        return done(STATUS_CLI_FAIL, err_kind="cli_timeout",
+                    err_first_line=one_line(f"CLI 超时（{task['cli_timeout']:.0f} s）"))
+    if rc != 0 or not os.path.exists(blob):
+        return done(STATUS_CLI_FAIL, err_kind=f"rc={rc}" if rc else "no_blob",
+                    err_first_line=first_error_line(out, err))
+    try:
+        row["blob_bytes"] = os.path.getsize(blob)
+        with open(blob + ".entry", encoding="ascii") as f:
+            row["entry"] = "0x" + f.read().strip().upper()
+    except OSError as e:
+        return done(STATUS_CLI_FAIL, err_kind="entry_missing",
+                    err_first_line=one_line(f"读不了 {rel(blob)}.entry：{e}"))
+
+    # 2/3) 两侧各跑一遍
+    for side, bin_path, seq in (("run_ref", ref, seq_ref), ("run_ours", blob, seq_ours)):
+        if os.path.exists(seq):
+            try:
+                os.remove(seq)
+            except OSError as e:
+                return done(STATUS_HOST_FAIL, err_kind=side,
+                            err_first_line=one_line(f"删不了上一轮的序列 {rel(seq)}：{e}"))
+        if side == "run_ref" and not os.path.exists(bin_path):
+            return done(STATUS_HOST_FAIL, err_kind="ref_missing",
+                        err_first_line=one_line(f"参考产物不在：{rel(bin_path)}"))
+        payload, error = run_diff(bin_path, src, task["ticks"], task["seed"], seq)
+        if payload is None or error:
+            return done(STATUS_HOST_FAIL, err_kind=side,
+                        err_first_line=error or "run 没有 JSON 结果")
+        row["stores_ref" if side == "run_ref" else "stores_ours"] = payload.get("store_count", "")
+
+    # 4) 终态判据：不传 --src（唯一 verdict）
+    equal, payload, error = diff_states(seq_ref, seq_ours, None)
+    if error or payload is None:
+        return done(STATUS_HOST_FAIL, err_kind="diff", err_first_line=error or "diff 没有 JSON 结果")
+    row["diff_bytes_raw"] = payload.get("diff_bytes", "")
+
+    # 证据列：带 --src 的过滤器在这批语料上留了多少条（0/0 = 过滤是空的，verdict 不能用它）。
+    # 过滤器自己会拒绝荒谬的地址空间（`--src` 与代码区重叠 / 跨度 > 4 GiB）—— 那种份留空并把
+    # 原始行记进 err_kind=src_filter，不静默当成「留下了 0 条」。
+    _eq_src, payload_src, error_src = diff_states(seq_ref, seq_ours, src)
+    if error_src or payload_src is None:
+        row["src_kept_a"] = row["src_kept_b"] = ""
+        row["err_kind"] = "src_filter"
+        row["err_first_line"] = error_src or "--src 那次没有 JSON 结果"
+    else:
+        row["src_kept_a"] = payload_src.get("kept_a", "")
+        row["src_kept_b"] = payload_src.get("kept_b", "")
+
+    if equal:
+        for seq in (seq_ref, seq_ours):           # equal 的序列没有定位价值，别留着占 GB
+            with contextlib.suppress(OSError):
+                os.remove(seq)
+        return done(STATUS_EQUAL, diff_stack=0, diff_code=0, diff_game=0, diff_game_prefixes="")
+
+    # diff：按地址段把差异分类（诊断用；总数必须等于 difftrace 的 diff_bytes_raw）
+    try:
+        counts, first, total, prefixes = classify_diff(seq_ref, seq_ours)
+    except OSError as e:
+        return done(STATUS_DIFF, err_kind="classify", err_first_line=one_line(str(e)))
+    row.update({"diff_stack": counts["stack"], "diff_code": counts["code"],
+                "diff_game": counts["game"],
+                "diff_game_prefixes": " ".join(f"0x{hi:X}:{n}" for hi, n in prefixes),
+                "first_diff_addr": "" if first is None else f"0x{first:X}"})
+    if total != row["diff_bytes_raw"]:
+        row["err_kind"] = "classify_mismatch"
+        row["err_first_line"] = one_line(f"按段分类合计 {total} B ≠ difftrace diff_bytes "
+                                        f"{row['diff_bytes_raw']} B")
+    return done(STATUS_DIFF)
+
+
+# ---- 落盘 --------------------------------------------------------------------
+
+def write_tsv(rows, path, order):
+    """逆序也按语料表顺序落，好让两次跑的 TSV 能直接 `diff`。"""
+    index = {cid: i for i, cid in enumerate(order)}
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\t".join(TSV_COLUMNS) + "\n")
+            for row in sorted(rows, key=lambda r: index.get(str(r["id"]), len(order))):
+                f.write("\t".join(str(row.get(col, "")) for col in TSV_COLUMNS) + "\n")
+    except OSError as e:
+        fail(f"写不了 TSV {rel(path)}：{e}", 2)
+
+
+def read_tsv(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    if not lines:
+        return []
+    head = lines[0].split("\t")
+    rows: list[Row] = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        cells = line.split("\t")
+        row: Row = {col: (cells[i] if i < len(cells) else "") for i, col in enumerate(head)}
+        for col in INT_COLUMNS + FLOAT_COLUMNS:
+            cell = str(row.get(col, "")).strip()
+            if not cell:
+                row[col] = ""
+                continue
+            try:
+                row[col] = float(cell) if col in FLOAT_COLUMNS else int(cell)
+            except ValueError:
+                # 不静默当「没有表」：`--resume` 会因此全量重跑，看上去像 resume 失效。
+                fail(f"{rel(path)} 的 {col} 列不是数字（第 {len(rows) + 2} 行）：{cell!r}", 2)
+        rows.append(row)
+    return rows
+
+
+def summarize(rows, total, wall_seconds, args):
+    counts = dict.fromkeys((STATUS_EQUAL, STATUS_DIFF, STATUS_CLI_FAIL, STATUS_HOST_FAIL), 0)
+    for row in rows:
+        status = str(row.get("status") or "")
+        if status in counts:
+            counts[status] += 1
+    secs = sorted(float(r["seconds"]) for r in rows if r.get("seconds") != "")
+    return {
+        "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "total": total,
+        "done": len(rows),
+        "counts": counts,
+        "wall_seconds": round(wall_seconds, 1),
+        "jobs": args.jobs,
+        "ticks": args.ticks,
+        "seed": args.seed,
+        "seconds_median": secs[len(secs) // 2] if secs else None,
+        "seconds_max": secs[-1] if secs else None,
+        "seconds_min": secs[0] if secs else None,
+    }
+
+
+def md_cell(text, limit=150):
+    flat = one_line(text, limit).replace("|", "\\|")
+    return flat or "—"
+
+
+def write_report(rows, summary, path, args, total, order):
+    index = {cid: i for i, cid in enumerate(order)}
+    rows = sorted(rows, key=lambda r: index.get(str(r["id"]), len(order)))
+    c = summary["counts"]
+    out = []
+    w = out.append
+    w("# M5 语料状态表（difftrace 版）\n")
+    w(f"生成 {summary['generated']} · 已完成 {summary['done']}/{total} 份"
+      f"{'' if summary['done'] == total else ' · **中途快照（还没跑完）**'}"
+      f" · `--jobs {args.jobs}` · {args.ticks} tick · seed `{args.seed}`\n")
+    w("判据口径：装配 `build/simplexc_cli.exe`；两侧各 `difftrace run --save` 跑同样 tick 数；"
+      "`difftrace diff --state` 比折叠后的内存终态。**verdict 取不传 `--src` 的那次**"
+      "（`diff_bytes_raw`）。`--src` 那次只为留证据：这批 `.si` 里没有 `memory_copy`，"
+      "`Spec::regions()` 只剩退化成单点的标量，过滤会把两边全部写丢掉 → 平凡的 equal。"
+      "`first_diff_tick` 一律 `n/a`（逐 tick 要 `--tick-mark`，这批不传）。\n")
+    w("机器可读：`" + rel(args.tsv) + "` · 重跑：`python simplexc/tools/m5/batch.py --jobs 12`\n")
+
+    w("## 汇总\n")
+    w("| 指标 | 值 |")
+    w("| --- | --- |")
+    w(f"| 语料总数 | {total} |")
+    w(f"| 本次完成 | {summary['done']} |")
+    w(f"| equal（终态逐字节全等） | {c[STATUS_EQUAL]} |")
+    w(f"| diff（终态有差异） | {c[STATUS_DIFF]} |")
+    w(f"| cli_fail（装不出来） | {c[STATUS_CLI_FAIL]} |")
+    w(f"| host_fail（difftrace 报错） | {c[STATUS_HOST_FAIL]} |")
+    w(f"| 总墙钟 | {summary['wall_seconds']} s（{args.jobs} 路） |")
+    w(f"| 每份耗时 | 中位 {summary['seconds_median']} s / 最短 {summary['seconds_min']} s / "
+      f"最长 {summary['seconds_max']} s |")
+    w("")
+
+    diffs = [r for r in rows if r.get("status") == STATUS_DIFF]
+    w(f"## diff 明细（{len(diffs)} 份）\n")
+    if diffs:
+        w("差异字节按地址段分：`stack` = 0x40000000–0x40800000（两边栈帧布局本来就不一样）、"
+          "`code` = 0x10000000 起 16 MB（各产物自己的代码/全局镜像）、`game` = 其余。"
+          "`src_kept_a/b` 是带 `--src` 那次两边留下的写条数（0/0 = 那个过滤器在这份上是空的）。\n")
+        w("`game` 那一列不是「游戏状态」：它还包括参考侧分配器向宿主拿的页（`0x4009…` / `0x400b…`，"
+          "旧口径叫 `extern_only`）与宿主帧（`0x7ff9…`）。真正的 `#SIMULATION_STATE` 段在 `0x2328…`，"
+          "看最后一列的地址前缀区分。\n")
+        w("| id | 第一个不同地址 | 差异字节 | stack | code | game | game 前缀 | src_kept_a/b |")
+        w("| --- | --- | --- | --- | --- | --- | --- | --- |")
+        for r in diffs:
+            w(f"| {r['id']} | {r.get('first_diff_addr') or '—'} | {r.get('diff_bytes_raw')} | "
+              f"{r.get('diff_stack')} | {r.get('diff_code')} | {r.get('diff_game')} | "
+              f"{r.get('diff_game_prefixes') or '—'} | "
+              f"{r.get('src_kept_a')}/{r.get('src_kept_b')} |")
+        src_filter_bad = [r for r in diffs if r.get("err_kind") == "src_filter"]
+        if src_filter_bad:
+            w("\n`--src` 那次自己报错的份（过滤器拒绝荒谬的地址空间，`src_kept` 留空）："
+              + " · ".join(f"{r['id']}（{md_cell(str(r.get('err_first_line') or ''), 80)}）"
+                           for r in src_filter_bad) + "\n")
+    else:
+        w("（没有）")
+    w("")
+
+    host_bad = [r for r in rows if r.get("status") == STATUS_HOST_FAIL]
+    w(f"## host_fail 明细（{len(host_bad)} 份）\n")
+    if host_bad:
+        w("difftrace 的原始错误行原样保留，不跳过、不改写。\n")
+        w("| id | 哪一步 | 原始错误行 |")
+        w("| --- | --- | --- |")
+        for r in host_bad:
+            w(f"| {r['id']} | {r.get('err_kind') or '—'} | {md_cell(str(r.get('err_first_line') or ''))} |")
+    else:
+        w("（没有）")
+    w("")
+
+    cli_bad = [r for r in rows if r.get("status") == STATUS_CLI_FAIL]
+    w(f"## cli_fail 明细（{len(cli_bad)} 份）\n")
+    if cli_bad:
+        w("| id | rc | 原始错误首行 |")
+        w("| --- | --- | --- |")
+        for r in cli_bad:
+            w(f"| {r['id']} | {r.get('cli_rc') or '—'} | {md_cell(str(r.get('err_first_line') or ''))} |")
+    else:
+        w("（没有）")
+    w("")
+
+    w("## 耗时异常（> 5 s 或 < 0.2 s）\n")
+    odd = [r for r in rows
+           if r.get("seconds") != "" and (float(r["seconds"]) > 5.0 or float(r["seconds"]) < 0.2)]
+    if odd:
+        w("慢的一份要定位到「哪一阶段慢」得把 `run` 拆开看：`seconds` 是整份（装配 + 两次 run + 两次 diff +"
+          "按段分类）；`cli_ms` 与两侧 stores 列能排除装配与序列规模。"
+          "实测唯一 > 5 s 的 180：“我们”的启动期跑了 368 M 条指令（参考 8.4 M），detail 见 notes.md。\n")
+        w("| id | 秒 | CLI ms | blob B | stores ref/ours | 归类 | 说明 |")
+        w("| --- | --- | --- | --- | --- | --- | --- |")
+        for r in odd:
+            status = str(r.get("status") or "")
+            if float(r["seconds"]) < 0.2:
+                why = ("装配就被拒（sema / 装配期），三个 exe 都没起" if status == STATUS_CLI_FAIL
+                       else "小份：blob 几 KB、store 序列百条量级")
+            else:
+                why = "慢在 `run`：看两侧 stores 与指令数，不是装配"
+            w(f"| {r['id']} | {r['seconds']} | {r.get('cli_ms')} | {r.get('blob_bytes')} | "
+              f"{r.get('stores_ref')}/{r.get('stores_ours')} | {status} | {why} |")
+    else:
+        w("（没有）")
+    w("")
+    w("## 复现一份\n")
+    w("```\n"
+      "build/simplexc_cli.exe --src simplexc/corpus/src/<id>.si --out work/tmp/m5batch/blobs/<id>.bin\n"
+      "build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin simplexc/corpus/ref/<id>.bin "
+      f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ref.seq --json\n"
+      "build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin work/tmp/m5batch/blobs/<id>.bin "
+      f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ours.seq --json\n"
+      "build/difftrace.exe diff --state work/tmp/m5batch/seq/<id>.ref.seq "
+      "work/tmp/m5batch/seq/<id>.ours.seq --json\n"
+      "```\n")
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(out))
+    except OSError as e:
+        fail(f"写不了报告 {rel(path)}：{e}", 2)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="M5 语料状态表：装配 + difftrace 终态差分（可并行）")
+    ap.add_argument("--ids", default=None, help="只跑这些 id（逗号分隔）")
+    ap.add_argument("--limit", type=int, default=0, help="只跑前 N 份语料（0 = 全部）")
+    ap.add_argument("--ticks", type=int, default=100)
+    ap.add_argument("--seed", default="seq", choices=("seq", "none"),
+                    help="`#RESET_DATA_*` 灌什么（`xorshift` 会让电路跑到垃圾地址上，不给这个选项）")
+    ap.add_argument("--jobs", type=int, default=1, help=f"并发进程数（1..{MAX_JOBS}）")
+    ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    ap.add_argument("--tsv", default=None, help="默认 <out-dir>/batch.tsv")
+    ap.add_argument("--report", default=None, help="默认 <out-dir>/report.md")
+    ap.add_argument("--cli-timeout", type=float, default=120.0, help="单份装配的超时（秒），超了记 cli_fail(timeout)")
+    ap.add_argument("--resume", action="store_true", help="从已有 TSV 里跳过已完成的 id")
+    args = ap.parse_args(argv)
+
+    if args.jobs < 1 or args.jobs > MAX_JOBS:
+        fail(f"--jobs 只在 1..{MAX_JOBS} 之间：difftrace 16 路实测只比 12 路快 7%，多占 1.75 GB 内存"
+             "（见 simplexc/tools/difftrace/README.md）", 2)
+    if args.tsv is None:
+        args.tsv = os.path.join(args.out_dir, "batch.tsv")
+    if args.report is None:
+        args.report = os.path.join(args.out_dir, "report.md")
+    for exe in (CLI, DIFFTRACE):
+        if not os.path.exists(exe):
+            hint = "python simplexc/tools/build.py simplexc_cli" if exe == CLI else \
+                   "python simplexc/tools/build.py difftrace"
+            fail(f"缺 {rel(exe)}：先跑 {hint}", 2)
+
+    blob_dir = os.path.join(args.out_dir, "blobs")
+    seq_dir = os.path.join(args.out_dir, "seq")
+    for d in (args.out_dir, blob_dir, seq_dir, os.path.dirname(os.path.abspath(args.tsv)),
+              os.path.dirname(os.path.abspath(args.report))):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError as e:
+            fail(f"建不了输出目录 {d}：{e}", 2)
+
+    targets = load_manifest()
+    order = [t["id"] for t in targets]
+    if args.ids:
+        want = {s.strip() for s in args.ids.split(",") if s.strip()}
+        unknown = sorted(want - set(order))
+        if unknown:
+            fail(f"--ids 里有语料表里没有的 id：{unknown}", 2)
+        targets = [t for t in targets if t["id"] in want]
+    if args.limit:
+        targets = targets[:args.limit]
+
+    rows = read_tsv(args.tsv) if args.resume else []
+    done_ids = {str(r.get("id")) for r in rows if r.get("status")}
+    todo = [t for t in targets if t["id"] not in done_ids]
+    print(f"M5 语料状态表：{len(targets)} 份目标，本次跑 {len(todo)} 份（{args.jobs} 路 · "
+          f"{args.ticks} tick · seed {args.seed}）"
+          + (f"，--resume 跳过已完成 {len(done_ids)} 份" if done_ids else ""), flush=True)
+
+    tasks = [{"id": t["id"], "src": t["src"], "ref": t["ref"],
+              "blob": os.path.join(blob_dir, t["id"] + ".bin"), "seq_dir": seq_dir,
+              "ticks": args.ticks, "seed": args.seed, "cli_timeout": args.cli_timeout}
+             for t in todo]
+
+    wall0 = time.perf_counter()
+    if not tasks:
+        pass
+    elif args.jobs == 1:
+        for i, task in enumerate(tasks, 1):
+            row = run_one(task)
+            rows.append(row)
+            write_tsv(rows, args.tsv, order)
+            print(progress_line(i, len(tasks), row), flush=True)
+    else:
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {pool.submit(run_one, task): task["id"] for task in tasks}
+            for i, fut in enumerate(as_completed(futures), 1):
+                cid = futures[fut]
+                try:
+                    row = fut.result()
+                except Exception as e:                    # 子进程炸了也要留一行，不能丢份
+                    row = blank_row()
+                    row.update({"id": cid, "status": STATUS_HOST_FAIL, "err_kind": "worker",
+                                "err_first_line": one_line(f"{type(e).__name__}: {e}"),
+                                "first_diff_tick": "n/a"})
+                rows.append(row)
+                write_tsv(rows, args.tsv, order)          # 每完成一份就落盘：中断可续跑
+                print(progress_line(i, len(tasks), row), flush=True)
+    wall = time.perf_counter() - wall0
+
+    summary = summarize(rows, len(targets), wall, args)
+    write_tsv(rows, args.tsv, order)
+    write_report(rows, summary, args.report, args, len(targets), order)
+    print(f"汇总：完成 {summary['done']}/{len(targets)} · "
+          + " · ".join(f"{s} {n}" for s, n in summary["counts"].items())
+          + f" · 总墙钟 {summary['wall_seconds']} s（{args.jobs} 路）", flush=True)
+    print(f"TSV {rel(args.tsv)} · 报告 {rel(args.report)}", flush=True)
+    return 0
+
+
+def progress_line(i, n, row):
+    status = row.get("status")
+    extra = ""
+    if status == STATUS_DIFF:
+        extra = (f" diff={row.get('diff_bytes_raw')}B "
+                 f"(stack {row.get('diff_stack')}/code {row.get('diff_code')}/game {row.get('diff_game')})"
+                 f" 首址 {row.get('first_diff_addr')}")
+    elif status in (STATUS_CLI_FAIL, STATUS_HOST_FAIL):
+        extra = f" {row.get('err_kind')}: {one_line(str(row.get('err_first_line') or ''), 120)}"
+    return (f"[{i}/{n}] {row.get('id')} {status} {row.get('seconds')}s cli={row.get('cli_ms')}ms "
+            f"blob={row.get('blob_bytes')}B stores {row.get('stores_ref')}/{row.get('stores_ours')}"
+            + extra)
+
+
+if __name__ == "__main__":
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:                       # 控制台常是 GBK，中文会花
+        reconfigure(encoding="utf-8", errors="replace")
+    sys.exit(main())

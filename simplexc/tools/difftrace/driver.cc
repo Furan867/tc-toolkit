@@ -441,8 +441,33 @@ uint16_t error_len(uc_engine* uc, uint64_t addr) {
     return static_cast<uint16_t>(b[0] | (static_cast<uint16_t>(b[1]) << 8));
 }
 
-std::string where(uc_engine* uc) {
-    return "pc=" + hex(reg(uc, UC_X86_REG_RIP)) + " rsp=" + hex(reg(uc, UC_X86_REG_RSP));
+// 未映射访问的地址。`where()` 只报 pc/rsp 时，一个「读野指针」的错分不清读的是哪块地址 ——
+// 069 就卡在 LLVM 内联的 memcpy 向量循环里，只看到 pc 根本无法回推是哪个调用点传了坏长度。
+// 只记**第一次**：第一次未映射就是后面那次失败的原因，后续都是同一处的连带。
+struct UnmappedHit {
+    bool hit = false;
+    uint64_t addr = 0;
+    uint32_t size = 0;
+    bool write = false;
+};
+
+void unmapped_hook(uc_engine* /*uc*/, uc_mem_type type, uint64_t address, int size, int64_t /*value*/,
+                   void* user) {
+    auto* h = static_cast<UnmappedHit*>(user);
+    if (h->hit) return;
+    h->hit = true;
+    h->addr = address;
+    h->size = static_cast<uint32_t>(size);
+    h->write = (type == UC_MEM_WRITE_UNMAPPED);
+}
+
+std::string where(uc_engine* uc, const UnmappedHit* hit = nullptr) {
+    std::string s = "pc=" + hex(reg(uc, UC_X86_REG_RIP)) + " rsp=" + hex(reg(uc, UC_X86_REG_RSP));
+    if (hit != nullptr && hit->hit) {
+        s += std::string(hit->write ? " 未映射写=" : " 未映射读=") + hex(hit->addr) + "(+" +
+             std::to_string(hit->size) + ")";
+    }
+    return s;
 }
 
 // boot 快照的字节数上限：`game_hi - game_lo` 超了就不写（一次性几 GB 的写入只能是把 DLL / host
@@ -628,6 +653,14 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
     RunOutcome out;
     out.layout = map_game(uc, spec, image, out.host_regions);
 
+    // 未映射访问只记第一次（见 `UnmappedHit`）：失败时 `where()` 要能说出读/写了哪个地址。
+    UnmappedHit unmapped;
+    uc_hook unmapped_handle = 0;
+    check(uc_hook_add(uc, &unmapped_handle,
+                      UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED,
+                      reinterpret_cast<void*>(&unmapped_hook), &unmapped, 1, 0),
+          "挂未映射访问 hook");
+
     // Stubs 不拥有 uc，必须比它先析构 —— 所以它是本函数的局部变量，uc 由调用方 close。
     Stubs stubs(uc);
     // 整张导入表 + sidecar 的槽：`install` 把认得的那几个槽写成 `MAGIC_BASE + i`（编号的唯一处）。
@@ -686,7 +719,7 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
     out.unnamed_first_pc = ctx.unnamed_first_pc;
 
     if (err != UC_ERR_OK) {
-        out.result.reason = std::string("uc_error: ") + uc_strerror(err) + "（" + where(uc) + "）";
+        out.result.reason = std::string("uc_error: ") + uc_strerror(err) + "（" + where(uc, &unmapped) + "）";
         out.stop_pc = reg(uc, UC_X86_REG_RIP);
         return out;
     }
@@ -698,7 +731,7 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
     if (!wait.reached) {
         out.result.reason = "no_wait_state（boot " + std::to_string(ctx.instrs) + " 条指令、" +
                             std::to_string(ctx.capped ? 1 : 0) + "=capped，ctl_command_id 只被读了 " +
-                            std::to_string(wait.reads) + " 次；" + where(uc) + "）";
+                            std::to_string(wait.reads) + " 次；" + where(uc, &unmapped) + "）";
         out.stop_pc = reg(uc, UC_X86_REG_RIP);
         return out;
     }
@@ -753,7 +786,7 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
     out.result.error_len = error_len(uc, p.error_buffer);
 
     if (err != UC_ERR_OK) {
-        out.result.reason = std::string("uc_error: ") + uc_strerror(err) + "（" + where(uc) + "）";
+        out.result.reason = std::string("uc_error: ") + uc_strerror(err) + "（" + where(uc, &unmapped) + "）";
     } else if (!stubs.error().empty()) {
         out.result.reason = "stub_error: " + stubs.error();
     } else if (!ctx.error.empty()) {

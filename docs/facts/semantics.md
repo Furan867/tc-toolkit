@@ -292,6 +292,16 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-type/`）
 最后验证：2026-10-25
 
+### 重载候选：按实参类型挑具体度，与声明序无关（2026-10-25 实测）
+- `random(128)` 选 `random(max: Int)`，**不**选泛型 `random(type: @Type)` —— 即使后者在声明序上靠前。
+- 这条与「人工 `binary +` 多版本时后声明者胜」**不是同一条规则**：那条讲的是**同签名的人工单元**互相覆盖；
+  这条讲的是**具体类型 / 泛型 / 内建**三类候选之间按具体度比。混成一谈会做错。
+- 我们的 `pick_def` 按声明序试候选 ⇒ `random(128)` 会匹配上泛型候选并实例化，于是把「实参类型不匹配」
+  变成「`size(type)` 折不出常量」。**这是 32/98 语料卡在 `#SIZE` 的真因，不是泛型体被急切检查**
+  （sema/codegen 本来就是惰性的：`src.defs` 只登记名字，体只由调用点分析）。
+验证：`work/tmp/res-type/report.md`（m7/m7b，98/98 都有参考产物）；`work/tmp/lazygen/notes.md`
+最后验证：2026-10-25
+
 ### `asm` 块**不是原样内联**：参考会把块重新汇编
 操作数名换成寄存器/立即数，周围插保存恢复（`mov rcx,32` → `mov rdx,rcx; mov ecx,0x20`），`$result` 解析到该变量所在寄存器；
 前缀 `memory_copy` 里内联出 `rep movs BYTE PTR es:[rdi],…`，`mov al,0` 被规范成 `mov eax,0x0`。

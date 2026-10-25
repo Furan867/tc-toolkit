@@ -14,6 +14,20 @@
     python simplexc/tools/build.py difftrace      # 判据工具（要 difftrace C SDK，见下）
     python simplexc/tools/build.py difftrace_selftest   # 编出来当场跑 16 条用例
     python simplexc/tools/build.py asm_x64_selftest     # 编出来当场跑 asm_x64 的用例
+    python simplexc/tools/build.py --jobs 1             # 串行（= 加并行之前的行为，排查用）
+
+并行
+----
+默认就并发。能并的只有**目标之间**：每个 step_* 是「拼几条 g++ 命令 + 跑它」，彼此独立；
+单个 .cc 内部**没有**可切分的单位（g++ 的一个进程只编一个翻译单元），所以在某个目标内部
+加线程毫无用处。也因此**编译命令一个字都没改**（优化等级、-I、宏、顺序敏感的 -l 与 -o 全是原样），
+改的只是它们在什么时候跑 —— 产物仍与串行逐字节相同。
+
+`--jobs N` 定并发数（默认 = CPU 核数，上限见 MAX_JOBS；`--jobs 1` = 串行，走原来的顺序循环）。
+每个目标的输出（含子进程的 stdout/stderr）各自整块收着，全部跑完再按命令行顺序倒出来 ——
+并发时输出不交织才看得出是哪个目标失败。任一目标失败**不打断**其它已启动的（否则日志半截），
+跑完汇总，退出码取第一个失败目标的。
+有先后关系的才排队（DEPENDS + SCHEDULE_DEPS），其余同时起。
 
 目标
 ----
@@ -79,6 +93,10 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
+import traceback
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
@@ -133,11 +151,108 @@ def tool(name: str, env_override: str) -> str:
 CXX = ""        # 在 main 里填（--help 不该要求工具链存在）
 CC = ""
 
+# 并发上限。与 simplexc/tools/m5/batch.py 的 MAX_JOBS 同值（那一条是 difftrace 实测：16 路只比
+# 12 路快 7%、多占 1.75 GB）；g++ 这边没单独测过，取同值的理由只是同一台机器、同一类
+# 「每进程几百 MB、再多只抢内存」的活。目标数本身就不多（`all` 是 8 个），上限很少吃亏。
+MAX_JOBS = 12
+
+
+class Sink:
+    """一个目标的输出缓冲：并发时每目标一份，跑完整块倒出来。
+
+    只存字节、只按追加顺序存（流也记在里面）：文本层与字节层各写各的会把顺序弄乱，
+    而「输出不交织」正是并发时唯一还看得出哪个目标失败的依据。
+    """
+
+    def __init__(self) -> None:
+        self.chunks: list[tuple[str, bytes]] = []      # ("out" | "err", 字节)
+        self.rc = 0
+        self.seconds = 0.0
+
+    def add(self, which: str, data: bytes) -> None:
+        self.chunks.append((which, data))
+
+
+_TLS = threading.local()        # 当前线程正在跑哪个目标的缓冲（主线程没有 = 串行/编排输出）
+
+
+def _sink() -> Sink | None:
+    return getattr(_TLS, "sink", None)
+
+
+class Capture:
+    """并发时顶替 sys.stdout / sys.stderr：把**当前线程**的写入收进它那个目标的缓冲。
+
+    为什么不是让每个 print 自己找流：串行与并发必须跑同一段 step_* 代码，否则两种模式的
+    输出会分叉，`--jobs 1` 也当不成参照物 —— 差别只该在「写去哪」。
+    """
+
+    def __init__(self, real, which: str) -> None:
+        self._real = real
+        self._which = which
+
+    def write(self, s: str) -> int:
+        sink = _sink()
+        if sink is None:
+            return self._real.write(s)
+        # 串行时 print 走文本层，"\n" 会被换成 os.linesep；这里直写字节，得自己换，
+        # 否则并发模式的换行与串行不一致（子进程写出来的那份已经是 CRLF）。
+        text = s.replace("\n", os.linesep)
+        sink.add(self._which, text.encode(getattr(self._real, "encoding", None) or "utf-8", "replace"))
+        return len(s)
+
+    def flush(self) -> None:
+        if _sink() is None:
+            self._real.flush()
+
+    def writable(self) -> bool:
+        return True
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _emit(which: str, data: bytes) -> None:
+    """整块印一段字节 —— 走 buffer，别把子进程的字节按 locale 解码再编回去：
+    子进程写的是 UTF-8，而这台机器的 locale 是 cp936，中间那趟会把报错原文弄坏。
+    """
+    stream = sys.stdout if which == "out" else sys.stderr
+    buf = getattr(stream, "buffer", None)
+    if buf is None:
+        stream.write(data.decode(getattr(stream, "encoding", None) or "utf-8", "replace"))
+        stream.flush()
+        return
+    stream.flush()          # 文本层可能还压着东西，先让它落地，顺序才对
+    buf.write(data)
+    buf.flush()
+
+
+def _flush_sink(sink: Sink) -> None:
+    for which, data in sink.chunks:
+        _emit(which, data)
+
+
+def run_rc(cmd: list[str]) -> int:
+    """跑一条子进程并返回退出码。
+
+    串行时直连终端（子进程继承 fd，行为与加并行之前一致）；并发时把 stdout/stderr 整块收进
+    本目标的缓冲 —— 否则几路 g++ 的报错会交织在一起，报错时看不清是哪个目标。
+    """
+    sink = _sink()
+    if sink is None:
+        return subprocess.run(cmd, cwd=REPO).returncode
+    proc = subprocess.run(cmd, cwd=REPO, capture_output=True)
+    if proc.stdout:
+        sink.add("out", proc.stdout)
+    if proc.stderr:
+        sink.add("err", proc.stderr)
+    return proc.returncode
+
 
 def run(cmd: list[str], out: str | None = None, hint: str = "") -> None:
     """跑一条命令；非 0 立即退出（附上这条命令的可执行解释）。"""
     print("$ " + " ".join(cmd))
-    rc = subprocess.run(cmd, cwd=REPO).returncode
+    rc = run_rc(cmd)
     if rc != 0:
         print(f"FAIL 命令返回 {rc}：{' '.join(cmd)}", file=sys.stderr)
         if hint:
@@ -417,7 +532,7 @@ def step_difftrace_selftest() -> None:
         hint="编译失败 → 看 simplexc/tools/difftrace/{diff,diff_selftest}.cc 的报错。")
     # 用例 FAIL 是判据的结论（不是构建出错）：退出码原样透传，别折叠成 1。
     print("$ " + REL(out))
-    rc = subprocess.run([out], cwd=REPO).returncode
+    rc = run_rc([out])
     if rc != 0:
         print(f"FAIL 自测有用例不通过：{REL(out)} 返回 {rc}", file=sys.stderr)
         sys.exit(rc)
@@ -436,7 +551,7 @@ def step_asm_x64_selftest() -> None:
         hint="编译失败 → 看 simplexc/codegen/asm_x64*.cc 的报错；这个目标只用 C++17 标准库。")
     # 用例 FAIL 是判据的结论（不是构建出错）：退出码原样透传，别折叠成 1。
     print("$ " + REL(out))
-    rc = subprocess.run([out], cwd=REPO).returncode
+    rc = run_rc([out])
     if rc != 0:
         print(f"FAIL 自测有用例不通过：{REL(out)} 返回 {rc}", file=sys.stderr)
         sys.exit(rc)
@@ -480,6 +595,78 @@ ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analy
 DEPENDS = {"tcblob": ["objs"], "spike": ["objs", "tcblob"],
            "hook": ["objs"], "simplexc_dll": ["objs"], "core_selftest": ["objs"]}
 
+# 并发时真正要排的先后。DEPENDS 只管「不指定也会自己补做」，排不出先后；串行时剩下的错序靠
+# `wanted` 的构造顺序恰好避开了，并发时不管就是两个 g++ 同时碰同一个文件：
+#   simplexc_cli ← objs        CLI 链 build/objs/assemble.o，而 objs 会重写它
+#   core_selftest ← hook       core_selftest 编的 simplexc/shell/embedded_objs.cc 由 hook 生成
+#   simplexc_dll ← hook        两个名字是**同一个**step_hook：两路同时跑会各自重写
+#                              embedded_objs.cc 又各自编它
+SCHEDULE_DEPS = {**{name: list(deps) for name, deps in DEPENDS.items()},
+                 "simplexc_cli": ["objs"], "core_selftest": ["objs", "hook"],
+                 "simplexc_dll": ["objs", "hook"]}
+
+
+def _run_step(name: str) -> Sink:
+    """在一个工作线程里跑一个目标，把它的输出与退出码收进 Sink。"""
+    sink = Sink()
+    _TLS.sink = sink
+    started = time.monotonic()
+    try:
+        STEPS[name]()
+    except SystemExit as e:
+        # run/need/sha256 的失败路径：FAIL 行已经进缓冲了，这里只接住退出码
+        sink.rc = e.code if isinstance(e.code, int) and e.code else 1
+    except Exception:                       # 步骤本身炸了也要留下现场，不能静默算成功
+        sink.add("err", traceback.format_exc().encode("utf-8", "replace"))
+        sink.rc = 1
+    finally:
+        sink.seconds = time.monotonic() - started
+        _TLS.sink = None
+    return sink
+
+
+def run_parallel(names: list[str], jobs: int) -> int:
+    """按依赖关系并发跑这些目标，返回退出码（第一个失败目标的，没失败就是 0）。"""
+    deps = {name: [d for d in SCHEDULE_DEPS.get(name, []) if d in names] for name in names}
+    results: dict[str, Sink] = {}
+    futures: dict[Future[Sink], str] = {}
+    started: set[str] = set()
+    real_out, real_err = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = Capture(real_out, "out"), Capture(real_err, "err")
+    try:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            while len(results) < len(names):
+                for name in names:
+                    if name in started or any(d not in results for d in deps[name]):
+                        continue
+                    started.add(name)
+                    futures[pool.submit(_run_step, name)] = name
+                if not futures:         # 表里成环才会到这（否则总有东西在跑或可起）
+                    raise RuntimeError("依赖成环：" + ", ".join(n for n in names if n not in results))
+                finished, _ = wait(futures, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    name = futures.pop(future)
+                    results[name] = future.result()
+                    # 进度进 stderr：长目标（hook）跑的时候得看得出还没卡死
+                    print(f"  [{len(results)}/{len(names)}] {name} "
+                          f"{'ok' if results[name].rc == 0 else 'FAIL'} "
+                          f"{results[name].seconds:.1f}s", file=real_err, flush=True)
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err
+
+    # 整块倒出：按命令行顺序，失败目标的 FAIL 行就在它那一块里，能看出是哪个目标
+    for name in names:
+        _flush_sink(results[name])
+    failed = [(name, results[name].rc) for name in names if results[name].rc != 0]
+    if failed:
+        print("FAIL 并发构建有目标失败：" +
+              "、".join(f"{name}（退出码 {rc}）" for name, rc in failed), file=sys.stderr)
+        print("  每个目标的完整输出已按命令行顺序印在上面；重跑单个目标可以用 "
+              "`--jobs 1 <目标>` 排除并发因素。", file=sys.stderr)
+        return failed[0][1]
+    print("全部完成：" + ", ".join(names))
+    return 0
+
 
 def main(argv: list[str]) -> int:
     global CXX, CC
@@ -491,7 +678,19 @@ def main(argv: list[str]) -> int:
                "（difftrace 要 difftrace C SDK，all 的成功不依赖它）")
     ap.add_argument("targets", nargs="*", default=[],
                     help="all | " + " | ".join(STEPS) + "（默认 all）")
+    ap.add_argument("--jobs", type=int, default=None, metavar="N",
+                    help=f"同时跑几个目标（默认 = CPU 核数，上限 {MAX_JOBS}；"
+                         f"--jobs 1 = 串行，与加并行之前的行为一致）")
     args = ap.parse_args(argv)
+
+    if args.jobs is None:
+        jobs = min(os.cpu_count() or 1, MAX_JOBS)
+    elif args.jobs < 1 or args.jobs > MAX_JOBS:
+        print(f"FAIL --jobs 只接受 1..{MAX_JOBS}：每路 g++ 峰值几百 MB，再多只是抢内存"
+              f"（同一个上限的来历见 simplexc/tools/m5/batch.py 的 MAX_JOBS）。", file=sys.stderr)
+        return 2
+    else:
+        jobs = args.jobs
 
     wanted = []
     for t in (args.targets or ["all"]):
@@ -523,10 +722,15 @@ def main(argv: list[str]) -> int:
         sys.exit(2)
 
     print(f"工具链 {CXX}")
-    for name in wanted:
-        STEPS[name]()
-    print("全部完成：" + ", ".join(wanted))
-    return 0
+    if jobs == 1:
+        # 串行：加并行之前的原样路径（子进程直连终端、失败立即退），当参照物用
+        for name in wanted:
+            STEPS[name]()
+        print("全部完成：" + ", ".join(wanted))
+        return 0
+
+    print(f"并发 {jobs} 路：" + ", ".join(wanted))
+    return run_parallel(wanted, jobs)
 
 
 if __name__ == "__main__":

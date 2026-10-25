@@ -423,6 +423,19 @@ bool same_val_ty(const TyRef& a, const TyRef& b) {
     return a->name == b->name;
 }
 
+/* 一档「具体度」（`pick_def` 的择优用）：3 = 形参与实参静态类型**完全相同**（`same_val_ty`）；
+ * 2 = 同为 Int 且名义标记（`is_bool`）一致 —— 位宽不同但同族（`U3` 对 `Uint`）；
+ * 1 = 只是种类对得上（`Bool` 对 `U3`、任何 Int 对任何 Int）。
+ * 为什么要分档：`compatible` 把 Int 之间的位宽/`is_bool` 全抹平，按声明序取第一个候选时
+ * `str(U3 0)` 会挑到 `str(Bool)`（参考挑的是 `str(Uint)`，实测见 `docs/facts/semantics.md`）。 */
+int match_rank(const TyRef& arg, const TyRef& param) {
+    if (same_val_ty(arg, param)) return 3;
+    if (arg->kind == TyKind::Int && param->kind == TyKind::Int) {
+        return arg->is_bool == param->is_bool ? 2 : 1;
+    }
+    return 1;
+}
+
 /* `cv` 里「必须是常量」的断言：与 `lower.cc` 的 `need_const` 同名同义（内部失败，不是用户错）。 */
 uint64_t need_const(const HNode& n, int line) {
     if (n.kind != HKind::Const || n.const_id >= 0) {
@@ -2013,48 +2026,72 @@ void Analyzer::def_stmt(HNode& /*parent*/, const DefStmt& st) {
     bind_def(st.name, &st, cur_key_);
 }
 
-/* `lower.cc` 的 `pick_def`：同名重载按「参数类型对得上」挑本文件 def，按声明序取第一个。 */
+/* 同名重载的择优：候选先按「形参与实参静态类型的具体度」（`match_rank`）**求和**比分，同分按声明序
+ * 取第一个；非泛型候选全部走完才退到泛型候选（`random(128)` 挑 `random(max: Int)`、不挑泛型
+ * `random(@Type)`，见 `docs/facts/semantics.md` 的「重载候选」）。
+ * 为什么不取「第一个兼容候选」：`compatible` 把 Int 之间的位宽/`is_bool` 抹平，声明序靠前的粗档
+ * 候选（`str(Bool)`）会抢走本该走 `str(Uint)` 的调用（`str(U3 0)` → `"false"`）。 */
 const FunctionDef* Analyzer::pick_def(const std::string& name, const ArgList& args,
                                      const std::vector<TypeRefPtr>& type_args, int line) {
-    auto it = mod_->defs.find(name);
+    const auto it = mod_->defs.find(name);
     if (it == mod_->defs.end()) return nullptr;
-    for (int pass = 0; pass < 2; ++pass)
+    const FunctionDef* best = nullptr;
+    int best_score = -1;
+    /* 形参类型本身解不出来的候选（`Arr[@Type]` 这种**嵌套**泛型拼写，`ty_of_ref` 会抛
+     * 「编译期类型参数」）：跳过它，但不吞掉错误 —— 一个候选都没挑到时把第一条抛回去，
+     * 「只有这一条候选」的调用点仍得到改动前的那句诊断。 */
+    std::optional<CompileError> unresolvable;
     for (const FunctionDef* d : it->second) {
-        if (has_type_params(d->params) != (pass == 1)) continue;
-        if (has_type_params(d->params)) {
-            /* 泛型候选：先定实例化（类型实参 / 推型），再只比**运行期**形参。定不下来就跳过
-             * 这个候选 —— 不能把异常泄出去，否则同一名字的其它重载都再也选不到。 */
-            Inst inst;
-            try {
-                inst = resolve_inst(d->params, args, type_args, d->lo);
-            } catch (const CompileError& e) {
-                if (e.resp == Responsibility::OurBug) throw;
-                continue;
-            }
-            bool ok = true;
-            for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
-                if (!compatible(static_type(*args[inst.rt_arg[i]]), inst.rt_types[i])) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) return d;
+        if (has_type_params(d->params)) continue;
+        std::optional<std::vector<TyRef>> types;
+        try {
+            types = decl_param_types(*d);
+        } catch (const CompileError& e) {
+            if (e.resp == Responsibility::OurBug) throw;
+            if (!unresolvable.has_value()) unresolvable = e;
             continue;
         }
-        auto types = decl_param_types(*d);
         if (!types || types->size() != args.size()) continue;
+        int score = 0;
         bool ok = true;
         for (std::size_t i = 0; i < types->size(); ++i) {
-            if (!compatible(static_type(*args[i]), (*types)[i])) {
+            const TyRef arg_ty = static_type(*args[i]);
+            if (!compatible(arg_ty, (*types)[i])) {
+                ok = false;
+                break;
+            }
+            score += match_rank(arg_ty, (*types)[i]);
+        }
+        if (!ok) continue;
+        if (score > best_score) { /* 同分时保留先声明的那个 */
+            best = d;
+            best_score = score;
+        }
+    }
+    if (best != nullptr) return best;
+    for (const FunctionDef* d : it->second) {
+        if (!has_type_params(d->params)) continue;
+        /* 泛型候选：先定实例化（类型实参 / 推型），再只比**运行期**形参。定不下来就跳过
+         * 这个候选 —— 不能把异常泄出去，否则同一名字的其它重载都再也选不到。 */
+        Inst inst;
+        try {
+            inst = resolve_inst(d->params, args, type_args, d->lo);
+        } catch (const CompileError& e) {
+            if (e.resp == Responsibility::OurBug) throw;
+            continue;
+        }
+        bool ok = true;
+        for (std::size_t i = 0; i < inst.rt_types.size(); ++i) {
+            if (!compatible(static_type(*args[inst.rt_arg[i]]), inst.rt_types[i])) {
                 ok = false;
                 break;
             }
         }
         if (ok) return d;
     }
+    if (unresolvable.has_value()) throw *unresolvable;
     return nullptr;
 }
-
 /* `dot` 单元的分派：接收者的**静态类型**决定选哪条（`res-bare` 报告 f02/f02b：Str 接收者与
  * `Arr[@Any]` 两条同时存在时，两种声明顺序都取 Str 那一版 ⇒ 先按精确类型挑）；同一档里
  * 后声明的胜（与算子单元的实测同一条规则）。全都不匹配返回 nullptr。 */

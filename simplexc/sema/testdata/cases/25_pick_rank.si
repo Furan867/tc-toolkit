@@ -1,0 +1,16 @@
+// 028 的根因（`pick_def` 的择优）固化成用例：名字用 `str` 是为了对上 stdlib 的那一族
+// （`str(Str)` / `str(Bool)` / `str(Uint)` / … / 泛型）；体返回不同的常量，好让 dump 直接看得出
+// 挑中了哪一条。
+//   · `str(true)` → `str(Bool)`（精确）；
+//   · `str(U3 0)` / `str(U8 255)` → `str(Uint)`（同为非 Bool 的整数；只按声明序取第一个兼容候选
+//     的话这两处会挑到声明序靠前的 `str(Bool)`，028 就是这样写出 `"false"` 的）；
+//   · `str('x')` → 泛型 `@Type`（非泛型候选全都不兼容时才轮到它）。
+def str(a: Bool) U64 { return 1 }
+def str(a: Uint) U64 { return 2 }
+def str(a: @Type) U64 { return 3 }
+run_sim: while true {
+  var b = str(true)
+  var u = str(U3 0)
+  var w = str(U8 255)
+  var s = str('x')
+}

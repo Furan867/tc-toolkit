@@ -1,0 +1,35 @@
+Hir funcs=3 globals=0 externs=0 consts=0 strings=1 structs=0
+  string[0] bytes="x" cstring=false
+  main key="main" name="main" inst_sig="" pre_body=none cap_index=-1 decl_line=0 line_suffix=0 ret=Void params=0 caps=0
+    Block span=11:0
+      While label="run_sim" span=11:0
+        Const ty=Bool const=0x1 span=11:0
+        Block span=11:0
+          VarDecl ty=U64 name="b" span=12:0
+            Call ty=U64 callee=func:0 span=12:0
+              Const ty=Bool const=0x1 span=12:0
+          VarDecl ty=U64 name="u" span=13:0
+            Call ty=U64 callee=func:1 span=13:0
+              Const ty=S64 const=0x0 span=13:0
+          VarDecl ty=U64 name="w" span=14:0
+            Call ty=U64 callee=func:1 span=14:0
+              Const ty=S64 const=0xff span=14:0
+          VarDecl ty=U64 name="s" span=15:0
+            Call ty=U64 callee=func:2 span=15:0
+              Cast ty=Str cast=raw span=15:0
+                StrLit ty=Str string=0 span=15:0
+  func[0] key="str$bool" name="str" inst_sig="" pre_body=none cap_index=-1 decl_line=8 line_suffix=1 ret=U64 params=1 caps=0
+    param[0] name="a" ty=Bool
+    Block span=8:0
+      Return span=8:0
+        Const ty=U64 const=0x1 span=8:0
+  func[1] key="str$s64" name="str" inst_sig="" pre_body=none cap_index=-1 decl_line=9 line_suffix=1 ret=U64 params=1 caps=0
+    param[0] name="a" ty=S64
+    Block span=9:0
+      Return span=9:0
+        Const ty=U64 const=0x2 span=9:0
+  func[2] key="str$@str#v" name="str" inst_sig="@str#v" pre_body=none cap_index=-1 decl_line=10 line_suffix=1 ret=U64 params=1 caps=0
+    param[0] name="a" ty=Str
+    Block span=10:0
+      Return span=10:0
+        Const ty=U64 const=0x3 span=10:0

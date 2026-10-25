@@ -14,10 +14,18 @@
 ; `short_cse` 才多删重复装载 —— 做前后对照时别把两者混为一谈。
 
 [opt]
-; compiler = 选实现：reference（默认；缺失键也兜底它）| ours | ours_with_fallback
+
+; stdlib = 编译时拼不拼 stdlib 前缀（`simplexc/corpus/stdlib_prefix.si`，1503 行）
+;   on  = 拼（默认；参考编译器的 compile() 内部就是自动拼的，这才是真路径）
+;   off = 走我们硬编码的 runtime（prefix_funcs / global_seed / #U64_HASH）
+; ⚠ 只对 compiler = ours* 有意义：compiler = ref 时不走我们的编译器，这个键无作用（产物逐字节相同）。
+;   开/关的产物**字节与符号表都不同**，所以它每次都写进 hook.log 的 impl 行（stdlib=on|off）。
+stdlib = on
+; compiler = 选实现：ref（默认；缺失键也兜底它）| ours | ours_with_fallback
+;   ref               = 参考实现（compile_real.dll）
 ;   ours              = 只用我们的实现（进程内调自研 C++ 编译器），失败返回错误、不转交
 ;   ours_with_fallback= ours 失败则整单转交 compile_real.dll
-compiler = reference
+compiler = ref
 ; compiler = ours
 ; compiler = ours_with_fallback
 

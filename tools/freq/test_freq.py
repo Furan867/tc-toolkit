@@ -31,7 +31,7 @@ INI_TEMPLATE = """\
 ; 模板，含与真 opt.ini 同形的注释行
 [opt]
 ; compiler = ours
-compiler = reference
+compiler = ref
 ; on / short / short_cse / off
 rewrite = off
 ; rewrite = short
@@ -129,9 +129,9 @@ class VariantsTest(unittest.TestCase):
         self.assertIn("\ncompiler = ours\n", text)
         self.assertIn("\nrewrite = on\n", text)
 
-    def test_missing_compiler_key_falls_back_to_reference(self):
+    def test_missing_compiler_key_falls_back_to_ref(self):
         self.ini.write_text("[opt]\nrewrite = short\n", encoding="utf-8")
-        self.assertEqual(variants.read_variant(self.ini), variants.Variant("reference", "short"))
+        self.assertEqual(variants.read_variant(self.ini), variants.Variant("ref", "short"))
 
     def test_missing_rewrite_key_falls_back_to_on(self):
         self.ini.write_text("[opt]\ncompiler = ours\n", encoding="utf-8")
@@ -155,12 +155,12 @@ class VariantsTest(unittest.TestCase):
 
     def test_parse_str(self):
         self.assertEqual(variants.Variant.parse(" ours : off "), variants.Variant("ours", "off"))
-        self.assertEqual(str(variants.Variant("reference", "short")), "reference:short")
+        self.assertEqual(str(variants.Variant("ref", "short")), "ref:short")
 
 
 class ProductsOwnershipTest(unittest.TestCase):
     LOG = (
-        "2026-10-17 17:21:36\t008\timpl\timpl=fallback\tmode=ours_with_fallback\tresult=reference\n"
+        "2026-10-17 17:21:36\t008\timpl\timpl=fallback\tmode=ours_with_fallback\tresult=ref\n"
         "2026-10-17 17:21:36\t008\tcfg\trewrite=short\n"
         "2026-10-17 17:21:37\t008\topt\tmode=on\trewritten=1590\tlen=219088\t"
         "sha256=deadbeef00cafe11\tnote=把 short 挡回 on\n"
@@ -182,7 +182,7 @@ class ProductsOwnershipTest(unittest.TestCase):
         self.assertEqual(own.opt_mode, "on")                        # 改写器做了什么
         self.assertEqual(own.impl, "fallback")                      # 实际走了哪个实现
         self.assertEqual(own.compiler_cfg, "ours_with_fallback")    # impl 行的 mode 是 compiler
-        self.assertEqual(own.impl_result, "reference")
+        self.assertEqual(own.impl_result, "ref")
         self.assertEqual(own.rewritten, "1590")
         self.assertEqual(own.sha_log, "deadbeef")
 
@@ -259,9 +259,9 @@ class HookFixture(unittest.TestCase):
     def add_round(self, num: str, impl: str, *, rewritten: bool, captured: bool) -> None:
         """按 `compile_hook.c` 的行契约写一趟编译：改写过的才有 cfg/opt/writeback。
 
-        `impl` 行的 `result`：ours → `ok`（只有它会如此），失败 → `fail`，其余 `reference`。
+        `impl` 行的 `result`：ours → `ok`（只有它会如此），失败 → `fail`，其余 `ref`。
         """
-        result = {"ours": "ok", "ours_failed": "fail"}.get(impl, "reference")
+        result = {"ours": "ok", "ours_failed": "fail"}.get(impl, "ref")
         if captured:
             (self.hook / f"hook_out_{num}.bin").write_bytes(f"out-{num}".encode())
         if rewritten:
@@ -284,7 +284,7 @@ class CompilePointTest(HookFixture):
     """
 
     def test_ours_round_counts_even_though_it_has_no_opt_bin(self):
-        self.add_round("006", "reference", rewritten=True, captured=True)
+        self.add_round("006", "ref", rewritten=True, captured=True)
         self.add_round("007", "ours", rewritten=False, captured=True)
         self.assertEqual([p.num for p in products.compile_points()], ["006", "007"])
         latest = products.latest_product()
@@ -295,7 +295,7 @@ class CompilePointTest(HookFixture):
                          products.fingerprint(self.hook / "hook_out_007.bin"))
 
     def test_rewritten_product_wins_when_both_exist(self):
-        self.add_round("008", "reference", rewritten=True, captured=True)
+        self.add_round("008", "ref", rewritten=True, captured=True)
         path = products.product_path("008")
         assert path is not None
         self.assertEqual(path.name, "008.opt.bin")          # 游戏跑的是改写后那份
@@ -304,7 +304,7 @@ class CompilePointTest(HookFixture):
 
     def test_failed_rewriter_keeps_a_fingerprint_but_is_no_compile_point(self):
         """改写器放弃那趟：产物是 hook_out，但编译点仍以 opt.bin 落地为准（别提前报）。"""
-        self.add_round("005", "reference", rewritten=False, captured=True)
+        self.add_round("005", "ref", rewritten=False, captured=True)
         self.assertEqual(products.compile_points(), [])
         self.assertNotEqual(products.product_fp("005"), "-")
 
@@ -314,7 +314,7 @@ class CompilePointTest(HookFixture):
         self.assertIsNone(products.latest_product())
 
     def test_scan_products_reports_the_ours_round(self):
-        self.add_round("008", "reference", rewritten=True, captured=True)
+        self.add_round("008", "ref", rewritten=True, captured=True)
         seen: set[str] = set()
         self.assertEqual(products.scan_products(seen), ["008"])   # 首次：只登记现状
         self.add_round("009", "ours", rewritten=False, captured=True)
@@ -323,7 +323,7 @@ class CompilePointTest(HookFixture):
 
     def test_integer_order(self):
         for num in ("009", "010", "1000"):
-            self.add_round(num, "reference", rewritten=True, captured=True)
+            self.add_round(num, "ref", rewritten=True, captured=True)
         self.assertEqual([p.num for p in products.compile_points()],
                          ["009", "010", "1000"])
         latest = products.latest_product()
@@ -351,14 +351,14 @@ class DoneRoundTest(HookFixture):
         self.assertEqual(products.impl_rounds(), {"006": "ours"})
 
     def test_reference_round_is_done_by_writeback(self):
-        self.add_round("005", "reference", rewritten=True, captured=True)
+        self.add_round("005", "ref", rewritten=True, captured=True)
         self.assertEqual(products.done_rounds(), {"005": "writeback"})
 
     def test_reference_impl_row_alone_is_not_done(self):
-        """参考实现那趟的 `impl` 行写在**起参考实现之前**（`result=reference`）—— 不算写完。"""
-        self.add_round("005", "reference", rewritten=False, captured=True)
+        """参考实现那趟的 `impl` 行写在**起参考实现之前**（`result=ref`）—— 不算写完。"""
+        self.add_round("005", "ref", rewritten=False, captured=True)
         self.assertEqual(products.done_rounds(), {})
-        self.assertEqual(products.impl_rounds(), {"005": "reference"})
+        self.assertEqual(products.impl_rounds(), {"005": "ref"})
 
 
 class _FakeTime:
@@ -378,14 +378,14 @@ class WaitNewProductTest(HookFixture):
     """等产物：`ours` 趟只有一行 `impl`，不得因此被判成「编译没完成」（bench 实测超时）。"""
 
     def test_ours_round_is_returned_when_its_product_lands(self):
-        self.add_round("005", "reference", rewritten=True, captured=True)
+        self.add_round("005", "ref", rewritten=True, captured=True)
         self.add_round("006", "ours", rewritten=False, captured=True)
         num, why = products.wait_new_product("005", 0.0, 4, "ours:off", since=0.0)
         self.assertEqual((num, why), ("006", ""))
 
     def test_reference_round_is_still_returned(self):
-        self.add_round("005", "reference", rewritten=True, captured=True)
-        num, why = products.wait_new_product("004", 0.0, 0, "reference:off", since=0.0)
+        self.add_round("005", "ref", rewritten=True, captured=True)
+        num, why = products.wait_new_product("004", 0.0, 0, "ref:off", since=0.0)
         self.assertEqual((num, why), ("005", ""))
 
     def test_progress_line_blames_the_product_not_the_rewriter(self):
@@ -519,12 +519,12 @@ class SegmenterTest(unittest.TestCase):
 
 def _ownership(num: str = "004", *, cfg_rewrite: str = "off", opt_mode: str = "off",
                rewritten: str = "0", sha_log: str = "ae1e2f3a",
-               impl: str = "reference") -> products.Ownership:
+               impl: str = "ref") -> products.Ownership:
     """一份构造的归属（`opt` 与 `cfg` 都给同一值时的常规形态）。"""
     return products.Ownership(num=num, cfg_rewrite=cfg_rewrite, opt_mode=opt_mode,
                               rewritten=rewritten, sha_log=sha_log, impl=impl,
                               compiler_cfg=impl,
-                              impl_result="ok" if impl == "ours" else "reference")
+                              impl_result="ok" if impl == "ours" else "ref")
 
 
 class ReportTableTest(unittest.TestCase):
@@ -543,8 +543,8 @@ class ReportTableTest(unittest.TestCase):
     def _rows(self):
         return [
             report.BenchRow(mode="off", num="011", fp="ae1e2f3a",
-                            hz=[5333878.0, 5334606.0, 5342389.0], compiler="reference",
-                            impl="reference"),
+                            hz=[5333878.0, 5334606.0, 5342389.0], compiler="ref",
+                            impl="ref"),
             report.BenchRow(mode="off", num="012", fp="805b43fb",
                             hz=[6791240.0, 6693626.0, 6767778.0], compiler="ours",
                             impl="ours"),
@@ -577,7 +577,7 @@ class ReportTableTest(unittest.TestCase):
         self.assertEqual(rep.schema, 1)
         d = rep.to_dict()
         self.assertEqual(d["schema"], 1)
-        self.assertEqual(d["baseline"], "reference:off")
+        self.assertEqual(d["baseline"], "ref:off")
         for v in d["variants"]:
             for key in ("compiler", "rewrite", "product_sha", "impl", "samples",
                         "median_hz", "spread_pct", "relative_pct", "fallback_rate"):

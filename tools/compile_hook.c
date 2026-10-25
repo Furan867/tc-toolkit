@@ -33,10 +33,10 @@
  *
  * 入口
  * ----
- * `opt.ini` 的 `[opt] compiler=` 选实现：`reference`（默认）/ `ours` / `ours_with_fallback`，
+ * `opt.ini` 的 `[opt] compiler=` 选实现：`ref`（默认）/ `ours` / `ours_with_fallback`，
  * 语义见 `docs/specs/2026-10-15-simplexc-interfaces.md` §5；**每次** compile() 都写一条
- * `impl` 事件到 `hook.log`（含 reference —— 回退率需要分母），键 `impl` / `mode` / `result`，
- * 词表 `reference | ours | fallback | ours_failed` 与 manifest 的 `impl` 列同源。
+ * `impl` 事件到 `hook.log`（含 ref —— 回退率需要分母），键 `impl` / `mode` / `result`，
+ * 词表 `ref | ours | fallback | ours_failed` 与 manifest 的 `impl` 列同源。
  *
  * 失败路径：ours 段的失败点归到 §8 的分类串（`error` 事件 `stage=ours` + `kind=`；
  * 超时 `stage=ours_timeout`、熔断 `stage=ours_fault`），**并照常写 manifest**（`impl=ours_failed`
@@ -108,6 +108,9 @@
 #ifndef OPT_INI
 #define OPT_INI     OPT_PROJ "\\opt.ini"
 #endif
+/* stdlib 前缀：相对项目根（`OPT_PROJ`）的路径。它不在游戏目录里，所以必须靠这个宏推出来；
+   读不到时核心报错（见 `simplexc_core.h`），不会静默退硬编码。 */
+#define STDLIB_PREFIX OPT_PROJ "\\simplexc\\corpus\\stdlib_prefix.si"
 #define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
 #define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
 
@@ -126,14 +129,31 @@ static void*      g_ours_prev = NULL;    /* 我们上次给游戏的产物缓冲
 /* ---- 选实现：`opt.ini` 的 `[opt] compiler=`（见 docs/specs/…interfaces.md §5）
  *
  * 合法值只在 `resolve_compiler()` 里定义一次（“静默改值”远比报错难查，见 pitfalls）。
- * 读不到 / 非法 → **reference**：绝不能把「没配」当成「我们的实现」。
+ * 读不到 / 非法 → **ref**：绝不能把「没配」当成「我们的实现」。
  */
 static const char* resolve_compiler(void) {
     static char mode[32] = "";
-    GetPrivateProfileStringA("opt", "compiler", "reference", mode, sizeof(mode), OPT_INI);
+    GetPrivateProfileStringA("opt", "compiler", "ref", mode, sizeof(mode), OPT_INI);
     if (lstrcmpA(mode, "ours") == 0) return "ours";
     if (lstrcmpA(mode, "ours_with_fallback") == 0) return "ours_with_fallback";
-    return "reference";
+    return "ref";
+}
+
+/* ---- stdlib 前缀开关：`opt.ini` 的 `[opt] stdlib`（默认 **on**）
+ *
+ * on  = 编译时把 `simplexc/corpus/stdlib_prefix.si` 拼在源码前面 —— 参考编译器的 `compile()`
+ *       内部就是自动这么做的，所以这才是真路径；
+ * off = 走我们硬编码的 runtime（`sema/analyze.cc` 的 `prefix_funcs()` + `global_seed` + `#U64_HASH`）。
+ *
+ * **`compiler = ref` 时这个键无作用，而且这不是「碰巧没作用」**：`ref` 根本不进 ours 段，
+ * 也就不调 `simplexc_compile()`（见 `compile()` 的 `is_ref` 分支）；参考编译器的前缀由它自己
+ * 在内部拼，与我们这个键无关 —— 两边产物逐字节相同（离线判据里量过）。
+ *
+ * 读不到 / 非法 → on（真路径）；配的原样值由 `raw` 带回，整行入选 `impl` 行（`stdlib_raw=`）——
+ * 写错（`of`）会看起来与 on 一样能编，日志里必须留下痕迹。 */
+static int resolve_stdlib(char* raw, DWORD raw_cap) {
+    GetPrivateProfileStringA("opt", "stdlib", "on", raw, raw_cap, OPT_INI);
+    return lstrcmpA(raw, "off") != 0;   /* 只有明确的 off 才关 */
 }
 
 /* ---- 失败分类（接口冻结版 1 §8）-----------------------------------------
@@ -205,14 +225,15 @@ static unsigned long long ours_budget_ms(void) {
  * 返回 NULL = 成功，否则是 §8 分类串。分类串由核心给（UnsupportedConstruct / InternalError /
  * BlobTooLarge / RelocUnsupported / SymbolUndefined），只有「没源码」与「形状不合法」是壳自己判的。
  */
-static const char* ours_compile_ours(void* out, const char* src, long long slen) {
+static const char* ours_compile_ours(void* out, const char* src, long long slen,
+                                     const char* stdlib_path) {
     if (g_ours_prev) { simplexc_free(g_ours_prev); g_ours_prev = NULL; }
     g_kind_detail[0] = 0;                           /* 诊断串只跟**本次**失败走 */
     if (!src || slen <= 0) return KIND_INTERNAL;     /* 没有源码可编（src 缺失或空）*/
 
     void* blob = NULL;
     long long len = 0, entry = 0;
-    const char* kind = simplexc_compile(src, slen, &blob, &len, &entry);
+    const char* kind = simplexc_compile(src, slen, stdlib_path, &blob, &len, &entry);
     if (kind) {                                     /* 失败：三个出参一个都没动 */
         append_str(g_kind_detail, sizeof g_kind_detail, 0, simplexc_last_error());
         return kind;
@@ -298,7 +319,8 @@ static int ours_guard_install(void) {
  * 计时用 GetTickCount64（毫秒粒度，别拿它量微秒级的差异 —— 这里要判的是"秒级预算"）。
  * `src`/`slen` 是游戏给的那份源码（壳已经从 NimStr 里取出来，与写 `hook_src_NNN.si` 的是同一块）。
  */
-static const char* ours_segment(void* out, const char* src, long long slen, int* installed,
+static const char* ours_segment(void* out, const char* src, long long slen,
+                                const char* stdlib_path, int* installed,
                                 unsigned long long* budget_ms) {
     *installed = ours_guard_install();
     *budget_ms = ours_budget_ms();
@@ -313,7 +335,7 @@ static const char* ours_segment(void* out, const char* src, long long slen, int*
     g_have_resume = 1;
     g_in_ours = 1;
     ULONGLONG t0 = GetTickCount64();
-    const char* err = ours_compile_ours(out, src, slen);
+    const char* err = ours_compile_ours(out, src, slen, stdlib_path);
     ULONGLONG elapsed = GetTickCount64() - t0;
     g_in_ours = 0;
     g_have_resume = 0;
@@ -525,7 +547,7 @@ done:
 static void manifest_line(LONG seq, int flags,
                           const char* src_name, long long src_len, const char* src_sha,
                           const char* out_name, long long out_len, const char* out_sha,
-                          const void* out, const char* impl) {
+                          const void* out, const char* impl, const char* stdlib) {
     if (!out) return;                      /* 没有 out 缓冲就没什么可记 */
     CreateDirectoryA(OUT_DIR, NULL);
     char path[MAX_PATH];
@@ -541,15 +563,15 @@ static void manifest_line(LONG seq, int flags,
     int n = 0;
     if (fresh)
         n += sprintf(line + n, "seq\ttime\tflags\tsrc\tsrc_len\tsrc_sha256"
-                               "\tout\tout_len\tout_sha256\tr0\tr1\tr2\tr3\tr4\timpl\r\n");
+                               "\tout\tout_len\tout_sha256\tr0\tr1\tr2\tr3\tr4\timpl\tstdlib\r\n");
     n += sprintf(line + n,
                  "%03ld\t%04d-%02d-%02d %02d:%02d:%02d\t0x%X\t%s\t%lld\t%s\t%s\t%lld\t%s"
-                 "\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t%s\r\n",
+                 "\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t0x%016llX\t%s\t%s\r\n",
                  seq, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
                  (unsigned)flags, src_name, src_len, src_sha, out_name, out_len, out_sha,
                  (unsigned long long)r[0], (unsigned long long)r[1],
                  (unsigned long long)r[2], (unsigned long long)r[3],
-                 (unsigned long long)r[4], impl ? impl : "-");
+                 (unsigned long long)r[4], impl ? impl : "-", stdlib ? stdlib : "-");
     DWORD w = 0;
     WriteFile(h, line, (DWORD)n, &w, NULL);
     CloseHandle(h);
@@ -820,14 +842,20 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     }
     if (!g_compile) return NULL;
 
-    /* 选实现 + 跑 ours 段。§5 的词表与三种模式一一对应：
-     *   reference       → impl=reference  result=reference（**每次调用都记**，回退率要分母）
+    /* 选实现 + 跑 ours 段。§5 的词表与三种模式一一对应（左列与 `impl=` 这次**同词**：两者是两
+       个轴（`mode=` 是配了什么，`impl=` 是实际走了哪个），但词表变更时得一起改，见接口 §5）：
+     *   ref             → impl=ref        result=ref（**每次调用都记**，回退率要分母）
      *   ours 成功       → impl=ours       result=ok
-     *   fallback 成功   → impl=fallback   result=reference
+     *   fallback 成功   → impl=fallback   result=ref
      *   ours 失败       → impl=ours_failed result=fail
      * 熔断（g_breaker）后不再进 ours 段，按模式当"ours 失败"处理。 */
     const char* mode = resolve_compiler();
-    int is_ref = lstrcmpA(mode, "reference") == 0;
+    int is_ref = lstrcmpA(mode, "ref") == 0;
+    /* stdlib 开关：`compiler = ref` 时它仍然被读、也被记，但对产物**无作用** —— 参考那条路
+       不调 `simplexc_compile()`，前缀是参考编译器自己内部拼的（见 `resolve_stdlib` 的注释）。 */
+    char stdlib_raw[16];
+    const int stdlib_on = resolve_stdlib(stdlib_raw, sizeof stdlib_raw);
+    const char* stdlib = stdlib_on ? "on" : "off";
     const char* impl = NULL;
     const char* result = NULL;
     const char* kind = NULL;               /* §8 分类串；NULL = 没失败 */
@@ -835,11 +863,12 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     unsigned long long budget_ms = 0;
 
     if (is_ref) {
-        impl = "reference"; result = "reference"; need_reference = 1;
+        impl = "ref"; result = "ref"; need_reference = 1;
     } else {
         if (out && !g_breaker) {
             ours_attempted = 1;
-            kind = ours_segment(out, (const char*)sp, slen, &guard_installed, &budget_ms);
+            kind = ours_segment(out, (const char*)sp, slen, stdlib_on ? STDLIB_PREFIX : NULL,
+                                &guard_installed, &budget_ms);
             ours_ok = kind == NULL;
         } else {
             /* 没有 out 缓冲（无处写产物）/ 已熔断：不试 ours */
@@ -852,7 +881,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
            回退率是关掉回退的唯一量化依据。其余分类（未实现 / `OurBug` / 超时 / 熔断）照旧转交：
            那几档确实是「我们不行」，让原版顶上是对的。 */
         else if (lstrcmpA(kind, KIND_USER_ERROR) == 0) { impl = "ours_failed"; result = "fail"; }
-        else { impl = "fallback"; result = "reference"; need_reference = 1; }
+        else { impl = "fallback"; result = "ref"; need_reference = 1; }
     }
 
     /* 编译期的**非致命观察**（解析期 notes、「不可达 def 被跳过」）以前在编译路径上没有任何
@@ -895,8 +924,11 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     /* impl 行在**起参考实现之前**写：参考实现是别人的代码，它 aborts 或崩掉的话
        这一行是唯一的"我们走到了哪"的记录（hook.log 只加行，不改已有行）。 */
     {
-        char kvi[192];
-        int n = sprintf(kvi, "impl=%s\tmode=%s\tresult=%s", impl, mode, result);
+        char kvi[224];
+        int n = sprintf(kvi, "impl=%s\tmode=%s\tresult=%s\tstdlib=%s", impl, mode, result, stdlib);
+        /* 原样值只在它不被认出来时多记一个键：`stdlib = of` 会静默当 on 用（能编、产物一样），
+           而开/关的产物**字节与符号表都不同**，事后归因只靠这一行。 */
+        if (lstrcmpA(stdlib_raw, stdlib) != 0) n += sprintf(kvi + n, "\tstdlib_raw=%s", stdlib_raw);
         if (ours_attempted) n += sprintf(kvi + n, "\tbudget_ms=%llu", budget_ms);
         if (guard_installed) n += sprintf(kvi + n, "\tguard=veh");
         hook_log(seq, "impl", kvi);
@@ -930,7 +962,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
             sprintf(oname, "hook_out_%03ld.bin", seq);
             sha256_hex(optr, olen, osha);
         }
-        manifest_line(seq, flags, sname, slen, ssha, oname, olen, osha, out, impl);
+        manifest_line(seq, flags, sname, slen, ssha, oname, olen, osha, out, impl, stdlib);
     }
     return ret;
 }

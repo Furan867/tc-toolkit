@@ -108,7 +108,7 @@ def product_fp(num: str | None) -> str:
 def impl_rounds(path: Path | None = None) -> dict[str, str]:
     """编号 → **实际走了哪个实现**（`hook.log` 的 `impl` 行；同号取最后一条）。
 
-    `impl` 行每次 `compile()` 都写（含 reference —— 回退率要分母），所以它是日志里
+    `impl` 行每次 `compile()` 都写（含 ref —— 回退率要分母），所以它是日志里
     「编译发生过」的完整清单；`cfg`/`opt` 只有起过改写器的那趟才有。
     """
     where = None if path is None else str(path)

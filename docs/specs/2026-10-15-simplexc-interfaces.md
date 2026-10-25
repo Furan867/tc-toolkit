@@ -238,27 +238,28 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 ## 5. DLL 壳（`tools/compile_hook.c` 演进 + `simplexc/shell/`）
 
-**模式（冻结）**：`opt.ini` 的 `[opt] compiler = reference | ours | ours_with_fallback`；**缺失键兜底 `reference`**
+**模式（冻结）**：`opt.ini` 的 `[opt] compiler = ref | ours | ours_with_fallback`；**缺失键兜底 `ref`**
 （fail-safe：绝不能把"没配"当成"我们的实现"）。
 
 | 模式 | 我们编译成功 | 我们编译失败（未支持/内部错误/超时/熔断） |
 |---|---|---|
-| `reference` | —（不调用我们的编译器） | — |
+| `ref` | —（不调用我们的编译器） | — |
 | `ours_with_fallback` | 用我们的产物 | **整单转交 `compile_real.dll`，原样返回它的 Result** |
 | `ours` | 用我们的产物 | **不转交**：返回自造失败 Result（`out[3]≠0`），游戏走失败分支，不跑新代码 |
 
 - 自造失败 Result（仅 `ours` 模式需要）：
   `out[3] = len`、`out[4] = 指向 { u64(len | (1<<62)), char data[len], NUL }` —— bit62 置位 → 游戏不 free
   （依据：主设计 §2.3 的门控 + §2.2 的失败判定）。内容前缀固定 `ours: ` + 错误分类，供回退率统计。
-- **熔断**：VEH（`AddVectoredExceptionHandler`）包住整次调用；触发后本进程内永久切 `reference`
+- **熔断**：VEH（`AddVectoredExceptionHandler`）包住整次调用；触发后本进程内永久切 `ref`
   （记 `error stage=ours_fault`）。耗时超预算（默认 5 s，调试期 60 s）→ 记 `error stage=ours_timeout` → 按模式回退。
   失败一律**不崩游戏**：任何异常路径都返回一个形状合法的 Result。
 - 记录（冻结）：
-  - `impl` 词表（**唯一一处定义**，manifest 列与 hook.log 行共用）：`reference`（配置为参考）/ `ours`（用了我们的产物）/
+  - `impl` 词表（**唯一一处定义**，manifest 列与 hook.log 行共用）：`ref`（配置为参考）/ `ours`（用了我们的产物）/
     `fallback`（`ours_with_fallback` 且 ours 失败 → 参考产物）/ `ours_failed`（`ours` 模式失败，未转交）；
+    （词表变更：`reference` → `ref`，2026-10-25，负责人批准 —— 配置值 `compiler=` 与日志词表一起改，不存在别名）
   - `manifest.tsv` **末尾追加 `impl` 列**（既有列序号不变），**每次调用都写**；
-  - `hook.log` 新增 per-call `impl` 行（键：`impl` / `mode` / `result`）—— **含 reference 模式**：
-    回退率需要分母，只在「非 reference」时记会把「绝大多数调用都是 reference」这个事实藏起来；
+  - `hook.log` 新增 per-call `impl` 行（键：`impl` / `mode` / `result`）—— **含 ref 模式**：
+    回退率需要分母，只在「非 ref」时记会把「绝大多数调用都是 ref」这个事实藏起来；
   - 归属只认 `hook.log` 的 `opt` / `impl` 行（主设计 §7.3）。
 - 三模式与 `rewrite` 正交（`rewrite` 仍只由改写器定义合法值集合）。
 

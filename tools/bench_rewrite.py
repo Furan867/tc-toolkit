@@ -10,7 +10,7 @@
     py tools/bench_rewrite.py                        # off,on,short,short_cse 各 8s
     py tools/bench_rewrite.py -m on,short
     py tools/bench_rewrite.py -n                     # 只打印计划
-    py tools/bench_rewrite.py --variant reference:off --variant ours:off --json out.json
+    py tools/bench_rewrite.py --variant ref:off --variant ours:off --json out.json
 
 结果同时写到 `work/freq/bench_<时间戳>.tsv`；`--json` 另出一份 `schema=1` 报告。
 """

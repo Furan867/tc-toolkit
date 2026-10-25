@@ -21,6 +21,14 @@ extern "C" {
 
 /* 编译一段 Simplex 源码（**内存里的**源码，不落盘 —— 游戏进程里没有临时文件可言）。
  *
+ * `stdlib_path` 决定「编译前拼不拼 stdlib 前缀」：
+ *   NULL → 不拼，只用我们硬编码的 runtime（`sema/prefix_funcs` + `global_seed` + `#U64_HASH` 那套）；
+ *   非 NULL → 读这个文件（`simplexc/corpus/stdlib_prefix.si`），把它的内容拼在源码**前面**
+ *            —— 参考编译器的 `compile()` 内部就是自动这么做的，开关只是把它拿出来可控；
+ *   读不到 → `InternalError`，原因（含路径）在 `simplexc_last_error()`；**不退硬编码**：
+ *            「文件没部署」与「要求关掉 stdlib」是两件事，静默降级会把两者混成一件。
+ *   路径由壳给（壳已经持有项目根 `OPT_PROJ`），核心不推自己的安装位置。
+ *
  * 成功：返回 NULL
  *   out_blob  → malloc 的产物缓冲：前 8 字节 = `out_len | (1<<62)`（bit62 让游戏不 free），
  *               机器码从 +8 起，**尾部多 8 字节 padding**（游戏 memcpy 会读到末尾之外，主设计 §4-1）。
@@ -37,8 +45,8 @@ extern "C" {
  * 不抛异常、不写文件、不改可观察的全局状态。调用方仍应包 VEH —— LLVM 在游戏进程里跑，
  * 熔断是壳的责任（`ours_veh`），不是核心的。
  */
-const char* simplexc_compile(const char* src, long long src_len, void** out_blob,
-                             long long* out_len, long long* out_entry);
+const char* simplexc_compile(const char* src, long long src_len, const char* stdlib_path,
+                             void** out_blob, long long* out_len, long long* out_entry);
 
 /* 最近一次 `simplexc_compile` 失败的**三轴诊断串**（`sema/用户源码错 第 12 行：…`）。
  *

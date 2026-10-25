@@ -167,8 +167,8 @@ int main(int argc, char** argv) {
   void* blob = nullptr;
   long long len = 0;
   long long entry = 0;
-  const char* kind = simplexc_compile(src.data(), static_cast<long long>(src.size()), &blob, &len,
-                                      &entry);
+  const char* kind = simplexc_compile(src.data(), static_cast<long long>(src.size()), nullptr,
+                                      &blob, &len, &entry);
   if (kind != nullptr) {
     std::cerr << "编译失败：" << kind << "（源码 " << src.size() << " B）" << std::endl;
     return 1;

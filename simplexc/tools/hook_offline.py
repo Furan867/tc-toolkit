@@ -11,7 +11,7 @@
 |---|---|
 | `ours-nosrc`       | mode=ours + **空源码** → 壳自己判 `InternalError`：失败串 `ours: InternalError`、manifest `impl=ours_failed`、hook.log 的 `error`(stage=ours/kind=InternalError) + `impl` 两条都在 |
 | `fallback-nosrc`   | mode=ours_with_fallback + 空源码 → 整单转交原版编译器：产物与**同一进程里**原版编译器的产物逐字节相同、manifest `impl=fallback` |
-| `ref`              | mode=reference → manifest `impl=reference`、hook.log 有 `impl` 行（回退率的分母） |
+| `ref`              | mode=ref → manifest `impl=ref`、hook.log 有 `impl` 行（回退率的分母） |
 | `ours-ok`          | mode=ours + 真源码（`SRC` = 176.si）→ 产物是**我们的**（头 bit62=1）、`impl=ours`、无 `error` 行、同进程重复编译逐字节相同、manifest 记的 out_len/out_sha256 与产物一致 |
 | `refcmp`           | reference 不回归：新壳与「改动前」的产物逐字节相同 |
 | `timeout-ours`     | 预算 0 → `ours: Timeout`、manifest `impl=ours_failed` |
@@ -50,7 +50,7 @@
 - `base`（改动前）：`git show <BASELINE_REF>:tools/compile_hook.c` + 只把 5 个路径宏包一层
   `#ifndef`（值逐字符不变）编成第二份 dll。测试构建要换路径，而基线壳把路径写死；只包一层
   `#ifndef` 不可能改变任何运行期行为，所以它仍是「改动前」的语义。
-  **只用于 reference 模式的 `refcmp`**（`case_refcmp` 里 `set_mode("base", "reference")`）：
+  **只用于 reference 实现那一趟的 `refcmp`**（`case_refcmp` 里 `set_mode("base", None)`）：
   那版壳的 ours 段读预编译 blob，`build/blob_empty.bin` 与 `OURS_BLOB` 路径都已退役 ——
   拿它跑 ours case 无从判起。
   **gcc 单文件编**：基线壳不引用 `simplexc_compile`，不需要 C++ 运行库。
@@ -485,10 +485,17 @@ def find_log(records, event, **want):
 
 
 def set_mode(v, mode, extra=""):
+    """写壳读的 opt.ini（每次重写整份，case 之间互不影响）。
+
+    `mode=None` = 不写 `compiler` 键：基线壳（`BASELINE_REF` 那版源码）合法值还是改名之前的旧名，
+    而它的「缺失键兜底」就是参考实现 —— 不写键反而比写一个它认不出的值更直白（后者靠的是
+    「非法值静默落到兜底」，正是 pitfalls 里那条）。
+    """
     d = vdirs(v)
+    head = "" if mode is None else f"compiler = {mode}\n"
     try:
         with open(d["ini"], "w", encoding="ascii") as f:
-            f.write(f"[opt]\ncompiler = {mode}\n{extra}")
+            f.write(f"[opt]\n{head}{extra}")
     except OSError as e:
         raise BuildError(f"写不了壳读的 opt.ini {d['ini']}：{e}") from e
 
@@ -616,7 +623,7 @@ def case_fallback_nosrc(c):
     """空源码 + mode=ours_with_fallback → ours 判 InternalError → 整单转交参考（产物逐字节相同）。"""
     os.environ.pop("TC_OURS_TIMEOUT_MS", None)
     # 先把这份源码的参考产物在**同一进程、同一个 compile_real.dll 实例**里拿一份作对照
-    set_mode("new", "reference")
+    set_mode("new", "ref")
     dll, before = load_and_snapshot("new")
     raw_ref, ret_ref = call_compile(dll, b"")
     q_ref, prod_ref = show_result(c, "reference（先跑，作对照）", raw_ref, ret_ref)
@@ -641,19 +648,19 @@ def case_fallback_nosrc(c):
 
 
 def case_ref(c):
-    """情形 3：mode=reference → manifest impl=reference / hook.log impl 行（回退率的分母）。"""
-    set_mode("new", "reference")
+    """情形 3：mode=ref → manifest impl=ref / hook.log impl 行（回退率的分母）。"""
+    set_mode("new", "ref")
     dll, before = load_and_snapshot("new")
     raw, ret = call_compile(dll, source_bytes())
-    q, prod = show_result(c, "reference", raw, ret)
+    q, prod = show_result(c, "ref", raw, ret)
     rows, recs = show_delta(c, "new", before)
     bit62 = ((struct.unpack_from("<Q", prod, 0)[0] >> 62) & 1) if prod else -1
     c.check("err_len_zero", q[3] == 0, f"err_len={q[3]}")
     c.check("product_not_empty", prod is not None and q[0] > 0, f"out_len={q[0]}")
     c.check("product_not_ours", bit62 == 0, f"产物头 bit62={bit62}（我们给游戏的缓冲才置位）")
-    c.check("manifest_impl_reference", bool(rows) and rows[-1].get("impl") == "reference",
+    c.check("manifest_impl_ref", bool(rows) and rows[-1].get("impl") == "ref",
             f"impl={last_impl(rows)}")
-    c.check("log_impl_reference", bool(find_log(recs, "impl", impl="reference")))
+    c.check("log_impl_ref", bool(find_log(recs, "impl", impl="ref")))
 
 
 def case_ours_ok(c):
@@ -696,9 +703,9 @@ def case_ours_ok(c):
 
 
 def case_refcmp(c):
-    """reference 不回归：改动前 vs 改动后，同一进程、同一个 compile_real.dll 实例。"""
-    set_mode("new", "reference")
-    set_mode("base", "reference")
+    """reference 实现不回归：改动前 vs 改动后，同一进程、同一个 compile_real.dll 实例。"""
+    set_mode("new", "ref")
+    set_mode("base", None)          # 基线壳的合法值是改名之前的旧名，不写键 = 走它的兜底（参考实现）
     note_baseline(c)
     dll_new, before_new = load_and_snapshot("new")
     raw_new, ret_new = call_compile(dll_new, source_bytes())
@@ -845,12 +852,15 @@ def case_undefined_call(c):
     （否则「逐字节相同」可能只是两边都空）。
     """
     os.environ.pop("TC_OURS_TIMEOUT_MS", None)
-    set_mode("new", "reference")
+    # 这条 case 的前提是「`hex` 对我们来说没实现」。**`stdlib = on` 时它是有定义的**
+    # —— 前缀里有 `def hex`，我们要真把它编出来（全量语料 98/98 就是这么过的）——
+    # 所以这里把 stdlib 钉在 off：判的是「没实现的名字 → 转交」那条路，不是前缀。
+    set_mode("new", "ref", extra="stdlib = off\n")
     dll, before = load_and_snapshot("new")
     raw_ref, ret_ref = call_compile(dll, UNDEFINED_CALL_SRC)
     q_ref, prod_ref = show_result(c, "reference（先跑，作对照）", raw_ref, ret_ref)
     show_delta(c, "new", before, "reference ")
-    set_mode("new", "ours_with_fallback")
+    set_mode("new", "ours_with_fallback", extra="stdlib = off\n")
     raw_fb, ret_fb = call_compile(dll, UNDEFINED_CALL_SRC)
     q_fb, prod_fb = show_result(c, "ours_with_fallback（hex）", raw_fb, ret_fb)
     rows, recs = show_delta(c, "new", before, "fallback ")
@@ -910,7 +920,7 @@ CASES = OrderedDict([
                     case_ours_nosrc)),
     ("fallback-nosrc", ("空源码 + ours_with_fallback → 整单转交参考、产物逐字节相同",
                         case_fallback_nosrc)),
-    ("ref", ("情形 3：mode=reference → manifest impl=reference + hook.log 的 impl 行（分母）",
+    ("ref", ("情形 3：mode=ref → manifest impl=ref + hook.log 的 impl 行（分母）",
              case_ref)),
     ("ours-ok", ("真源码 + mode=ours → 产物是我们的（bit62）、同进程可复现、记账自洽、无 error 行",
                  case_ours_ok)),

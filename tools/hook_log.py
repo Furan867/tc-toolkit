@@ -37,11 +37,11 @@
 
 `mode` 是**实际执行**的模式（`off` / `on` / `short` / `short_cse`）：
 解析失败或缩短被防御挡回时它与 `cfg` 的 `rewrite` 不同，那正是要查的信号。
-⚠️ `impl` 行的 `mode` 是**另一个东西** —— 它是 `opt.ini` 里配的 `compiler`（`reference` / `ours` /
+⚠️ `impl` 行的 `mode` 是**另一个东西** —— 它是 `opt.ini` 里配的 `compiler`（`ref` / `ours` /
 `ours_with_fallback`），取值以 `docs/specs/2026-10-15-simplexc-interfaces.md` §5 的 `impl` 词表为准。
 解析时按事件名区分：`opt` 行的 `mode` = 改写器实际做了什么，`impl` 行的 `mode` = 配了什么。
-`impl` 词表（唯一一处定义在接口文档 §5）：`reference` / `ours` / `fallback` / `ours_failed`，
-**每次编译都写一行**（含 reference —— 回退率需要分母）；解析：`fallback` = 配了
+`impl` 词表（唯一一处定义在接口文档 §5）：`ref` / `ours` / `fallback` / `ours_failed`，
+**每次编译都写一行**（含 ref —— 回退率需要分母）；解析：`fallback` = 配了
 `ours_with_fallback` 但 ours 失败、整单转交了参考实现。
 """
 from __future__ import annotations

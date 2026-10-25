@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -78,6 +79,23 @@ constexpr std::size_t kTailPadding = 8;
 
 /* `Blob::bytes` 的头 8 字节（bit62 → 游戏不 free 我们的缓冲，主设计 §2.3）。 */
 constexpr std::size_t kHeaderBytes = 8;
+
+/* stdlib 前缀的缓存（`simplexc_compile` 的非 NULL `stdlib_path` 才用）。
+ * 为什么要缓存：游戏每次编译都调这里，而这份文件是构建期产物、进程内不会变 ——
+ * 每趟读 27 KB 只是把磁盘 IO 搬进编译耗时。读失败**不**缓存（部署修好了不必重启游戏）。 */
+std::string g_stdlib_prefix;
+bool g_stdlib_ready = false;
+
+bool read_whole_file(const char* path, std::string& out) {
+  std::FILE* f = std::fopen(path, "rb");
+  if (f == nullptr) return false;
+  char buf[4096];
+  std::size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+  const bool ok = std::ferror(f) == 0;
+  std::fclose(f);
+  return ok;
+}
 
 /* 与 CLI 同一份查表（`cli/win32_export.hh`：kernel32 → ucrtbase → msvcrt），`__imp_X` 的剥法与
  * 模块顺序都只在那边定义。
@@ -159,7 +177,8 @@ void* materialize(const tc::Blob& blob, long long* out_len, long long* out_entry
 
 }  // namespace
 
-extern "C" const char* simplexc_compile(const char* src, long long src_len, void** out_blob,
+extern "C" const char* simplexc_compile(const char* src, long long src_len,
+                                        const char* stdlib_path, void** out_blob,
                                         long long* out_len, long long* out_entry) {
   /* 出参先判空：失败时它们**一个都不动**（头文件的承诺），成功那一刻才一起写。 */
   if (src == nullptr || src_len < 0 || out_blob == nullptr || out_len == nullptr ||
@@ -168,9 +187,22 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len, void
   }
 
   try {
-    const std::string text(src, static_cast<std::size_t>(src_len));
+    std::string text(src, static_cast<std::size_t>(src_len));
     g_last_error[0] = '\0';
     g_last_warnings[0] = '\0'; /* 观察串也只跟本次调用走 */
+    /* 前缀拼在**用户源码之前**：前缀里的 `const` / `type` / `def` 都是后文引用的名字。
+       代价：报错行号是拼接后的行号（与参考编译器内部加前缀时同一种口径）。 */
+    if (stdlib_path != nullptr) {
+      if (!g_stdlib_ready) {
+        if (!read_whole_file(stdlib_path, g_stdlib_prefix)) {
+          std::cerr << "[simplexc] stdlib 前缀读不到：" << stdlib_path << std::endl;
+          std::snprintf(g_last_error, sizeof g_last_error, "stdlib 前缀读不到：%s", stdlib_path);
+          return kInternalError;
+        }
+        g_stdlib_ready = true;
+      }
+      text.insert(0, g_stdlib_prefix);
+    }
     sx::Frontend fe(sx::SrcText{text});
     /* 声明层错误（原型 `Frontend.decl_errors`）不是异常，但同样是我们不支持的源码形态。
        为什么直接判 InternalError 而不是继续 lowering：声明表不全时 lowering 只会报更离谱的错。 */

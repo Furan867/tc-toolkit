@@ -8,7 +8,7 @@
 
 值合法性与兜底（设计 §4）：
 
-    键缺失      compiler → reference（fail-safe：绝不能把「没配」当成「我们的实现」）
+    键缺失      compiler → ref（fail-safe：绝不能把「没配」当成「我们的实现」）
                 rewrite  → on（与转发层/改写器现行的兜底一致）
     值非法      报错。读到的值会原样进报告当「配了什么」，静默归一等于把 A/B 的
                 标注指向另一个变体，那比报错难查得多。
@@ -20,10 +20,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-COMPILERS = ("reference", "ours", "ours_with_fallback")
+COMPILERS = ("ref", "ours", "ours_with_fallback")
 REWRITES = ("off", "on", "short", "short_cse")
 
-FALLBACK_COMPILER = "reference"
+FALLBACK_COMPILER = "ref"
 FALLBACK_REWRITE = "on"
 
 OPT_SECTION = "opt"

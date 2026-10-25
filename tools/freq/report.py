@@ -356,7 +356,7 @@ def build_report(rows: list[BenchRow], *, when: str | None = None) -> Report:
     """把 bench 的每轮结果汇成 `Report`。
 
     回退率按 per-call `impl` 行算：分母 = 该变体所有已知 `impl` 的轮次，分子 =
-    `impl` 与配的 `compiler` 不符（`ours*` 却跑成 `reference`/`fallback`/…）的轮次。
+    `impl` 与配的 `compiler` 不符（`ours*` 却跑成 `ref`/`fallback`/…）的轮次。
     `fallback_reasons` 按实际 `impl` 归类。相对基线只认**第一个变体**。
 
     `impl` 由 `_bench_one` 从 `hook.log` 的 `impl` 行填好（本函数只看 `BenchRow`，

@@ -2,7 +2,7 @@
 """自动测当前电路在各变体下的主频（`tools/bench_rewrite.py` 的实现）。
 
 变体轴是 `compiler:rewrite`（§4）——旧调用 `-m on,short` 等价于「编译器不动、
-只换 rewrite」，新调用 `--variant reference:off --variant ours:off` 一次对比两个实现。
+只换 rewrite」，新调用 `--variant ref:off --variant ours:off` 一次对比两个实现。
 
 前提
 ----
@@ -29,7 +29,7 @@
     py tools/bench_rewrite.py -m on,short            # 选模式与顺序
     py tools/bench_rewrite.py -s 12 -r 2             # 每个模式 12 个点、重复 2 轮
     py tools/bench_rewrite.py -n                     # 只打印计划，不动游戏与配置
-    py tools/bench_rewrite.py --variant reference:off --variant ours:off --json out.json
+    py tools/bench_rewrite.py --variant ref:off --variant ours:off --json out.json
 
     参数：-m/--modes  -s/--seconds  -d/--drop  -r/--repeat
           -t/--compile-timeout  -n/--dry-run
@@ -63,7 +63,7 @@ _USAGE = """\
     py tools/bench_rewrite.py -m on,short            # 选模式与顺序
     py tools/bench_rewrite.py -s 12 -r 2             # 每个模式 12 个点、重复 2 轮
     py tools/bench_rewrite.py -n                     # 只打印计划，不动游戏与配置
-    py tools/bench_rewrite.py --variant reference:off --variant ours:off --json out.json
+    py tools/bench_rewrite.py --variant ref:off --variant ours:off --json out.json
 
     参数：-m/--modes  -s/--seconds  -d/--drop  -r/--repeat
           -t/--compile-timeout  -n/--dry-run

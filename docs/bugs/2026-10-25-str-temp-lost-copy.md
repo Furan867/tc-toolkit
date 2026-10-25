@@ -1,4 +1,6 @@
-- 状态：未修
+- 状态：已修（`0c2b498`）—— 根因是 DSEPass（DeadStoreElimination）把我们生成的悬垂 alloca 当死写删掉；
+  `str_concat` 与 `template_expr` 的缓冲改为堆（`tc_array_alloc`），与 `builtin_str` 同一条路。
+  069 / 080 / 003 三份现均 `结论: ok`；034 也顺带修好（它用 `str(U8)`，同一个 bug）
 - 影响：**三份跑不起来** —— `corpus/src/069.si`、`080.si`，以及**游戏里真崩的 003 号关卡**（“方寸之间”，
   `work/hook/error-level/hook_src_003.si`，用户在游戏内测试时崩在这一关）。构造上是「同一表达式里做
   第二次字符串拼接」：069 是 `get_padded_number` 里 `s = " " + s`，080 与 003 是**同一段** `get_input`

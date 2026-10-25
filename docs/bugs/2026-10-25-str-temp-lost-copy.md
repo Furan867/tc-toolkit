@@ -1,10 +1,13 @@
 - 状态：未修
-- 影响：`corpus/src/069.si`、`080.si`（两份都跑不起来）；构造上是「同一表达式里做第二次字符串拼接」，069 是
-  `get_padded_number` 里 `s = " " + s`，080 是 `get_input` 里 `` `[left]`+`…`+`[/left]` `` 的插值拼接
+- 影响：**三份跑不起来** —— `corpus/src/069.si`、`080.si`，以及**游戏里真崩的 003 号关卡**（“方寸之间”，
+  `work/hook/error-level/hook_src_003.si`，用户在游戏内测试时崩在这一关）。构造上是「同一表达式里做
+  第二次字符串拼接」：069 是 `get_padded_number` 里 `s = " " + s`，080 与 003 是**同一段** `get_input`
+  里的 `` `[left]`+`从地址 {text_add} 读取 {text_state}`+`[/left]` ``（003.si:1094）
 - 现象：跑到 `0x40800000`（= `kStackBase + kStackSize`，栈区上界外一页）就死。069 报
   `未映射读=0x40800000`（Unicorn 挂了 `UC_HOOK_MEM_READ_UNMAPPED` 后的返回码是 `UC_ERR_MAP`），
-  080 报 `stub_error: memcpy 读源 … UC_ERR_READ_UNMAPPED`。我们的产物在 **tick 0 内**就死
-  （`sim_cycle` 仍是 -1）
+  080 报 `stub_error: memcpy 读源 … UC_ERR_READ_UNMAPPED`，**003 报
+  `pc=0x1000303d rsp=0x407ffcc0 未映射读=0x40800000(+1)`**。我们的产物都在 **tick 0 内**就死
+  （`sim_cycle` 仍是 -1）；参考产物三份都 `ok`
 - 判据：`python simplexc/tools/m5/batch.py --with-prefix --jobs 12 --ticks 100` 的 `host_fail` 归 0
   （现在是 069 / 080 两份）
 - 已确认：

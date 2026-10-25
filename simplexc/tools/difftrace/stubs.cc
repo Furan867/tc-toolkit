@@ -10,6 +10,7 @@
  *   CreateFileA                     一律 INVALID_HANDLE_VALUE（真开文件会拿真实磁盘，不可重复）
  *   CloseHandle                     返回 1
  *   ExitThread / ExitProcess        uc_emu_stop（真结束线程/进程就没有仿真了）
+ *   memcpy                          真拷贝（这五份语料用它搬内存；host.py 跑真进程，不需要这个桩）
  */
 #include "stubs.hh"
 
@@ -87,6 +88,10 @@ void Stubs::install(const std::vector<Thunk>& thunks) {
             {"CloseHandle", Kind::kCloseHandle},
             {"ExitThread", Kind::kExitThread},
             {"ExitProcess", Kind::kExitProcess},
+            /* 只是 CRT 的内存拷贝，但它落在 `unknown_` 里就不改写 IAT 槽 —— 执行时跳到 DLL 的
+             * thunk、再跳真的 Windows 地址，Unicorn 里那不可执行（069/082/086/088/090 实测报
+             * 「sidecar 的 …（stub memcpy）没有桩」）。`host.py` 不需要这个桩：它跑在真进程里。 */
+            {"memcpy", Kind::kMemcpy},
         };
         for (const auto& k : known) {
             if (name == k.first) {
@@ -164,6 +169,34 @@ void Stubs::dispatch(uint64_t address) {
             rax = virtual_alloc(a0, a1, a2);
             note("VirtualAlloc", {a0, a1, a2, a3}, rax);
             break;
+
+        case Kind::kMemcpy: {
+            /* `void* memcpy(void* dst, const void* src, size_t n)`：Win64 前三个实参在 rcx/rdx/r8。
+             * 必须真拷贝 —— 这几份语料拿它搬大块内存，不拷贝后续读到的就是旧值。
+             * 上限只为防一个坏长度把宿主吃光，不是语义的一部分。 */
+            static constexpr uint64_t kMaxCopy = 64ull << 20;
+            if (a2 > kMaxCopy) {
+                error_ = "memcpy 的长度 " + std::to_string(a2) + " 超出 64 MB 上限";
+                uc_emu_stop(uc_);
+                return;
+            }
+            if (a2 != 0) {
+                std::vector<uint8_t> buf(static_cast<size_t>(a2));
+                const uc_err rerr = uc_mem_read(uc_, a1, buf.data(), a2);
+                if (rerr != UC_ERR_OK) {
+                    fail("memcpy 读源", rerr);
+                    return;
+                }
+                const uc_err werr = uc_mem_write(uc_, a0, buf.data(), a2);
+                if (werr != UC_ERR_OK) {
+                    fail("memcpy 写目的", werr);
+                    return;
+                }
+            }
+            rax = a0;
+            note("memcpy", {a0, a1, a2}, rax);
+            break;
+        }
 
         case Kind::kVirtualFree:
             /* 记账但不真释放：真释放会让后面的 VirtualAlloc 复用地址，两边复用时机一差就分叉。 */

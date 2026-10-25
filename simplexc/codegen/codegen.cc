@@ -2057,21 +2057,22 @@ LLVMValueRef Codegen::len_of(const V& obj, int line) {
 }
 
 V Codegen::str_concat(const V& a, const V& b, int line) {
+    /* 缓冲**走堆**（`tc_array_alloc`），不能 `alloca` 在本帧：拼接结果是个 `Str`，它要能活过产出
+       它的那一帧（`get_padded_number` 这类 `def` 直接把拼接结果 `return`）。「返回指向自己 alloca 的
+       指针」在 LLVM 眼里是悬垂指针 —— 函数返回后那块内存没人读，DSE 就把两段 copy 和头字 store
+       一起当死写删掉，只剩 alloca 抬栈指针，头字位上留着 `___chkstk_ms` 写进去的栈指针，
+       `>> 16` 当成长度（`docs/bugs/2026-10-25-str-temp-lost-copy.md`）。与 `builtin_str` 同一条路。 */
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     LLVMValueRef la = len_of(a, line);
     LLVMValueRef lb = len_of(b, line);
     LLVMValueRef total = LLVMBuildAdd(cur_fn().bd, la, lb, "sl");
-    LLVMValueRef buf =
-        LLVMBuildArrayAlloca(cur_fn().bd, i8,
-                             LLVMBuildAdd(cur_fn().bd, total, const_int(8), "sb"), "sbuf");
-    LLVMSetAlignment(buf, 8);
-    std::vector<LLVMValueRef> g8{const_int(8)};
-    LLVMValueRef payload = LLVMBuildGEP2(cur_fn().bd, i8, buf, g8.data(), 1, "sp");
+    LLVMValueRef payload =
+        heap_array(LLVMBuildAdd(cur_fn().bd, total, const_int(8), "sb"), line);
     LLVMValueRef copy = ensure_copy_fn();
     LLVMValueRef cur = emit_call(copy, {payload, to_ptr(a), la});
     emit_call(copy, {cur, to_ptr(b), lb});
-    std::vector<LLVMValueRef> g0{const_int(0)};
-    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, buf, g0.data(), 1, "shdr");
+    std::vector<LLVMValueRef> gm8{const_int(uint64_t{0} - 8)};
+    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, payload, gm8.data(), 1, "shdr");
     store_addr(head, V::instr(LLVMBuildShl(cur_fn().bd, total, const_int(16), "shl"), ty_i64()),
                ty_i64(), line);
     return V::instr(payload, ty_str());
@@ -2119,36 +2120,22 @@ V Codegen::template_expr(const sema::HNode& node) {
         if (last_same_callee[*name] != i) vals[i] = vals[last_same_callee[*name]];
     }
 
-    /* 缓冲尺寸：文字段 + 每段的最坏字节数。**没有 Str 段时它是编译期常量** → 把 alloca 放进
-       entry 块（静态 alloca：循环里不涨栈，也不会拉出 `___chkstk_ms`）；只有 Str 段的长度是
-       运行期的，那时才只能开动态 alloca。 */
+    /* 缓冲尺寸：文字段 + 每段的最坏字节数。尺寸是运行期值时（有 `Str` 段）只能现算。
+       缓冲**走堆**，与 `str_concat` 同一个理由：结果要能活过本帧（`Str` 是可被 `return` 的值）。 */
     LLVMTypeRef i8 = storage_ll(*make_int(8, false));
     uint64_t fixed = 8;
-    bool const_size = true;
     for (std::size_t i = 0; i < texts.size(); ++i) {
         fixed += texts[i].size();
         if (i >= vals.size()) break;
-        if (vals[i].ty->kind == TyKind::Str) {
-            const_size = false;
-        } else {
-            fixed += part_capacity(vals[i], node.span.line);
+        fixed += part_capacity(vals[i], node.span.line);
+    }
+    LLVMValueRef size = const_int(fixed);
+    for (const V& v : vals) {
+        if (v.ty->kind == TyKind::Str) {
+            size = LLVMBuildAdd(cur_fn().bd, size, len_of(v, node.span.line), "ts");
         }
     }
-    LLVMValueRef buf = nullptr;
-    if (const_size) {
-        buf = alloca_in_entry(LLVMArrayType2(i8, fixed), "tbuf");
-    } else {
-        LLVMValueRef size = const_int(fixed);
-        for (const V& v : vals) {
-            if (v.ty->kind == TyKind::Str) {
-                size = LLVMBuildAdd(cur_fn().bd, size, len_of(v, node.span.line), "ts");
-            }
-        }
-        buf = LLVMBuildArrayAlloca(cur_fn().bd, i8, size, "tbuf");
-        LLVMSetAlignment(buf, 8);
-    }
-    std::vector<LLVMValueRef> g8{const_int(8)};
-    LLVMValueRef payload = LLVMBuildGEP2(cur_fn().bd, i8, buf, g8.data(), 1, "tpl");
+    LLVMValueRef payload = heap_array(size, node.span.line);
     LLVMValueRef cur = payload;
     for (std::size_t i = 0; i < texts.size(); ++i) {
         cur = write_literal(cur, texts[i], node.span.line);
@@ -2157,8 +2144,8 @@ V Codegen::template_expr(const sema::HNode& node) {
     /* 长度按**实际游标**算，不按缓冲尺寸 —— 所以尺寸只是个上界，不需要预先知道十进制位数。 */
     LLVMValueRef len = LLVMBuildSub(cur_fn().bd, LLVMBuildPtrToInt(cur_fn().bd, cur, i64_, "tce"),
                                     LLVMBuildPtrToInt(cur_fn().bd, payload, i64_, "tpe"), "tlen");
-    std::vector<LLVMValueRef> g0{const_int(0)};
-    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, buf, g0.data(), 1, "thdr");
+    std::vector<LLVMValueRef> gm8{const_int(uint64_t{0} - 8)};
+    LLVMValueRef head = LLVMBuildGEP2(cur_fn().bd, i8, payload, gm8.data(), 1, "thdr");
     store_addr(head, V::instr(LLVMBuildShl(cur_fn().bd, len, const_int(16), "thl"), ty_i64()),
                ty_i64(), node.span.line);
     return V::instr(payload, ty_str());

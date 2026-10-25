@@ -2193,6 +2193,11 @@ TyRef Analyzer::static_type(const Node& node) {
                 if (cst != mod_->consts.end()) return cst->second.ty;
                 auto hc = hash_consts().find(name);
                 if (hc != hash_consts().end()) return hc->second.ty;
+                /* 程序根体里的 `const #` 只进 `root_consts`（整单元可见，见 `e_ident`）。漏掉这一档，
+                 * `#MOV | instruction` 这种「根常量 + 局部量」的实参就推不出类型，连**单候选**的
+                 * 重载都会判成「拿不到参数类型」（`084` 的 `ui_set_instruction`）。 */
+                auto rc = mod_->root_consts.find(name);
+                if (rc != mod_->root_consts.end()) return const_decl_value(*rc->second).ty;
                 return nullptr;
             }
             case NK::Cast: {

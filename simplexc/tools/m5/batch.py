@@ -9,11 +9,17 @@
   3. **我们侧跑**：`difftrace run --bin <blob> --save <ours.seq>`（entry 由 `<blob>.entry` 自动定）。
   4. **比终态**：`difftrace diff --state <ref.seq> <ours.seq>` —— 退出码 0=equal / 1=diff / 2=错误。
 
-判据口径（2026-10-25 负责人定）：verdict 取**不传 `--src`** 的那次 diff，即 `diff_bytes_raw`。
-`--src` 会按 `Spec::regions()` 过滤，而这一批语料的 `.si` 里**没有 `memory_copy`**、游戏状态
-（`#SIMULATION_STATE` 那一段）落在退化成单点 `(a,a)` 的标量上 —— 过滤会把两边**全部**写丢掉，
-比出平凡的 equal（实测 001：放弃 A 719797 / B 83465 条，留下 0 / 0）。所以带 `--src` 的那次仍然跑，
-但只用来留 `src_kept_a` / `src_kept_b` 两列当证据：0/0 就是「这个过滤器在这批语料上是空的」。
+判据口径（2026-10-25 修订）：verdict 取**带 `--src`** 的那次，即只比 `[game_lo, game_hi)`。
+
+原口径取不带 `--src` 的 `diff_bytes_raw`，理由是「`--src` 会退化成平凡的 equal」——那时
+`36470ce` 还没修 `--src`，它按 region 命中过滤，而这一批语料的 `.si` 里没有 `memory_copy`、
+`Spec::regions()` 只剩退化成单点 `(a,a)` 的标量，于是留下 0/0（实测 001 当时放弃 A 719797 条）。
+修完之后 `--src` 按 `[game_lo, game_hi)` 过滤，001 是 kept 26550/26550，空过滤一律 rc=2。
+
+不带 `--src` 会把**代码区字节**（每份产物自己的镜像）与**栈帧布局**也算进判据，这两样每份都
+不同，于是「产物变一点就判 diff」。实测 98 份：50 份差异只在 stack/code、41 份只差在睿主
+分配器页（`0x4009` / `0x400B` / `0x7FF9`），只有 5 份含真正游戏内存（`0x232…`）的差异。
+`diff_bytes_raw` 仍记进 TSV 当参考列。
 
 `first_diff_tick` 恒为 `n/a`：逐 tick 要 `--tick-mark`（每 tick 写一次的地址，98 份各不相同），
 按上面的口径不传，difftrace 只报终态。差异的定位信息仍给：`first_diff_addr` + 按地址段分的字节数
@@ -67,8 +73,7 @@ STATUS_EQUAL = "equal"
 STATUS_DIFF = "diff"
 STATUS_CLI_FAIL = "cli_fail"
 STATUS_HOST_FAIL = "host_fail"
-# `--with-prefix` 专用：前缀拼上去了、装配也过了。这种行没有差分字段（加前缀后的产物没有参考
-# 产物可对），所以不能归到 `equal` —— 那会把「只装出来了」冒充成「终态等价」。
+# `--with-prefix` 时只有一种失败跟它有关：拼前缀本身写不出去（记 cli_fail + err_kind=prefix_join）。
 STATUS_PREFIX_OK = "prefix_ok"
 
 # 地址段（difftrace 的 `driver.cc` kStackBase/kStackSize 与 `image.hh` kCodeBase）：
@@ -318,8 +323,9 @@ def run_one(task):
 
     # 1) 装配
     if task["with_prefix"]:
-        # 加前缀后的产物没有参考产物（corpus/ref/ 那份是**不加前缀**编出来的），所以这个模式
-        # 只做装配这一步，不比差分。拼接结果落地在 blob 旁边，好复现也好清理。
+        # M5 stdlib：前缀拼在语料前一起编。`corpus/ref/` 里的参考产物**本来就是含前缀的**
+        # （`compile()` 内部自动加前缀：语料用了 `memory_clear`/`get_time` 而自己没定义），
+        # 所以这个模式照常跑差分，不是「只能报能不能编过」。拼接结果落地在 blob 旁边，好复现。
         joined = blob + ".joined.si"
         try:
             with open(PREFIX_PATH, encoding="utf-8") as f:
@@ -348,8 +354,6 @@ def run_one(task):
         return done(STATUS_CLI_FAIL, err_kind="entry_missing",
                     err_first_line=one_line(f"读不了 {rel(blob)}.entry：{e}"))
 
-    if task["with_prefix"]:
-        return done(STATUS_PREFIX_OK)
     # 2/3) 两侧各跑一遍
     for side, bin_path, seq in (("run_ref", ref, seq_ref), ("run_ours", blob, seq_ours)):
         if os.path.exists(seq):
@@ -367,23 +371,19 @@ def run_one(task):
                         err_first_line=error or "run 没有 JSON 结果")
         row["stores_ref" if side == "run_ref" else "stores_ours"] = payload.get("store_count", "")
 
-    # 4) 终态判据：不传 --src（唯一 verdict）
-    equal, payload, error = diff_states(seq_ref, seq_ours, None)
+    # 4) 终态判据：**带 `--src`**（只比 `[game_lo, game_hi)`）——理由见模块 docstring。
+    equal, payload, error = diff_states(seq_ref, seq_ours, src)
     if error or payload is None:
-        return done(STATUS_HOST_FAIL, err_kind="diff", err_first_line=error or "diff 没有 JSON 结果")
-    row["diff_bytes_raw"] = payload.get("diff_bytes", "")
-
-    # 证据列：带 --src 的过滤器在这批语料上留了多少条（0/0 = 过滤是空的，verdict 不能用它）。
-    # 过滤器自己会拒绝荒谬的地址空间（`--src` 与代码区重叠 / 跨度 > 4 GiB）—— 那种份留空并把
-    # 原始行记进 err_kind=src_filter，不静默当成「留下了 0 条」。
-    _eq_src, payload_src, error_src = diff_states(seq_ref, seq_ours, src)
-    if error_src or payload_src is None:
-        row["src_kept_a"] = row["src_kept_b"] = ""
+        # 过滤器自己会拒绝荒谬的地址空间（与代码区重叠 / 跨度 > 4 GiB），那不是「相等」。
         row["err_kind"] = "src_filter"
-        row["err_first_line"] = error_src or "--src 那次没有 JSON 结果"
-    else:
-        row["src_kept_a"] = payload_src.get("kept_a", "")
-        row["src_kept_b"] = payload_src.get("kept_b", "")
+        row["err_first_line"] = error or "--src 那次没有 JSON 结果"
+        return done(STATUS_HOST_FAIL)
+    row["src_kept_a"] = payload.get("kept_a", "")
+    row["src_kept_b"] = payload.get("kept_b", "")
+
+    # 参考列：不带 `--src` 的总差异（含 stack / code），用来看「差在哪一段」与交叉验证。
+    _eq_raw, payload_raw, _error_raw = diff_states(seq_ref, seq_ours, None)
+    row["diff_bytes_raw"] = "" if payload_raw is None else payload_raw.get("diff_bytes", "")
 
     if equal:
         for seq in (seq_ref, seq_ours):           # equal 的序列没有定位价值，别留着占 GB
@@ -611,8 +611,9 @@ def main(argv=None):
     ap.add_argument("--cli-timeout", type=float, default=120.0, help="单份装配的超时（秒），超了记 cli_fail(timeout)")
     ap.add_argument("--resume", action="store_true", help="从已有 TSV 里跳过已完成的 id")
     ap.add_argument("--with-prefix", action="store_true",
-                    help="把 corpus/stdlib_prefix.si 拼在每份语料前再编（M5 stdlib）；"
-                         "这个模式只做装配，不比差分（加前缀后的产物没有参考产物）")
+                    help="把 corpus/stdlib_prefix.si 拼在每份语料前再编（M5 stdlib）。"
+                         "corpus/ref/ 里的参考产物**本来就是含前缀的**（compile() 内部自动加前缀），"
+                         "所以这个模式照常跑差分")
     args = ap.parse_args(argv)
 
     if args.jobs < 1 or args.jobs > MAX_JOBS:
@@ -622,7 +623,7 @@ def main(argv=None):
         args.tsv = os.path.join(args.out_dir, "batch.tsv")
     if args.report is None:
         args.report = os.path.join(args.out_dir, "report.md")
-    need = (CLI,) if args.with_prefix else (CLI, DIFFTRACE)
+    need = (CLI, DIFFTRACE)
     for exe in need:
         if not os.path.exists(exe):
             hint = "python simplexc/tools/build.py simplexc_cli" if exe == CLI else \

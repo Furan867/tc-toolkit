@@ -13,6 +13,7 @@
     python simplexc/tools/build.py spike          # 空程序 blob（依赖 objs + tcblob，自动补做）
     python simplexc/tools/build.py difftrace      # 判据工具（要 difftrace C SDK，见下）
     python simplexc/tools/build.py difftrace_selftest   # 编出来当场跑 16 条用例
+    python simplexc/tools/build.py asm_x64_selftest     # 编出来当场跑 asm_x64 的用例
 
 目标
 ----
@@ -38,6 +39,8 @@
                顺手把 unicorn.dll / capstone.dll 放到 build/ 旁边。**不在 `all` 里**
     difftrace_selftest build/difftrace_selftest.exe  编出来当场跑，透传退出码；
                只编 diff.cc，**不用** SDK。**不在 `all` 里**
+    asm_x64_selftest build/asm_x64_selftest.exe  stdlib `asm x86_64` 块编码器的判据：
+               白名单助记符 → 写死的字节（标 `ref` 的取自参考产物）。**不在 `all` 里**
 
 环境变量
 --------
@@ -418,6 +421,25 @@ def step_difftrace_selftest() -> None:
         sys.exit(rc)
 
 
+def step_asm_x64_selftest() -> None:
+    print("== asm_x64_selftest ==")
+    out = os.path.join(BUILD, "asm_x64_selftest.exe")
+    # stdlib `asm` 块编码器（`asm_x64.*`）的判据入口（不进产品路径）：只编这两个 .cc，
+    # 不链前端、不链 LLVM、不链 assemble.o —— 被测对象是纯函数，编不过就是它自己的问题。
+    # **不在 `all` 里**（同 difftrace_selftest）：它还没接进编译流水线，`all` 不该为它变慢。
+    run([CXX, "-std=c++17", "-O2", "-static", "-Wall", "-Wextra", "-Wpedantic",
+         "simplexc/codegen/asm_x64.cc",
+         "simplexc/codegen/asm_x64_selftest.cc",
+         "-o", REL(out)], out=out,
+        hint="编译失败 → 看 simplexc/codegen/asm_x64*.cc 的报错；这个目标只用 C++17 标准库。")
+    # 用例 FAIL 是判据的结论（不是构建出错）：退出码原样透传，别折叠成 1。
+    print("$ " + REL(out))
+    rc = subprocess.run([out], cwd=REPO).returncode
+    if rc != 0:
+        print(f"FAIL 自测有用例不通过：{REL(out)} 返回 {rc}", file=sys.stderr)
+        sys.exit(rc)
+
+
 def step_spike() -> None:
     print("== spike ==")
     out = os.path.join(BUILD, "blob_empty.bin")
@@ -448,6 +470,7 @@ STEPS = {
     "codegen_selftest": step_codegen_selftest,
     "difftrace": step_difftrace,
     "difftrace_selftest": step_difftrace_selftest,
+    "asm_x64_selftest": step_asm_x64_selftest,
     "spike": step_spike,
 }
 ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analyze_selftest",

@@ -59,8 +59,8 @@ sb 验收：参考 `hook_out_012.bin`（entry `0x2142`）vs 我们，50 tick、5
 ## 待定 / 未解
 
 - `work/tmp/` 里有约 1.9 G 历史实验产物（`diffclass2` 339 M、`prio6` 270 M 等），不是本次产生的，未清。
-- `--sim-cycle-addr` 的界标 `#SIMULATION_STATE+2567` 是**输出缓存**（`rv32im.si:7169` 注释），
-  不是 cycle 计数器。主判据不依赖它，但「tick 数」不能读成「跑了多少 cycle」。
+- 逐 tick 界标没有真解：`cycle` 是 VM 全局槽（不是内存写），看不见。`+2567` 是 tick 体内第 9/27 条写，
+  段末停在 tick 中途；换成 `+2908`（体内最后一条写）才对齐边界。主判据（终态）不依赖界标。
 - difftrace 只比 `target` 之内；target 之外的收尾块不比。
 - `blob_baseline.py:409` 在「只有 blob_len 变、无字节区间」时抛 `IndexError`（既有 bug，未修）。
 - 已知未修差异：顶层非声明语句被整体丢掉 · 参考对 `return a) + 1` 静默吃掉后面的一切 · 空数组的指针值未对照。

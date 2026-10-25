@@ -145,3 +145,9 @@
 - 别在同一个 `uc_engine` 里换 blob 或改写已翻译过的地址 —— `uc_mem_write` **不清翻译缓存**，下一趟
   `uc_emu_start` 会跑旧 TB。实测：写 sleep 段后换成 VirtualAlloc 段，结果 `clock` 又 +100 ms、`prec`
   落在旧代码边界，最后 `UC_ERR_READ_UNMAPPED`。要么 `uc_ctl_flush_tb`，要么换新地址/新引擎。
+- 别拿「标量地址」当逐 tick 界标 —— `keep_regions` 用 `s.addr < hi` 判归属，标量的 region 是零长 `(addr,addr)`，
+  恒不匹配，于是界标被**静默过滤**，逐 tick 那条判据悄悄退化成「只比终态」而输出照旧。实测传
+  `settings+sim_cycle*8` 得到 0 个界标就是这个原因。
+- 别假设「每 tick 写一次的地址」就是 tick 边界 —— `rv32im.si` 的 tick 边界是 `cycle += 1`（10229），
+  而 `cycle` 是模块级 `var`（VM 全局槽，不是内存写），store 序列里看不见它。`+2567`（Output cache）
+  只是体内第 9/27 条写，段末停在 tick 中途；`+2908`（10171，延迟线 LATE）才是体内最后一条写。

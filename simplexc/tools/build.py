@@ -11,6 +11,8 @@
     python simplexc/tools/build.py all            # objs + tcblob + llvm_prog + hook
     python simplexc/tools/build.py objs tcblob    # 只做这几步
     python simplexc/tools/build.py spike          # 空程序 blob（依赖 objs + tcblob，自动补做）
+    python simplexc/tools/build.py difftrace      # 判据工具（要 difftrace C SDK，见下）
+    python simplexc/tools/build.py difftrace_selftest   # 编出来当场跑 16 条用例
 
 目标
 ----
@@ -32,6 +34,10 @@
     spike      build/blob_empty.bin (+ .entry)  「空程序」blob —— 只证明链路通，
                不能拿进游戏（会让游戏在下一次编译请求时 abort，见 docs/pitfalls.md）
                现在**没有判据**读它：新版壳在进程内编源码，基线壳只在 reference 模式下被驱动。
+    difftrace  build/difftrace.exe     Unicorn 上的访存序列差分（判据工具，不是产线）；
+               顺手把 unicorn.dll / capstone.dll 放到 build/ 旁边。**不在 `all` 里**
+    difftrace_selftest build/difftrace_selftest.exe  编出来当场跑，透传退出码；
+               只编 diff.cc，**不用** SDK。**不在 `all` 里**
 
 环境变量
 --------
@@ -42,6 +48,13 @@
 ----
     llvm_prog 需要 build/llvm/include（头）与 build/llvm/lib/libLLVM-C.a（MinGW 导入库）。
     没有就先取：python tools/fetch_llvm.py --dest D:/downloads（见 docs/facts.md §构建与 LLVM）。
+
+前置：difftrace 的 C SDK（work/tools/difftrace-deps/，不进 git）
+----
+    difftrace 要 Unicorn 2.1.4 与 Capstone 5 的头 + 导入库。
+    没有就先跑：python simplexc/tools/difftrace/fetch_deps.py（本脚本不去下载）。
+    这也是它**不在 `all` 里**的原因：`all` 的成功不能依赖这份 SDK —— 缺 SDK 的机器上
+    照样能 `build.py`，只是不能 `build.py difftrace`。
 
 两条必须遵守的写法（都不是风格偏好，是实测出来的）
 --------------------------------------------------
@@ -74,6 +87,11 @@ OBJDIR = os.path.join(BUILD, "objs")
 LLVM_INC = os.path.join(BUILD, "llvm", "include")
 LLVM_LIB = os.path.join(BUILD, "llvm", "lib")
 LLVM_BIN = os.path.join(BUILD, "llvm", "bin")
+# difftrace 的源码目录与它的 C SDK（SDK 不进 git，由 fetch_deps.py 备齐）
+DIFFTRACE_DIR = os.path.join(SIMPLEXC, "tools", "difftrace")
+DIFFTRACE_DEPS = os.path.join(REPO, "work", "tools", "difftrace-deps")
+DIFFTRACE_DEPS_HINT = ("difftrace 的 C SDK（Unicorn / Capstone）不进 git，先跑 "
+                       "python simplexc/tools/difftrace/fetch_deps.py 备齐头文件与导入库。")
 
 # 产品核心的源文件表：DLL（`simplexc_dll`）与判据入口（`core_selftest`）**共用这一处**。
 # 两者用同一份清单不是风格问题：判据要判的就是交付物 —— 表不一样时判出来的可能是别的东西。
@@ -341,6 +359,65 @@ def step_codegen_selftest() -> None:
              "运行期要 PATH 里有 build/llvm/bin 或 build/LLVM-C.dll 才找得到 LLVM-C.dll。")
 
 
+def difftrace_sources() -> list[str]:
+    """`difftrace` 目标的源文件表：目录里除 `*_selftest.cc` 之外的 .cc。
+
+    按目录列而不是写死清单：这里的唯一规则是「自测文件自带 main，不能进 exe」，
+    写死清单则每加一个 .cc 都要回来改一处，漏了就是重复定义的链接错误。
+    """
+    need(DIFFTRACE_DIR, "build.py 按目录列 difftrace 的源文件，这个目录不见了就没法编。")
+    return [REL(os.path.join(DIFFTRACE_DIR, n))
+            for n in sorted(os.listdir(DIFFTRACE_DIR))
+            if n.endswith(".cc") and not n.endswith("_selftest.cc")]
+
+
+def need_difftrace_deps() -> None:
+    for path in (os.path.join(DIFFTRACE_DEPS, "unicorn", "include", "unicorn", "unicorn.h"),
+                 os.path.join(DIFFTRACE_DEPS, "unicorn", "lib", "libunicorn.a"),
+                 os.path.join(DIFFTRACE_DEPS, "capstone", "include", "capstone", "capstone.h"),
+                 os.path.join(DIFFTRACE_DEPS, "capstone", "lib", "libcapstone.a")):
+        need(path, DIFFTRACE_DEPS_HINT)
+
+
+def step_difftrace() -> None:
+    print("== difftrace ==")
+    # 缺 SDK 只该让这一个目标失败（所以它不在 `all` 里，见模块 docstring）。
+    need_difftrace_deps()
+    out = os.path.join(BUILD, "difftrace.exe")
+    run([CXX, "-O2", "-std=c++17", "-Wall", "-Wextra", "-Wpedantic",
+         "-I", REL(os.path.join(DIFFTRACE_DEPS, "unicorn", "include")),
+         "-I", REL(os.path.join(DIFFTRACE_DEPS, "capstone", "include")),
+         *difftrace_sources(),
+         "-L", REL(os.path.join(DIFFTRACE_DEPS, "unicorn", "lib")), "-lunicorn",
+         "-L", REL(os.path.join(DIFFTRACE_DEPS, "capstone", "lib")), "-lcapstone",
+         "-o", REL(out)], out=out,
+        hint="编译/链接失败 → 看 simplexc/tools/difftrace/*.cc 的报错；SDK 头与导入库由 "
+             "fetch_deps.py 生成（--force 可重建）。")
+    # Windows 先从 exe 所在目录找依赖 DLL → 两个 dll 放 build/ 旁边，跑判据不用改 PATH
+    for name in ("unicorn", "capstone"):
+        dll = os.path.join(DIFFTRACE_DEPS, name, "lib", name + ".dll")
+        need(dll, DIFFTRACE_DEPS_HINT)
+        shutil.copy2(dll, os.path.join(BUILD, name + ".dll"))
+        print(f"  -> {REL(os.path.join(BUILD, name + '.dll'))}")
+
+
+def step_difftrace_selftest() -> None:
+    print("== difftrace_selftest ==")
+    out = os.path.join(BUILD, "difftrace_selftest.exe")
+    # 判据核心（diff.*）不碰 Unicorn/Capstone —— 这个目标因此不需要 SDK，能单独跑。
+    run([CXX, "-O2", "-std=c++17", "-Wall", "-Wextra", "-Wpedantic",
+         REL(os.path.join(DIFFTRACE_DIR, "diff.cc")),
+         REL(os.path.join(DIFFTRACE_DIR, "diff_selftest.cc")),
+         "-o", REL(out)], out=out,
+        hint="编译失败 → 看 simplexc/tools/difftrace/{diff,diff_selftest}.cc 的报错。")
+    # 用例 FAIL 是判据的结论（不是构建出错）：退出码原样透传，别折叠成 1。
+    print("$ " + REL(out))
+    rc = subprocess.run([out], cwd=REPO).returncode
+    if rc != 0:
+        print(f"FAIL 自测有用例不通过：{REL(out)} 返回 {rc}", file=sys.stderr)
+        sys.exit(rc)
+
+
 def step_spike() -> None:
     print("== spike ==")
     out = os.path.join(BUILD, "blob_empty.bin")
@@ -369,6 +446,8 @@ STEPS = {
     "analyze_selftest": step_analyze_selftest,
     "ast_dump": step_ast_dump,
     "codegen_selftest": step_codegen_selftest,
+    "difftrace": step_difftrace,
+    "difftrace_selftest": step_difftrace_selftest,
     "spike": step_spike,
 }
 ALL = ["objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest", "analyze_selftest",
@@ -382,7 +461,9 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description="simplexc 的一键构建（产物都在 reversing/build/，不进 git）",
         epilog="all = " + "+".join(ALL) + "；spike = 空程序 blob（单独，依赖 " +
-               "+".join(DEPENDS["spike"]) + "）")
+               "+".join(DEPENDS["spike"]) + "）；不在 all 里的：" +
+               " | ".join(t for t in STEPS if t not in ALL) +
+               "（difftrace 要 difftrace C SDK，all 的成功不依赖它）")
     ap.add_argument("targets", nargs="*", default=[],
                     help="all | " + " | ".join(STEPS) + "（默认 all）")
     args = ap.parse_args(argv)

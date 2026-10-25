@@ -2242,8 +2242,8 @@ TyRef Analyzer::static_type(const Node& node) {
                 if (name == "array" && !n.type_args.empty()) {
                     return make_array(ty_of_ref(*n.type_args[0], n.src_line));
                 }
-                if ((name == "min" || name == "max" || name == "asr" || name == "clz") &&
-                    !n.args.empty()) {
+                if ((name == "min" || name == "max" || name == "asr" || name == "clz" ||
+                     name == "ror") && !n.args.empty()) {
                     return static_type(*n.args[0]);
                 }
                 if (name == "sleep" || name == "memory_clear" || name == "memory_copy" ||
@@ -2252,6 +2252,10 @@ TyRef Analyzer::static_type(const Node& node) {
                 }
                 if (name == "get_time") return ty_time();
                 if (name == "size") return ty_i64();
+                /* `random()` 的返回类型就是种子本身的类型（`Seed`），与 `call_random` 一致：
+                 * 这里漏了它，`f(random(256))` 这种实参就推不出类型，连**单候选**的重载都会
+                 * 判成「拿不到参数类型」。同一类缺口：这张手写表必须跟 `e_call` 的分支对齐。 */
+                if (name == "random") return prefix_global("global_seed", n.src_line).ty;
                 if (const FunctionDef* d = pick_def(name, arg_list(n.args), n.type_args, n.src_line)) {
                     const Inst inst = resolve_inst(d->params, arg_list(n.args), n.type_args, d->lo);
                     return inst_ret_type(d->ret.get(), inst, d->lo);

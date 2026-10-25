@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -22,6 +23,9 @@ namespace {
 
 // host.py 的三个数：段对齐/默认尺寸、数组 seq 头、命令块里的目标速度。
 constexpr uint64_t kPage = 0x10000;                    // host.py PAGE
+// `uc_mem_map_ptr` 的宿主内存对齐。文档只要求**地址与大小**是 4 KB 的倍数（段几何本来就是 64 KB
+// 对齐，已满足），没规定宿主指针 —— 按页对齐是最不会出事的写法。
+constexpr uint64_t kHostAlign = 4096;
 constexpr uint64_t kRegion = 0x100000;                 // host.py REGION：「只有地址、不知多大」给 1 MB
 constexpr uint64_t kArrLen = 4096;                     // host.py ARR_LEN
 constexpr uint64_t kArrCapLog2 = 13;                   // host.py ARR_CAP_LOG2
@@ -45,10 +49,13 @@ constexpr uint64_t kCheckEvery = 1000;  // 每多少条指令查一次完成判�
 constexpr int kDoneSamples = 2;
 
 // 防死循环的界：不是判据，只保证「判据永远不成立」时也停得下来并报出 pc。
-// 启动期的指令数几乎全是 `reset_sim` 那次 128 MB 内存镜像拷贝：`rep movsb` 在 Unicorn 里
-// 按**字节**计一条指令（rv32im 实测 1.34 亿条），进等待循环时共 1.51 亿条。
+// 启动期的大头是 `reset_sim` 那次 128 MB 内存镜像拷贝；它现在由 `try_rep_movsb` 换成原生
+// `memmove`（Unicorn 按**字节**执行 `rep movsb`，一字节一次 code hook），所以这里的界只剩保险作用。
 constexpr uint64_t kMaxBootInstrs = 1000000000ull;
 constexpr uint64_t kMaxRunInstrs = 2000000000ull;
+
+// EFLAGS 的 DF（bit 10）：`rep movsb` 的方向。0 = 递增（特判的前提），1 = 递减（必退）。
+constexpr uint64_t kDirectionFlag = 0x400;
 
 constexpr uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1); }
 
@@ -116,6 +123,32 @@ uint64_t reg(uc_engine* uc, int id) {
 }
 
 void set_reg(uc_engine* uc, int id, uint64_t v) { check(uc_reg_write(uc, id, &v), "写寄存器"); }
+
+// `uc_mem_map_ptr` 的宿主内存：按 `kHostAlign` 对齐、大小也向上对齐，而且必须是**零**——
+// `uc_mem_map` 给的是零页，命令块/设置块的初值靠的就是这一点（见 `seed_protocol`），新分配的
+// 堆内存是脏的。
+std::shared_ptr<uint8_t> alloc_host_bytes(uint64_t size) {
+    const size_t n = static_cast<size_t>(align_up(size, kHostAlign));
+    auto* bytes = static_cast<uint8_t*>(::operator new(n, std::align_val_t(kHostAlign)));
+    std::memset(bytes, 0, n);
+    return std::shared_ptr<uint8_t>(bytes, [](uint8_t* p) {
+        ::operator delete(p, std::align_val_t(kHostAlign));
+    });
+}
+
+// [addr, addr+size) 必须整个落在**同一个**宿主区里：段之间不连续，跨段就没有一个裸指针能用。
+HostRegion* find_host_region(std::vector<HostRegion>& regions, uint64_t addr, uint64_t size) {
+    for (HostRegion& r : regions)
+        if (r.lo <= addr && addr + size <= r.hi) return &r;
+    return nullptr;
+}
+
+// `rep movsb` 的机器码是 F3（REP 前缀）+ A4（MOVSB）。判据只看**指令起点**的两个字节：
+// code hook 只在指令边界上回调，所以「首字节是 F3、次字节是 A4」就等于这条指令是 `rep movsb`
+// ——不需要反汇编器，也不会把 F3 当别的指令的前缀误判。
+bool is_rep_movsb_encoding(const uint8_t* bytes, uint64_t size) {
+    return size >= 2 && bytes[0] == 0xF3 && bytes[1] == 0xA4;
+}
 
 // `[(lo, hi)] → [(lo, hi)]`：逐行对应 host.py 的 `merge_spans`。
 std::vector<std::pair<uint64_t, uint64_t>> merge_ranges(
@@ -260,12 +293,90 @@ struct RunCtx {
     uint64_t pc = 0;              // 当前指令的绝对地址（mem hook 不给 pc，只能这么记）
     bool running_zero = false;    // 监视窗口内 `sim_running` 被写 0（精确完成）
     std::vector<RunningWrite> running_writes;
+
+    // 启动期的 `rep movsb` 特判（`try_rep_movsb`）。开关只在这里：抓迹窗口里必须关。
+    struct RepFast {
+        bool enabled = false;
+        bool warned_df = false;
+        bool warned_unmapped = false;
+        std::vector<RepCopy> copies;
+        uint64_t bytes = 0;
+        std::vector<std::string> warnings;
+        // 已判定「按字节执行」的站点，下标是 code 偏移。映射与 code 区字节在整轮里都不变，所以这个
+        // 判定只做一次 —— 不记的话，一条被退回的 `rep movsb` 会**每字节**重跑一遍判定（实测慢
+        // 2.3 倍）；用偏移下标的字节而不是哈希表，因为这查询就在 1.34 亿次回调的热路上。
+        std::vector<uint8_t> give_up;
+    } rep;
+    const Image* image = nullptr;                    // 判「这条指令是不是 F3 A4」要它的字节
+    std::vector<HostRegion>* host_regions = nullptr;  // 裸指针只能往这些块里写
 };
+
+// 启动期把 `rep movsb` 换成宿主原生 `memmove`：Unicorn 按**字节**执行这条指令（一字节一次 code
+// hook），`reset_sim` 那次 128 MB 内存镜像拷贝因此是 1.34 亿条指令、5 s。特判只做两件事 ——
+// 拷完、把 rcx 清 0（`rep movsb` 此时什么都不做：指令照常执行、rip 照常前进 2 字节）。
+//
+// 只在启动期开：抓迹窗口里这么做会**跳过 mem write hook**（`uc_mem_write` 与宿主写都不触发
+// hook），那一段 store 就从序列里消失了，等于把判据挖掉一块。
+//
+// 三处必退（宁可按字节跑，不改语义）：
+//   - count = 0：此时 `rep movsb` 什么都不做，特判也不能动内存/寄存器；
+//   - DF = 1：方向递减，特判只做递增；
+//   - 源/目的不在 `uc_mem_map_ptr` 的宿主内存里：没有裸指针可写。
+void try_rep_movsb(uc_engine* uc, RunCtx* c, uint64_t pc) {
+    RunCtx::RepFast& rep = c->rep;
+    const Image& image = *c->image;
+    const uint64_t off = pc - image.code_base;
+    if (pc < image.code_base || off >= image.code.size()) return;
+    if (rep.give_up[off] != 0) return;
+    if (!is_rep_movsb_encoding(image.code.data() + off, image.code.size() - off)) return;
+    // `image.code` 是**改写前**的字节（`patch_dll_refs` 改的是引擎里的代码区），所以再按引擎里的
+    // 真字节复核一次：把一条真指令的 rcx 清零就是在破坏它。
+    uint8_t encoding[2] = {};
+    if (uc_mem_read(uc, pc, encoding, sizeof(encoding)) != UC_ERR_OK) return;
+    if (!is_rep_movsb_encoding(encoding, sizeof(encoding))) {
+        rep.give_up[off] = 1;
+        return;
+    }
+
+    const uint64_t count = reg(uc, UC_X86_REG_RCX);
+    if (count == 0) return;
+    if ((reg(uc, UC_X86_REG_EFLAGS) & kDirectionFlag) != 0) {
+        if (!rep.warned_df) {
+            rep.warnings.push_back("DF=1 的 `rep movsb` 不特判，按字节执行（首次 pc=" + hex(pc) +
+                                   " count=" + std::to_string(count) + "）");
+            rep.warned_df = true;
+        }
+        return;
+    }
+
+    const uint64_t src = reg(uc, UC_X86_REG_RSI);
+    const uint64_t dst = reg(uc, UC_X86_REG_RDI);
+    HostRegion* from = find_host_region(*c->host_regions, src, count);
+    HostRegion* to = find_host_region(*c->host_regions, dst, count);
+    if (from == nullptr || to == nullptr) {
+        if (!rep.warned_unmapped) {
+            rep.warnings.push_back("`rep movsb` 的源/目的不在宿主映射里，按字节执行（首次 pc=" +
+                                   hex(pc) + " src=" + hex(src) + " dst=" + hex(dst) + "）");
+            rep.warned_unmapped = true;
+        }
+        rep.give_up[off] = 1;
+        return;
+    }
+
+    // `memmove` 而不是 `memcpy`：递增方向的 `rep movsb` 在源/目的重叠时是「按序逐字节」的语义，
+    // 重叠下用 `memcpy` 是未定义行为，而这里没有任何东西能保证两块不重叠。
+    std::memmove(to->bytes.get() + (dst - to->lo), from->bytes.get() + (src - from->lo),
+                 static_cast<size_t>(count));
+    set_reg(uc, UC_X86_REG_RCX, 0);
+    rep.copies.push_back(RepCopy{pc, count, src, dst});
+    rep.bytes += count;
+}
 
 void check_hook(uc_engine* uc, uint64_t address, uint32_t /*size*/, void* user_data) {
     RunCtx* c = static_cast<RunCtx*>(user_data);
     c->pc = address;
     ++c->instrs;
+    if (c->rep.enabled) try_rep_movsb(uc, c, address);
 
     if (!c->unnamed_pcs.empty() && c->unnamed_pcs.count(address) != 0) {
         ++c->unnamed_hits;
@@ -396,12 +507,22 @@ void Trace::write_hook(uc_engine* /*uc*/, uc_mem_type /*type*/, uint64_t addr, i
                                size > 8 ? 0 : static_cast<uint64_t>(value)});
 }
 
-Layout map_game(uc_engine* uc, const Spec& spec, const Image& image) {
+Layout map_game(uc_engine* uc, const Spec& spec, const Image& image,
+                std::vector<HostRegion>& host_regions) {
     Layout out;
     const auto spans = merge_ranges(spec.regions());
     out.spans = spans;
     for (const auto& [lo, hi] : spans) {
-        check(uc_mem_map(uc, lo, hi - lo, UC_PROT_ALL), "映射游戏段 " + hex(lo));
+        HostRegion region;
+        region.lo = lo;
+        region.hi = hi;
+        region.bytes = alloc_host_bytes(hi - lo);
+        // `uc_mem_map_ptr`：引擎直接用这块宿主内存，没有引擎侧的影子拷贝，于是 `try_rep_movsb`
+        // 能拿裸指针把 128 MB 一次拷完。失败**只能报错**——静默退回 `uc_mem_map` 会让
+        // 「为什么这轮还是 5 s」变成一个查不出来的谜。
+        check(uc_mem_map_ptr(uc, lo, hi - lo, UC_PROT_ALL, region.bytes.get()),
+              "用 uc_mem_map_ptr 映射游戏段 " + hex(lo) + "（地址与大小要是 4 KB 的倍数）");
+        host_regions.push_back(std::move(region));
         ++out.regions;
         out.mapped_bytes += hi - lo;
     }
@@ -458,7 +579,7 @@ PatchStats patch_dll_refs(uc_engine* uc, const Image& image,
 RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uint64_t target_cycle,
                         Seed seed) {
     RunOutcome out;
-    out.layout = map_game(uc, spec, image);
+    out.layout = map_game(uc, spec, image, out.host_regions);
 
     // Stubs 不拥有 uc，必须比它先析构 —— 所以它是本函数的局部变量，uc 由调用方 close。
     Stubs stubs(uc);
@@ -482,6 +603,11 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
 
     RunCtx ctx;
     ctx.p = p;
+    ctx.image = &image;
+    ctx.host_regions = &out.host_regions;
+    // `rep movsb` 特判只在启动期开（理由见 `try_rep_movsb`）。
+    ctx.rep.enabled = true;
+    ctx.rep.give_up.assign(image.code.size(), 0);
     // 「踩到」= 那条 movabs 指令被执行。`code_offset` 是 imm64 的偏移，指令起点在它前 2 字节
     // （REX + opcode）。
     for (const DllRef& ref : image.dll_refs)
@@ -503,6 +629,10 @@ RunOutcome run_to_cycle(uc_engine* uc, const Spec& spec, const Image& image, uin
     uc_err err = uc_emu_start(uc, entry, 0, 0, 0);
     uc_hook_del(uc, read_hook);
     uc_hook_del(uc, hook);
+    ctx.rep.enabled = false;  // 抓迹之前关：宿主写不进 store 序列
+    out.rep_copies = ctx.rep.copies;
+    out.rep_bytes = ctx.rep.bytes;
+    out.warnings = ctx.rep.warnings;
     out.instrs_boot = ctx.instrs;
     out.wait_reads = wait.reads;
     out.unnamed_hits = ctx.unnamed_hits;

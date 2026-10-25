@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,15 @@ struct Layout {
     std::vector<std::pair<uint64_t, uint64_t>> spans;  // 合并后的 [lo, hi)，灌图案前的合法性判据
 };
 
+// `uc_mem_map_ptr` 映射进引擎的宿主内存（4 KB 对齐、零初始化）。Unicorn 直接读写这块，所以
+// 宿主侧的原生 `memmove` 与 `uc_mem_write` 是同一件事 —— `rep movsb` 特判（`RepCopy`）靠这一点
+// 省掉一次整块拷贝。必须活到 `uc_close`，所以挂在 `RunOutcome` 上（它比引擎活得久）。
+struct HostRegion {
+    uint64_t lo = 0;
+    uint64_t hi = 0;
+    std::shared_ptr<uint8_t> bytes;  // `hi - lo` 字节
+};
+
 // 站点计数：`dll_refs` 改写成 magic 的 / import 为空、原样不动的；`stub_refs`（sidecar）
 // 改写成 magic 的。两套互斥（参考产物只后者为 0，我们的产物只前者为 0）。
 struct PatchStats {
@@ -72,7 +82,8 @@ struct PatchStats {
 
 // 1) 合并并映射 `spec.regions()`；2) 单独映射代码区并写入 `image.code`；3) 把整块 DLL 摆到
 // `image.dll.base`（`Stubs::install` 要往 IAT 槽里写，槽就在这块里；host.py 里那是加载好的 DLL）。
-Layout map_game(uc_engine* uc, const Spec& spec, const Image& image);
+Layout map_game(uc_engine* uc, const Spec& spec, const Image& image,
+                std::vector<HostRegion>& host_regions);
 
 // 把 import 非空的 `dll_refs` 立即数改写成 `magic_table` 里同名的桩地址；import 为空的
 // 原样不动（身份未查清，不许猜）。同名桩不止一个 → 抛异常（不猜是哪一个）。
@@ -80,6 +91,15 @@ Layout map_game(uc_engine* uc, const Spec& spec, const Image& image);
 // 由 `Stubs::install` 的槽清单一并写（见 driver.cc 的 `import_slots`）。
 PatchStats patch_dll_refs(uc_engine* uc, const Image& image,
                           const std::vector<std::pair<uint64_t, std::string>>& magic_table);
+
+// 启动期被原生 `memmove` 代替的一次 `rep movsb`：`count` / `src` / `dst` 是执行到那条指令时
+// rcx / rsi / rdi 的值。特判只在启动期开（抓迹窗口里做会跳过 mem write hook，见 driver.cc）。
+struct RepCopy {
+    uint64_t pc = 0;
+    uint64_t count = 0;
+    uint64_t src = 0;
+    uint64_t dst = 0;
+};
 
 // 一次 run 的结果（设计 §6 的 RunResult）。
 struct RunResult {
@@ -112,6 +132,10 @@ struct RunOutcome {
     // 监视窗口（发出 run 命令之后）内该地址的全部写，按发生顺序。
     std::vector<RunningWrite> running_writes;
     std::vector<Store> stores;      // 发命令之后的全部写序列
+    std::vector<HostRegion> host_regions;  // `uc_mem_map_ptr` 的宿主内存（`rep movsb` 特判直接写它）
+    std::vector<RepCopy> rep_copies;       // 启动期每条被特判的 `rep movsb` 一行
+    uint64_t rep_bytes = 0;                // 上面这些拷贝的字节数合计
+    std::vector<std::string> warnings;     // 特判退化成按字节执行的原因（DF=1 / 不在宿主映射里）
 };
 
 // 从 `code_base + entry` 起跑：先跑到「等命令」状态，再发一次 run（target_cycle 个 tick）

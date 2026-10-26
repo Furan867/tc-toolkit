@@ -7,7 +7,8 @@
 
 | 文件 | 管什么（检索关键词） |
 |---|---|
-| `facts/forwarding.md` | compile.dll 转发层、原版编译器 compile_real.dll（extern / stub / IAT / manifest / Nim 字符串 / 内建清单来源） |
+| `facts/forwarding.md` | compile.dll 转发层、游戏侧契约（extern / stub / IAT / manifest / Nim 字符串 / 清空语义） |
+| `facts/ref-compiler.md` | 原版编译器 `compile_real.dll` 自己的行为：源码接受/诊断、产物体量与编码、布局与绑定、运行期不可复现 |
 | `facts/corpus-host.md` | 语料与判据、差分宿主、simctl、M1.5 探针（tick 全等、reset / seed、回退、判据入口） |
 | `facts/semantics.md` | 语言与 lowering 语义档案（U-L1…U-L14、位宽 / 掩码 / zext、内建、捕获 / 闭包、泛型、数组、enum、插值、`Str`、`random`） |
 | `facts/build-assemble.md` | 构建与 LLVM（版本 / 导入库）、装配器与产物确定性（stub 槽、entry、reloc、`.bss`、可复现） |
@@ -15,7 +16,9 @@
 
 ## 新条目进哪个文件
 
-- 按结论的**主语**归属，不按它是哪次任务发现的：转发层 → `forwarding`；语言 / lowering 语义 → `semantics`；
+- 按结论的**主语**归属，不按它是哪次任务发现的：转发层与游戏侧契约 → `forwarding`；
+  原版编译器 `compile_real.dll` **自己的行为**（接受/拒绝什么源码、产物怎么编码、布局与绑定）→ `ref-compiler`；
+  语言 / lowering 语义 → `semantics`；
   判据与器材 → `corpus-host`；产物生成、装配、可确定复现 → `build-assemble`；测量与优化手段 → `perf-tooling`。
 - 跨界的，取「查它时最常从哪一节进来」。
 - 五个都不合适 → 新建 `facts/<主题>.md`，**只在本文件的分流表注册一行**；别处不复述范围。

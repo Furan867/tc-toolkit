@@ -383,34 +383,9 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-18-random.md`（探针 `work/tmp/randomtask/probe_seq.py`）+ `docs/notes/2026-10-18-stdlib-semantics.md`
 最后验证：2026-10-18
 
-### 084/096/098 上参考产物不可复现：它拿未初始化的栈值当随机种子（2026-10-26 实测）
+### 参考产物在这三份上不可复现 → `ref-compiler.md`
 
-- **084（Overture 1 寄存器序章）**：参考的种子与源码无关 —— 源码写 `Seed 42`、读回全局确实是 `0x2a`，
-  链却仍按 `xorshift(7)` 走；那个 `7` 是同一 tick 更早的无关代码（时间/节流那段）写进栈槽的垃圾值。
-  我们的产物按源码的种子走（同一 seed 两侧逐位相同），抽取序号也相同。
-- **096/098（Overture 2 ALU / Overture 3 立即数）**：参考把这枚种子降成**1 字节**栈槽
-  （反汇编里链的输入是 `movzx rcx, byte ptr [rsp-0x8b]`、写回是 `mov byte ptr [rsp-0x8b], cl`），
-  tick 1 是未初始化的 `0x07`，之后每 tick 只留低字节 → 周期 16 的纯乘链；
-  两侧 `random` 调用次数**完全相同**（101 次、实参逐条一致），不是抽多抽少。
-- 结论：这三份的「逐 tick 等价」不可达（参考换一个栈初值就换一条序列），单列标 `known-ref-unreproducible`；
-  细节与复现见 `docs/bugs/2026-10-26-084-ref-uninit-stack-seed.md` 与 `docs/bugs/2026-10-25-random-stream-offset.md`。
-验证：`build/difftrace.exe diff --state … --src … --tick-mark 0x232A7010000`（084）；`work/tmp/rc096/repro.sh`（096/098）
-最后验证：2026-10-26
-
-### 参考编译器对「不可达 def」「同名 def 压内建」「裸顶层语句」的处理（2026-10-26 实测）
-
-- **不可达 def 里的语法错不报**：`def unused() None { let x = ) }` + 一个正常根 → 参考编过（产物 8604 B、无错误）；
-  我们同样不报。所以「静默丢弃不可达 def」是**参考既有行为**；设计文档 §3.4 要消除的静默降级
-  是我们自己的目标，不是与参考的偏差。
-- **同名 def 压过内建**：`def max(a: Int, b: Int) Int { return 999 }` + 根里 `max(1, 2)` →
-  参考产物里是 `mov $0x3e7`（999），即**用户 def 优先**；我们一致。
-  构造这种探针时形参类型必须与实参匹配，否则选内建是正确行为（踩过一次）。
-- **裸顶层语句参考接受**：`store(...)` 直接写在顶层，参考产出 `+13` 字节；我们报
-  「顶层这一行既不是声明也不是语句（未支持）」。98 份语料里**没有**这种形态 ——
-  顶层行首 token 只有 `def` / `}` / `var` / `type` / `const` / `run_sim:`，根的形态固定为 `run_sim: while true { … }`。
-验证：`work/tmp/rc031/refc.py`（原始 `compile_real.dll` 离线编）+ `probe1_badsyntax.si` / `probe3_badsyntax.si` / `probe4_shadow.si`；
-      形态普查 `cd simplexc/corpus/src && grep -h '^[^[:space:]]' *.si | sed 's/[[:space:]].*//' | sort | uniq -c`
-最后验证：2026-10-26
+### 参考编译器自身的行为（源码接受/诊断、产物体量）→ `ref-compiler.md`
 
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；

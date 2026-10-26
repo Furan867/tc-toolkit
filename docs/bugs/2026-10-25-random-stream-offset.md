@@ -1,9 +1,12 @@
 # 096/098：参考把随机种子降成 1 字节栈槽（不是「相差 34 次抽取」）
 
 - 状态：**不修；不是我们的 bug** —— 参考侧不可复现
-- 影响：096（关卡 `campaign/overture_2_alu`）、098（`campaign/overture_3_immediates`）。
-  定关依据：`#IMM` 的出现次数 —— 096 只在常量定义里 1 次、098 是 4 次（定义 + 生成 + 两处 `case` 解码），
-  与这两个关卡测试代码里的 1 / 4 次逐个对上；`overture_4_program` 是 2 次，排除。
+- 影响：096（关卡目录 `campaign/overture_2_alu`）、098（`campaign/overture_3_immediates`）。
+  定关依据（两条，都是逐字比对测试代码）：
+  ① `instructions[i] = …` 的生成序列 —— 096 与 `overture_2_alu` 同序（首行 `#MOVE | #INPUT | 1`），
+  098 与 `overture_3_immediates` 同序（首行 `#IMM | U8 random(64)`）；
+  ② `#IMM` 出现次数 096=1（只在常量定义）、098=4（定义 + 生成 + 两处 `case`），与这两关的 1 / 4 对上；
+  `overture_4_program` 是 2 次，排除。
 - 现象：100 tick 后终态差 12 / 11 字节，全在 `#SIMULATION_STATE + 406..421`（6 个电路寄存器与 cache 副本）；
   两边 `error_buffer` 都空、`sim_cycle` 都跑满
 

@@ -397,6 +397,21 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`build/difftrace.exe diff --state … --src … --tick-mark 0x232A7010000`（084）；`work/tmp/rc096/repro.sh`（096/098）
 最后验证：2026-10-26
 
+### 参考编译器对「不可达 def」「同名 def 压内建」「裸顶层语句」的处理（2026-10-26 实测）
+
+- **不可达 def 里的语法错不报**：`def unused() None { let x = ) }` + 一个正常根 → 参考编过（产物 8604 B、无错误）；
+  我们同样不报。所以「静默丢弃不可达 def」是**参考既有行为**；设计文档 §3.4 要消除的静默降级
+  是我们自己的目标，不是与参考的偏差。
+- **同名 def 压过内建**：`def max(a: Int, b: Int) Int { return 999 }` + 根里 `max(1, 2)` →
+  参考产物里是 `mov $0x3e7`（999），即**用户 def 优先**；我们一致。
+  构造这种探针时形参类型必须与实参匹配，否则选内建是正确行为（踩过一次）。
+- **裸顶层语句参考接受**：`store(...)` 直接写在顶层，参考产出 `+13` 字节；我们报
+  「顶层这一行既不是声明也不是语句（未支持）」。98 份语料里**没有**这种形态 ——
+  顶层行首 token 只有 `def` / `}` / `var` / `type` / `const` / `run_sim:`，根的形态固定为 `run_sim: while true { … }`。
+验证：`work/tmp/rc031/refc.py`（原始 `compile_real.dll` 离线编）+ `probe1_badsyntax.si` / `probe3_badsyntax.si` / `probe4_shadow.si`；
+      形态普查 `cd simplexc/corpus/src && grep -h '^[^[:space:]]' *.si | sed 's/[[:space:]].*//' | sort | uniq -c`
+最后验证：2026-10-26
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

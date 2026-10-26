@@ -37,8 +37,8 @@
 
 3 份 diff 全部定性为**参考侧不可复现**（参考产物拿未初始化的栈值当随机种子），我们自己的语义差异 **0 份**：
 
-- 084（Overture 1 寄存器序章）→ `docs/bugs/2026-10-26-084-ref-uninit-stack-seed.md`
-- 096 / 098（Overture 2 ALU / Overture 3 立即数）→ `docs/bugs/2026-10-25-random-stream-offset.md`
+- 084（`campaign/overture_1_registers`）→ `docs/bugs/2026-10-26-084-ref-uninit-stack-seed.md`
+- 096 / 098（`campaign/overture_2_alu` / `campaign/overture_3_immediates`）→ `docs/bugs/2026-10-25-random-stream-offset.md`
 
 ⚠️ **分母口径待定**：这三份是否从 M5 分母剔除（→ 95/95 达标）还没定，别按「98/98」或「95/98 达标」对外说。
 

@@ -26,4 +26,4 @@
 | `2026-10-25-str-temp-lost-copy.md` | 已修（`0c2b498`） | 069/080/003 崩在栈顶外一页：第二次字符串拼接的 copy + 头字 store 被 DSE 删了 |
 | `2026-10-25-thread-exit-collision.md` | 未修 | 隐式收尾与前缀的 `def thread_exit` 同名，撞出 `thread_exit.1` |
 | `2026-10-26-031-unreproducible-crash.md` | 未修（原观察被推翻） | 031/032 逻辑试炼：参考同样丢弃未调用的函数，产物大小差只是编码密度；崩溃待重新取证 |
-| `2026-10-26-084-ref-uninit-stack-seed.md` | 不修（非我方 bug） | 084 寄存器序章：参考把随机种子读成未初始化的栈值 7 |
+| `2026-10-26-084-ref-uninit-stack-seed.md` | 不修（非我方 bug） | 084（`overture_1_registers`）：参考把随机种子读成未初始化的栈值 7 |

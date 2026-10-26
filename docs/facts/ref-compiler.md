@@ -31,6 +31,41 @@
       参考侧 `work/tmp/rc031/probe1_badsyntax.si`（8599 B）
 最后验证：2026-10-26
 
+### 容忍 `return <expr>)` 里多余的右括号（我们比它严）
+实测（2×2 单因子）：`store(...))` 多一个 `)` → 参考 `sysFatal front_end.nim(2688,28) Missing open paren`；
+`return …)` 多一个 → **编译成功**，且产物 sha256 与删掉它的同一份源码相同（`f41b2839b25cf6a9…`）。
+17 份语料全落在这个被容忍的形状（每份唯一不平衡行都含 `return`、每行净 −1）。
+验证：`docs/notes/2026-10-18-m5-gap-diagnosis.md`
+最后验证：2026-10-18
+
+## 语义实现选择（参考侧）
+
+### 重载候选：按实参类型挑具体度，与声明序无关
+- `random(128)` 选 `random(max: Int)`，**不**选泛型 `random(type: @Type)` —— 即使后者在声明序上靠前。
+- 与「人工 `binary +` 多版本时后声明者胜」**不是同一条规则**：那条讲**同签名的人工单元**互相覆盖；
+  这条讲**具体类型 / 泛型 / 内建**三类候选之间按具体度比。混成一谈会做错。
+验证：`work/tmp/res-type/report.md`（m7/m7b，98/98 都有参考产物）
+最后验证：2026-10-25
+
+### `asm` 块**不是原样内联**：参考会把块重新汇编
+操作数名换成寄存器/立即数，周围插保存恢复（`mov rcx,32` → `mov rdx,rcx; mov ecx,0x20`），`$result` 解析到该变量所在寄存器；
+前缀 `memory_copy` 里内联出 `rep movs BYTE PTR es:[rdi],…`，`mov al,0` 被规范成 `mov eax,0x0`。
+⇒ 要支持它得写一个「认识名字操作数」的小汇编器。
+**助记符是白名单**（`nop` 被拒：`Unsupported instruction nop.`）；活路径只用得上 7 条：
+`mov` / `idiv` / `shl` / `or` / `rdtsc` / `rep movsb` / `rep stosb`，无内存操作数、无标签、无 `define`。
+`asm aarch64 { … }` 这类**非目标架构的块整块丢弃且不验证内容**（塞垃圾也照样编过，产物与没有该块相同）。
+验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-asm/`；编码器见 `codegen/asm_x64.*`）
+最后验证：2026-10-25
+
+### def 是**非重入**的：同一个 def 的多次调用共用同一块结果缓冲
+`rep(1,1) + rep(2,8) + rep(3,3)` 这样一个字符串里，三段插值**全部渲染成最后一次调用的结果**（`[F][T][T]`）；
+`rep(2,8) + rep(1,1)` 连**长度**也来自最后一次（`[[T]|[T]]`）。
+但不是「实参被覆盖」：两个**不同** def 不串（`[Ab|Cd]`），返回字面量/`Int` 的调用不串（`idn(5)+idn(9)` → `[5|9]`）；
+也不在模板里：`let a=rep(1,1); let b=rep(2,8); set_text(a,…)` 里 a 读出 24B 的 `rep(2,8)`。
+我们照此模拟（`template_expr` 把同名 Str 段换成最后一段的 SSA 指针，不重复调用）。
+验证：`docs/notes/2026-10-18-uibuffer.md`（19 例探针 `work/tmp/uibuf/probe_ui.py`）
+最后验证：2026-10-18
+
 ## 产物体量与编码
 
 ### 空片段固定 8581 B 桩；体积差可以是编码密度，不是漏编
@@ -95,13 +130,22 @@
 验证：探针与原始输出在 `work/tmp/k32probe/`（临时目录）；方法就是本节的「`imm64` 减加载基址」；
 `ctypes` 查导出表那版见 `work/tmp/res-k32/report.md`
 最后验证：2026-10-25
-## 运行期不可复现（产物侧）
 
+### extern 调用：5 个参数被静默错译；声明里的 DLL 名既不校验也不烘焙
+- 产物形态是 `movabs reg, imm64 ; call reg`；`extern` / `call_conv` 声明**不调用时不产任何字节**。
+- **声明里的 DLL 名不校验也不烘焙**：9 个名字里 4 个不是 kernel32 导出（`_write` 实际在 ucrtbase），照样编过。
+- **5 个参数的调用被静默错译**：第 5 个参数进 `edx`，没有栈传参。
+  ⚠️ 判据提醒：我们若按 Win64 ABI 正确地走栈传参，产物行为会与参考**不同** —— 这里「正确」反而是差异。
+- `shadow_space` 改 `sub rsp,0x70` → `0x48`；`save_restore` 改 `movabs` 的目标寄存器。
+验证：`docs/notes/2026-10-25-stdlib-survey.md` §kernel32（探针 `work/tmp/res-k32/`）
+最后验证：2026-10-25
+
+## 运行期不可复现（产物侧）
 ### 084/096/098：产物拿未初始化的栈值当随机种子
-- **084（`campaign/overture_1_registers`，本地译名「寄存器序章」）**：参考的种子与源码无关 —— 源码写 `Seed 42`、
+- **084（`campaign/overture_1_registers`，本地译名「Overture 1 寄存器序章」）**：参考的种子与源码无关 —— 源码写 `Seed 42`、
   读回全局确实是 `0x2a`，链却仍按 `xorshift(7)` 走；那个 `7` 是同一 tick 更早的无关代码（时间/节流那段）
   写进栈槽的垃圾值。我们的产物按源码的种子走（同一 seed 两侧逐位相同），抽取序号也相同。
-- **096/098（`overture_2_alu` / `overture_3_immediates`，本地译名「ALU 序章」/「立即数序章」）**：
+- **096/098（`overture_2_alu` / `overture_3_immediates`，本地译名「Overture 2 ALU 序章」/「Overture 3 立即数序章」）**：
   参考把这枚种子降成**1 字节**栈槽（反汇编里链的输入是 `movzx rcx, byte ptr [rsp-0x8b]`、
   写回是 `mov byte ptr [rsp-0x8b], cl`），tick 1 是未初始化的 `0x07`，之后每 tick 只留低字节 →
   周期 16 的纯乘链；两侧 `random` 调用次数**完全相同**（101 次、实参逐条一致），不是抽多抽少。

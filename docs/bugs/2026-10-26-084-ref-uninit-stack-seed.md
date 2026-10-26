@@ -1,7 +1,7 @@
-# 084「寄存器序章」（`campaign/overture_1_registers`，本地译名）：参考把随机种子读成未初始化的栈值
+# 084「Overture 1 寄存器序章」（`campaign/overture_1_registers`，本地译名）：参考把随机种子读成未初始化的栈值
 
 - 状态：**不修；不是我们的 bug** —— 参考侧不可复现（README 的「修好之后」不适用：这条永远不会因为改我们的代码而变绿）
-- 影响：084「寄存器序章」（关卡目录 `campaign/overture_1_registers`；**中文名是本地译名，不是官方名**）。
+- 影响：084「Overture 1 寄存器序章」（关卡目录 `campaign/overture_1_registers`；**中文名是本地译名，不是官方名**）。
   定关依据：源码里 `ui_set_instruction(0, #MOV | instruction, cycle)` 与该关测试代码逐字相同，全 campaign 只此一处，
   见 `grep -rl '#MOV | instruction' simplexc/corpus/campaign/`
 - 现象：100 tick 后终态差 **12 字节**（`#SIMULATION_STATE + 334..345` = Reg0..Reg5 与它们的 cache 副本），

@@ -1,5 +1,8 @@
 ## M3 语义档案（实验后定死；没测的别当已定）
 
+> 参考编译器**自己**的行为（接受/诊断、重载择优、`asm` 重新汇编、`def` 非重入、产物体量与编码）在
+> `ref-compiler.md`；本文件只记语言**运行期**语义。
+
 > ⚠️ 本文件提到 **Python 原型**（`lower/ir_build.py`、`frontend/decls.py`）的地方都是**历史记录**：
 > 该原型已于 2026-10-18 删除（git 历史可查）。部分条目的「验证：」命令就是调它的 → **不能直接跑**；
 > 复现时改用 C++ 路径（`build/simplexc_cli.exe`）并把新命令补回条目。在补回之前，这些条目属于
@@ -292,26 +295,6 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-type/`）
 最后验证：2026-10-25
 
-### 重载候选：按实参类型挑具体度，与声明序无关（2026-10-25 实测）
-- `random(128)` 选 `random(max: Int)`，**不**选泛型 `random(type: @Type)` —— 即使后者在声明序上靠前。
-- 这条与「人工 `binary +` 多版本时后声明者胜」**不是同一条规则**：那条讲的是**同签名的人工单元**互相覆盖；
-  这条讲的是**具体类型 / 泛型 / 内建**三类候选之间按具体度比。混成一谈会做错。
-- 我们的 `pick_def` 按声明序试候选 ⇒ `random(128)` 会匹配上泛型候选并实例化，于是把「实参类型不匹配」
-  变成「`size(type)` 折不出常量」。**这是 32/98 语料卡在 `#SIZE` 的真因，不是泛型体被急切检查**
-  （sema/codegen 本来就是惰性的：`src.defs` 只登记名字，体只由调用点分析）。
-验证：`work/tmp/res-type/report.md`（m7/m7b，98/98 都有参考产物）；`work/tmp/lazygen/notes.md`
-最后验证：2026-10-25
-
-### `asm` 块**不是原样内联**：参考会把块重新汇编
-操作数名换成寄存器/立即数，周围插保存恢复（`mov rcx,32` → `mov rdx,rcx; mov ecx,0x20`），`$result` 解析到该变量所在寄存器；
-前缀 `memory_copy` 里内联出 `rep movs BYTE PTR es:[rdi],…`，`mov al,0` 被规范成 `mov eax,0x0`。
-⇒ 要支持它得写一个「认识名字操作数」的小汇编器。
-**助记符是白名单**（`nop` 被拒：`Unsupported instruction nop.`）；活路径只用得上 7 条：
-`mov` / `idiv` / `shl` / `or` / `rdtsc` / `rep movsb` / `rep stosb`，无内存操作数、无标签、无 `define`。
-`asm aarch64 { … }` 这类**非目标架构的块整块丢弃且不验证内容**（塞垃圾也照样编过，产物与没有该块相同）。
-验证：`docs/notes/2026-10-25-stdlib-survey.md`（探针在 `work/tmp/res-asm/`；编码器见 `codegen/asm_x64.*`）
-最后验证：2026-10-25
-
 ### 顶层算子单元接管运算符（`binary + (Int,Int)` 之类）
 `binary + (Int,Int)` **接管**了 `Int` 上的 `+`（产物里没有 add，只有单元的 4242 存储 + 存 return 0）；
 `dot foo` 按接收者静态类型解析。**同名多个版本时返回什么由「后声明的胜」决定，不是按具体度选**
@@ -333,15 +316,6 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 ⚠️ 中间那一轮「只换掩码就让 180 掉 ⇒ 还有别的形状」的结论**作废**：那个 patch 多套了一层 `mask_of`，W=32 时把 `31` 变成 `0x7FFFFFFF`——
 180 是被**坏 helper** 弄掉的，两个 patch 共用它才得到「哈希一字不差」。
 验证：`docs/notes/2026-10-18-width-cond.md` · `docs/notes/2026-10-18-width-180.md`（patch 在 `work/tmp/width180/`）
-最后验证：2026-10-18
-
-### 参考的 def 是**非重入**的：同一个 def 的多次调用共用同一块结果缓冲
-`rep(1,1) + rep(2,8) + rep(3,3)` 这样一个字符串里，三段插值**全部渲染成最后一次调用的结果**（`[F][T][T]`）；
-`rep(2,8) + rep(1,1)` 连**长度**也来自最后一次（`[[T]|[T]]`）。
-但不是「实参被覆盖」：两个**不同** def 不串（`[Ab|Cd]`），返回字面量/`Int` 的调用不串（`idn(5)+idn(9)` → `[5|9]`）；
-也不在模板里：`let a=rep(1,1); let b=rep(2,8); set_text(a,…)` 里 a 读出 24B 的 `rep(2,8)`。
-我们照此模拟（`template_expr` 把同名 Str 段换成最后一段的 SSA 指针，不重复调用；`5d4ff13`）—— 8 份语料因此归零。
-验证：`docs/notes/2026-10-18-uibuffer.md`（19 例探针 `work/tmp/uibuf/probe_ui.py`）
 最后验证：2026-10-18
 
 ### LLVM 的动态探栈调用（`___chkstk_ms`）**插在寄存器分配之后**，跨 call 的活值得由它自己保

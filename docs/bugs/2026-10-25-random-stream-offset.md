@@ -1,7 +1,7 @@
-# 096/098：参考把随机种子降成 1 字节栈槽（不是「相差 34 次抽取」）
+# 096/098「Overture 2 ALU 序章」/「Overture 3 立即数序章」：参考把随机种子降成 1 字节栈槽（不是「相差 34 次抽取」）
 
 - 状态：**不修；不是我们的 bug** —— 参考侧不可复现
-- 影响：096「ALU 序章」（关卡目录 `campaign/overture_2_alu`）、098「立即数序章」（`campaign/overture_3_immediates`）
+- 影响：096「Overture 2 ALU 序章」（关卡目录 `campaign/overture_2_alu`）、098「Overture 3 立即数序章」（`campaign/overture_3_immediates`）
   —— **中文名是本地译名，不是官方名**。
   定关依据（两条，都是逐字比对测试代码）：
   ① `instructions[i] = …` 的生成序列 —— 096 与 `overture_2_alu` 同序（首行 `#MOVE | #INPUT | 1`），

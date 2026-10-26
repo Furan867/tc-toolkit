@@ -37,8 +37,8 @@
 
 3 份 diff 全部定性为**参考侧不可复现**（参考产物拿未初始化的栈值当随机种子），我们自己的语义差异 **0 份**：
 
-- 084「寄存器序章」（`campaign/overture_1_registers`）→ `docs/bugs/2026-10-26-084-ref-uninit-stack-seed.md`
-- 096「ALU 序章」/ 098「立即数序章」（`campaign/overture_2_alu` / `campaign/overture_3_immediates`）→ `docs/bugs/2026-10-25-random-stream-offset.md`
+- 084「Overture 1 寄存器序章」（`campaign/overture_1_registers`）→ `docs/bugs/2026-10-26-084-ref-uninit-stack-seed.md`
+- 096「Overture 2 ALU 序章」/ 098「Overture 3 立即数序章」（`campaign/overture_2_alu` / `campaign/overture_3_immediates`）→ `docs/bugs/2026-10-25-random-stream-offset.md`
 
 （084/096/098 的中文名是本地译名，不是官方名；定关依据写在各自 bug 文档里。）
 

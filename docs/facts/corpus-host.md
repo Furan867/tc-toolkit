@@ -201,9 +201,4 @@ frontend → `ModuleAst` → `lower::Program` → `assemble()` → blob，不经
 验证：`docs/notes/2026-10-18-str-interp.md`（含每类的探针与读出字节）
 最后验证：2026-10-18
 
-### 参考编译器容忍 `return <expr>)` 里多余的右括号（我们比它严）
-实测（2×2 单因子）：`store(...))` 多一个 `)` → 参考 `sysFatal front_end.nim(2688,28) Missing open paren`；
-`return …)` 多一个 → **编译成功**，且产物 sha256 与删掉它的同一份源码相同（`f41b2839b25cf6a9…`）。
-17 份语料全落在这个被容忍的形状（每份唯一不平衡行都含 `return`、每行净 −1）。
-验证：`docs/notes/2026-10-18-m5-gap-diagnosis.md`
-最后验证：2026-10-18
+

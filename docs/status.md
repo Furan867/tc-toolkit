@@ -48,6 +48,12 @@ verdict **带 `--src`**，只比 `[game_lo, game_hi)`。旧口径比全内存，
 
 ## 未解
 
+- **031-032「逻辑试炼」游戏内崩溃**（根因已查清，未动手）：产物 9916 B 而参考 105469 B（1/12），
+  20 个接口函数（`get_cycle` / `get_component_count` / `check_output` / `get_input` …）**根本没进
+  产物** —— 游戏从产物**外部**按名字调它们，于是 `pc=0x7ffa…  UC_ERR_FETCH_UNMAPPED`、store 0 条。
+  数据：`ast.defs=39` 但 `hir.funcs=20`。根因在 **sema**：`Analyzer::run` 只分析程序根
+  （`src.label->body`），没被调用的顶层 def 永远不分析、不进 `hir.funcs`（codegen 那侧的「按需
+  生成」只是第二道门）。修法：`run` 末尾遍历 `src.defs` 调 `instantiate_top`，非泛型用空 `Inst`。
 - **3 份真差异**：084(30 B) / 096(30) / 098(29)。
   - 096/098 是随机流错位，差 34 次抽取（`docs/bugs/2026-10-25-random-stream-offset.md`）。
   - 084 未查。

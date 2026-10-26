@@ -383,6 +383,20 @@ reference 的 5.3–5.4 MHz 与设计 §2.5 的「改写前 5.4 MHz」吻合 →
 验证：`docs/notes/2026-10-18-random.md`（探针 `work/tmp/randomtask/probe_seq.py`）+ `docs/notes/2026-10-18-stdlib-semantics.md`
 最后验证：2026-10-18
 
+### 084/096/098 上参考产物不可复现：它拿未初始化的栈值当随机种子（2026-10-26 实测）
+
+- **084（Overture 1 寄存器序章）**：参考的种子与源码无关 —— 源码写 `Seed 42`、读回全局确实是 `0x2a`，
+  链却仍按 `xorshift(7)` 走；那个 `7` 是同一 tick 更早的无关代码（时间/节流那段）写进栈槽的垃圾值。
+  我们的产物按源码的种子走（同一 seed 两侧逐位相同），抽取序号也相同。
+- **096/098（Overture 2 ALU / Overture 3 立即数）**：参考把这枚种子降成**1 字节**栈槽
+  （反汇编里链的输入是 `movzx rcx, byte ptr [rsp-0x8b]`、写回是 `mov byte ptr [rsp-0x8b], cl`），
+  tick 1 是未初始化的 `0x07`，之后每 tick 只留低字节 → 周期 16 的纯乘链；
+  两侧 `random` 调用次数**完全相同**（101 次、实参逐条一致），不是抽多抽少。
+- 结论：这三份的「逐 tick 等价」不可达（参考换一个栈初值就换一条序列），单列标 `known-ref-unreproducible`；
+  细节与复现见 `docs/bugs/2026-10-26-084-ref-uninit-stack-seed.md` 与 `docs/bugs/2026-10-25-random-stream-offset.md`。
+验证：`build/difftrace.exe diff --state … --src … --tick-mark 0x232A7010000`（084）；`work/tmp/rc096/repro.sh`（096/098）
+最后验证：2026-10-26
+
 ### 我们的 lowering 产物在游戏内执行成功（LLVM 前端产物第一次真跑）
 `manifest.tsv` seq 007 / 009：`impl=ours`、`out_len=58612`(0xE4F4)、`entry=0xE1F0`；
 `hook.log`：`impl=ours mode=ours result=ok budget_ms=5000 guard=veh`，无 error 行；

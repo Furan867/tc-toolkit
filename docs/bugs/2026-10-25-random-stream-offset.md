@@ -1,65 +1,53 @@
-# 096/098 的随机流错位（相差 34 次抽取）
+# 096/098：参考把随机种子降成 1 字节栈槽（不是「相差 34 次抽取」）
 
-- 状态：**未修**
-- 影响：`simplexc/corpus/src/096.si`、`098.si`（两个同族电路：8 位标量 CPU，098 = 096 加 `IMM`）。
-  98 份语料里只有这两份还有真差异（100/102 的已随「局部数组字面量只读」修掉）。
-- 现象：100 tick 后终态差 **12 / 11 字节**，全在 `#SIMULATION_STATE + 406..421`（6 个电路寄存器
-  与它们的 cache 副本）；`error_buffer` 两边都空、`sim_cycle` 都跑满。
-- 判据：`batch.py --ids 096,098` 两份变 `equal`（`#SIMULATION_STATE` 内 0 差异）。
+- 状态：**不修；不是我们的 bug** —— 参考侧不可复现
+- 影响：096（关卡 `campaign/overture_2_alu`）、098（`campaign/overture_3_immediates`）。
+  定关依据：`#IMM` 的出现次数 —— 096 只在常量定义里 1 次、098 是 4 次（定义 + 生成 + 两处 `case` 解码），
+  与这两个关卡测试代码里的 1 / 4 次逐个对上；`overture_4_program` 是 2 次，排除。
+- 现象：100 tick 后终态差 12 / 11 字节，全在 `#SIMULATION_STATE + 406..421`（6 个电路寄存器与 cache 副本）；
+  两边 `error_buffer` 都空、`sim_cycle` 都跑满
 
-## 已确认（都有出处）
+## 已确认（本文件 2026-10-26 订正，替换掉原来「同一条流相差 34 次」的结论）
 
-- **boot 后游戏区两边完全一致**：`--dump-boot` 在 boot 结束、发 `run` 命令前拍 `[game_lo, game_hi)`，
-  62 MB 区间差异 **0 字节**，`#SIMULATION_STATE + 0..512` 也是 0。所以差异产生在 run 阶段。
-  → `19d0529`（`--dump-boot` 本身）
-- **首次不一致**：`diff --state --tick-mark 0x232A9F501A5` 报 `tick 数 A 102 / B 102`、
-  `第一个不同 : tick 36（0 基，即第 37 个 tick），差异 1 字节`、
-  `addr=0x232a9f501a0`（= `#SIMULATION_STATE + 416`），**A=0xc7 / B=0xa5**。
-- **两个值在同一条 xorshift 流上，相差 34 次抽取**：以 `state=1` 起算，
-  `0xc7` 是**下标 33**（第 34 个），`0xa5` 是**下标 67**（第 68 个）。
-- **基础机制没问题**（负对照）：`work/tmp/minrepro/min.si`（97 行：协议区 + 每 tick
-  `store(#SIMULATION_STATE + 0, U8 get_input(cycle+1).input)`）两边各跑 50 tick，
-  `+0` 的 51 次写**逐位相同**，且都等于 `xorshift(1)` 的低字节序列；
-  再补上 098 的 32 次 `U8 random(64)` 预抽（`min_pre32.si`）后，两边仍都等于
-  `xorshift[32:83]` —— **预抽次数也一致**。
-- tick 37 是这个电路**第一次把 `input` 写进寄存器**（`MOVE Reg3 ← input`）；前 36 tick
-  的指令都不读输入，所以「流从哪个 tick 开始错」在 tick 37 之前不可观测。
+- **两侧 `random` 调用次数完全相同**：101 次，实参 `0x00..0x64` 逐条一致（在 `get_input` 入口挂只读观察者）。
+  差的不是抽多抽少，是**两条不同的递推**。
+- **参考侧把种子降成 1 字节栈槽**：反汇编里链的输入是 `movzx rcx, byte ptr [rsp-0x8b]`、
+  写回是 `mov byte ptr [rsp-0x8b], cl`（ref blob `code+0x66fa` / `+0x6799`）；
+  64 位的 `global_seed` 全局在 run 阶段**一次都没被写**（101 次读全是 32 次预抽后的值）。
+- tick 1 的那个字节是**未初始化的 `0x07`**，之后每 tick 只保留低字节 → 纯乘链、周期 16：
+  `b7 67 17 c7 77 27 d7 87 …`。
+- **我们侧是对的**：`xorshift(state=1)` 从下标 32 起，`6b c7 05 d9 06 56 …`
+  （`codegen/codegen.cc:1478 builtin_random` 对整 64 位做 load/store）。
+- 原文档的两个数值是**巧合**：`0xc7` 是那条退化链的第 4 个值，`0xa5` 是正确流的下标 67。
+- 四步增量：`m2.si`（instructions[] + 32 次预抽）两侧逐位相同；`m3.si`（+`instructions[cycle]` + U8 局部 + switch）
+  仍逐位相同；完整 098 加只读观察者后，**第 0 个写（tick 1）就分道**：ref=`0xb7` vs ours=`0x6b`。
+- 删除式二分：与 `check_output`、`mode_refresh`、`get_input` 的 switch/局部、sleep-ahead 循环、burst 节流、
+  `#if in_scope` 包裹、预抽次数（64 次）、种子初值（1001）、`array<U8>`→`array<U64>` **全都无关**（删了照样退化）。
+- 096 的参考产物同样退化、首值同为 `0xb7` —— 同族。
 
-## 已排除（别重走）
+## 已排除（保留上一轮的死路清单）
 
-- **「参考不写回 `global_seed`」**：参考把 `internal global` 提升到栈/寄存器（SROA），
-  内存里只是看不见；6 份用 `random` 的语料（034/065/069/086/088/102）全都能在栈上
-  看到 xorshift 链条。写回位置不是判据。
-- **「`instructions[]` 保持初值」**：曾把参考侧 `0x400BA43BB008` 的 1212 次写当成
-  `instructions[]`，实际是 1 字节 ASCII（`'R','e','g',' ','0'` + 每 tick 递增的数字），
-  是 `ui_set_text` 复用的 Nim 字符串缓冲。
-- **「`array()` 的私有全局是根因」**：改成运行时分配（`19d0529`）后 098 的分叉位置
-  **一个都没变**——098 每轮把读到的元素全重写一遍，旧实现本来就等价。
-- **「预抽次数不同」**：`min_pre32.si` 两边预抽次数相同（见上）。
-- **「随机数发生器实现不同」**：`min.si` 两边序列逐位相同、且都等于理论 xorshift。
+- **「参考不写回 `global_seed`」**：参考把 internal global 提升到栈/寄存器（SROA），内存里看不见；写回位置不是判据。
+- **「`instructions[]` 保持初值」**：曾把参考侧 1212 次写当成 `instructions[]`，实际是 `ui_set_text` 复用的 Nim 字符串缓冲。
+- **「`array()` 的私有全局是根因」**：改成运行时分配后分叉位置一个都没变。
+- **「预抽次数不同」**：两侧相同。
+- **「随机数发生器实现不同」**：同 seed 下逐位相同、且都等于理论 xorshift。
 
-## 下一步
+## 未闭环（不影响归类）
 
-从 `min.si` 出发**增量逼近**，每加一段 098 的结构就跑一次两边、比 `+0` 的序列：
+参考**为什么**在 096/098 里把这个种子降成 1 字节栈槽（`m2`/`m3` 这种小片段复现不出来）。
+但那是参考产物自己的类型/布局选择 + 未初始化读，与我们的 lowering 无关；要继续追就从 098 的标架删
+（`reset_sim` 内容、`registers`/`tests`、嵌套 `halt`/`handle_test_result`/`get_target_cycle`、`level_input` 全局）。
 
-1. `instructions[]` 表（`array(<U8>,256)` + 32 次 `random(64)` + ALU/mov 常量段）；
-2. `get_input` 改用 `instructions[cycle]`；
-3. `check_output`（`registers[6]` 软模型 + `get_memory("Reg N")` 比对）；
-4. `mode_refresh`（098 的 461 字节状态写）。
+## 判据
 
-哪一步之后出现「相差 34 次」，就是它。若四步全加完仍一致，说明差异在更细的组件行为
-（`com_*` 的 LATE / `halt` / burst 节流），那时把「已排除」的清单再往下扩。
+这两份不纳入 M5 的 equal 分母，标 `known-ref-unreproducible`。
 
 ## 复现
 
 ```bash
-build/simplexc_cli.exe --src simplexc/corpus/src/098.si --out <blob>
-build/difftrace.exe run --src simplexc/corpus/src/098.si --bin simplexc/corpus/ref/098.bin \
-    --target 100 --seed seq --save ref.seq
-build/difftrace.exe run --src simplexc/corpus/src/098.si --bin <blob> \
-    --target 100 --seed seq --save ours.seq
-build/difftrace.exe diff --state ref.seq ours.seq --src simplexc/corpus/src/098.si \
-    --tick-mark 0x232A9F501A5
+./work/tmp/rc096/repro.sh          # 输出 work/tmp/rc096/repro.out
+./work/tmp/rc096/ladder.sh <name>  # 单个阶梯用例的两侧对照；二分表见 work/tmp/rc096/bisect.out
 ```
 
-负对照在 `work/tmp/minrepro/`（`min.si`、`min_pre32.si`、`tcref.py`）。
+（`work/tmp/` 是临时目录，会被清；要重跑就按上面的脚本重建。）

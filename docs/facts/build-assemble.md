@@ -4,7 +4,7 @@
 资产 `clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.zst`（263.5 MB），
 sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 （GitHub API 的 `digest` 与本地重算一致）。
-取件：`python tools/fetch_llvm.py --dest D:/downloads` → `build/llvm/{bin/LLVM-C.dll, include/**, lib/LLVM-C.lib}`
+取件：`python simplexc/tools/fetch_llvm.py --dest D:/downloads` → `build/llvm/{bin/LLVM-C.dll, include/**, lib/LLVM-C.lib}`
 （不进 git；`build/llvm/llvm.json` 记版本/资产名/sha256）。MinGW 导入库：
 `gendef LLVM-C.dll`（1240 个导出）→ `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
 （MSVC 那份 `LLVM-C.lib` 没用上）。运行期靠系统中已有的 MSVC 运行时
@@ -14,7 +14,7 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 最后验证：2026-10-16
 
 同一个包里解出的 `bin/clang.exe`（M1.5 的产物必须由 clang 生成）：
-`python tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe`，sha256 `9584244d83bb…`。
+`python simplexc/tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe`，sha256 `9584244d83bb…`。
 `--offline` 用本地压缩包 + `llvm.json` 里记的 sha256 重解（GitHub 临时 API 会 403）；
 顺手修了旧实现的一个 404：按 tag 查要走 `releases/tags/<tag>`（`releases/{ref}` 只对 `latest` 合法）。
 验证：`build/llvm/bin/clang.exe --version` → `clang version 23.1.3 (…0d261d1ca552…)`

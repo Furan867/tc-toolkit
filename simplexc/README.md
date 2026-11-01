@@ -29,8 +29,12 @@
     python simplexc/tools/build.py [all|objs|tcblob|llvm_prog|hook|spike]    # 默认 all
 
 需要 w64devkit（默认 `D:/bin/w64devkit/bin`，可用 `W64DEVKIT_BIN` 覆盖）与 `build/llvm/`
-（头 + 自造 MinGW 导入库，不进 git；没有就先 `python tools/fetch_llvm.py --dest D:/downloads`）。
+（头 + 自造 MinGW 导入库，不进 git；没有就先 `python simplexc/tools/fetch_llvm.py --dest D:/downloads`）。
 产物全部落在 `reversing/build/`，两条路径写法上的硬要求见 `simplexc/tools/build.py` 头部。
+
+CMake 骨架（阶段 1：只有 `simplexc_cli` 与 `hook` 两个目标，flags 从 `build.py` 逐条搬）：
+
+    cmake --preset mingw && cmake --build --preset mingw    # 中间文件在 build/cmake，产物仍在 build/
 
 ## 判据
 

@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "mingw",
+      "displayName": "w64devkit (MinGW-w64 GCC) + Ninja",
+      "description": "固定工具链 D:/bin/w64devkit/bin（W64DEVKIT_BIN 可覆盖），产物落 reversing/build/",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/cmake",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-mingw-w64devkit.cmake"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mingw",
+      "configurePreset": "mingw",
+      "targets": ["simplexc_cli", "hook"]
+    }
+  ]
+}

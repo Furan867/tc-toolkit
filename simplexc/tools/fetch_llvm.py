@@ -12,11 +12,11 @@
 
 用法
 ----
-    py tools/fetch_llvm.py                          # 最新稳定版 → D:/downloads + build/llvm
-    py tools/fetch_llvm.py --tag llvmorg-23.1.3
-    py tools/fetch_llvm.py --list                   # 只列资产（含 sha256），不下载
-    py tools/fetch_llvm.py --extra bin/clang.exe     # 额外多解一个成员（可重复）
-    py tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe   # 不联网重解一遍
+    py simplexc/tools/fetch_llvm.py                               # 最新稳定版 → D:/downloads + build/llvm
+    py simplexc/tools/fetch_llvm.py --tag llvmorg-23.1.3
+    py simplexc/tools/fetch_llvm.py --list                        # 只列资产（含 sha256），不下载
+    py simplexc/tools/fetch_llvm.py --extra bin/clang.exe          # 额外多解一个成员（可重复）
+    py simplexc/tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe   # 不联网重解一遍
 
 产出
 ----
@@ -37,6 +37,11 @@ import shutil
 import subprocess
 import sys
 import tarfile
+
+# 这一个文件在 simplexc/tools/ 下：往上是 simplexc/，再往上是仓库根（build/ 在那里）。
+HERE = os.path.dirname(os.path.abspath(__file__))
+SIMPLEXC = os.path.dirname(HERE)
+REPO = os.path.dirname(SIMPLEXC)
 
 API = "https://api.github.com/repos/llvm/llvm-project/releases/{ref}"
 ASSET_KEY = "x86_64-pc-windows-msvc.tar.zst"
@@ -212,9 +217,7 @@ def main() -> int:
     a = ap.parse_args()
     extras = tuple(a.extra)
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(here)
-    out_root = a.out or os.path.join(root, "build", "llvm")
+    out_root = a.out or os.path.join(REPO, "build", "llvm")
 
     if a.offline:
         asset = local_asset(a.dest, a.tag, out_root)

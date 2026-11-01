@@ -101,7 +101,7 @@ def run(cmd, cwd=REPO, timeout=1800):
 # ---- 1/2. 编译 + 装配 -------------------------------------------------------
 def build_ours(variant, outdir):
     if not os.path.isfile(CLANG):
-        raise SystemExit(f"找不到 clang：{CLANG}（解包：python tools/fetch_llvm.py "
+        raise SystemExit(f"找不到 clang：{CLANG}（解包：python simplexc/tools/fetch_llvm.py "
                          f"--offline --tag llvmorg-23.1.3 --extra bin/clang.exe）")
     os.makedirs(outdir, exist_ok=True)
     obj = os.path.join(outdir, f"006_equiv_{variant}.o")

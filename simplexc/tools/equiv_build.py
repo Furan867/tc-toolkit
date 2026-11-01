@@ -145,7 +145,7 @@ def gen_addrs(src, workdir, say):
 
 def compile_obj(obj, extra_flags, workdir, say):
     if not os.path.isfile(CLANG):
-        raise SystemExit(f"找不到 clang：{CLANG}（解包：python tools/fetch_llvm.py --offline "
+        raise SystemExit(f"找不到 clang：{CLANG}（解包：python simplexc/tools/fetch_llvm.py --offline "
                          f"--tag llvmorg-23.1.3 --extra bin/clang.exe）")
     cmd = [CLANG, "--target=x86_64-pc-windows-gnu", "-O2", "-ffreestanding",
            "-fno-stack-protector", "-I", workdir, *extra_flags, "-c", "-o", obj, EQUIV_C]

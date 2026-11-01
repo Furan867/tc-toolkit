@@ -10,7 +10,7 @@ manifest（现存那份只有一次会话的 9 行）与 `NNN.entry.txt` 都已�
 `ref_match_rebased` / `rebased_delta`：把基址差值归一化后是否逐字节相同，判据见
 `simplexc/tools/classify_abs_addrs.py`。
 
-用法（解释器用 `python` = D:\\bin\\Python313\\python.exe，别用别的）：
+用法（解释器用 PATH 上的 Python 3.13；子进程一律 sys.executable，不写解释器路径）：
     python simplexc/tools/recompile_corpus.py            # 全流程：去重落盘 → 拷贝 campaign → 抽 stdlib → 逐份编译
     python simplexc/tools/recompile_corpus.py --check     # 只校验 manifest 与 corpus/ 的一致性，不编译
     python simplexc/tools/recompile_corpus.py --expect OTHER.si   # 换 stdlib 比对副本
@@ -54,6 +54,7 @@ def _load_by_path(path, name):
 
 
 T = _load_by_path(os.path.join(REPO, "tools", "try_compile_dll.py"), "try_compile_dll")
+TC = _load_by_path(os.path.join(REPO, "tools", "tc_common.py"), "tc_common")
 
 CAPTURE_DIR = os.path.join(REPO, "work", "hook", "all")
 CORPUS = os.path.join(SIMPLEXC, "corpus")
@@ -62,9 +63,9 @@ REF_DIR = os.path.join(CORPUS, "ref")
 CAMPAIGN_DIR = os.path.join(CORPUS, "campaign")
 MANIFEST = os.path.join(CORPUS, "manifest.tsv")
 
-GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
+GAME = str(TC.game_dir())
 GAME_CAMPAIGN = os.path.join(GAME, "campaign")
-GAME_DLL_REAL = os.path.join(GAME, "compile_real.dll")
+GAME_DLL_REAL = os.path.join(GAME, TC.GAME_REAL_DLL_NAME)
 
 # stdlib 固定前缀（口径见 docs/specs/2026-10-15-simplex-llvm-compiler-design.md §2.6）：
 # DLL 里那段是 27711 字节、含 55 处 CRLF；工作副本做 CRLF→LF 归一化后是 27656 字节。

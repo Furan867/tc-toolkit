@@ -21,9 +21,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .. import winmem
+from .. import tc_common, winmem
 
-EXE = "Turing Complete.exe"
+EXE = tc_common.GAME_EXE_NAME
 BASE_VA = 0x140000000
 LINK_CYCLE = 0x14624D608
 LINK_TIME = 0x14624D610

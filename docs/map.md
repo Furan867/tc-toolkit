@@ -4,10 +4,12 @@
 
 ## 环境
 
-- 游戏：`F:\opt\SteamLibrary\steamapps\common\Turing Complete\`
+- 游戏：`$TC_GAME_DIR`（`python tools/tc_common.py` 打印本机路径）
 - 架构：Nim 2.2.6 编译的 exe + Godot 3.4.2 宿主 + 自研编译器 `compile.dll`
-- ⚠️ **Steam 更新会让全部函数地址位移** —— 动手前先比对 exe 的 mtime 与产物
-- 工具链：`D:\bin\w64devkit\bin\{nm,objdump}.exe`、Python 3.13、`D:\bin\7z.exe`
+- ⚠️ **Steam 更新会让全部函数地址位移** —— 动手前先比对 `tc_common.game_build_id()` 与 `game_fingerprint()` 有没有变
+- 工具链：`g++` / `objdump` / `nm` 从 **PATH** 找（MinGW-w64 GCC 14+）、Python 3.13
+- 构建脚本在各自程序目录：`simplexc/CMakeLists.txt` + `simplexc/CMakePresets.json`；将来每个工具一套，互不共享 CMakeLists
+- `cmake/` 是共享构建模块（Find 模块 + toolchain），各工具通过 `${CMAKE_CURRENT_SOURCE_DIR}/../cmake` 引用，不要复制
 
 ## 目录
 

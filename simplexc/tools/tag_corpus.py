@@ -15,7 +15,7 @@
 
 只读 corpus/src/**、manifest.tsv、stdlib_prefix.si；不编译、不加载 DLL、不跑游戏。
 
-用法（解释器用 `python` = D:\\bin\\Python313\\python.exe）：
+用法（用 PATH 上的 Python 3.13）：
     python simplexc/tools/tag_corpus.py             # 重新生成 corpus/coverage.tsv
     python simplexc/tools/tag_corpus.py --check     # 与现有 coverage.tsv 逐格比对，退出码 0/1
     python simplexc/tools/tag_corpus.py --evidence            # 每个构造打印 ≤3 条证据

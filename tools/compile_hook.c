@@ -61,8 +61,9 @@
  *   C++ 编译器核心（`simplexc/shell/simplexc_core.h` 是两者之间唯一的 C 边界）。
  *   构建入口：`python simplexc/tools/build.py simplexc_dll`（或部署入口
  *   `python tools/deploy_compile_hook.py build-deploy`，它转调同一个 target）。
- *   链接必须用 g++（要 C++ 运行库），且要带上 `-L build/llvm/lib -lLLVM-C` ——
- *   部署时**必须**把 `build/llvm/bin/LLVM-C.dll` 一起拷进游戏目录（接口 §7）。
+ *   链接用 PATH 上的 g++（要 C++ 运行库），LLVM-C 的头与导入库由 CMake 的 `LLVMC::LLVMC`
+ *   目标给（`simplexc/.deps/llvm`）；部署时**必须**把 `LLVM-C.dll` 一起拷进游戏目录（接口 §7）——
+ *   CMake 已从 `simplexc/.deps/llvm/bin/` 拷到 `build/`，部署拿 `build/LLVM-C.dll`。
  *
  *   无第三方链接依赖：manifest.tsv 的 sha256 走系统 bcrypt.dll 的按需绑定
  *   （见 cng_bind / sha256_hex），所以不用 -lbcrypt、也不 include <bcrypt.h>。
@@ -75,13 +76,28 @@
 #define REAL_DLL "compile_real.dll"
 #define SEP      92        /* 反斜杠的 ASCII —— 写成字符字面量在多轮转义里会失真 */
 
-/* 路径宏一律可以 -D 覆盖（默认值与以前逐字符相同）—— 离线判据要用**测试专用路径**
- * 跑四种情形，不能碰活的数据：转发层加载时会清空 OUT_DIR / OPT_DIR（见 purge_*），
- * 测试构建若共用真路径就会把游戏抓到的捕获和 work/hook/hook.log 一起洗掉。
- * 覆盖 = 只在**测试构建**的命令行上给 -D，正式构建（tools/deploy_compile_hook.py build）
- * 一个都不给，行为与以前完全一致。 */
+/* 路径：三层优先级 —— `opt.ini` 的 `[opt] toolkit_root`（有且非空）> 编译期宏 > `"."`。
+ *
+ * 为什么不再写死绝对路径：转发层住在**游戏目录**里，它无从知道仓库在哪
+ * （`compile_real.dll` 能用自身模块路径推导，是因为它与我们同在游戏目录 —— 见
+ * ensure_real）；而仓库位置一台机器一个值。现在由 CMake 传
+ * `-DTC_TOOLKIT_ROOT=<仓库根>` 注入，源码里不再有机器相关的路径。
+ *
+ * 运行时那一层（`opt.ini` 的 `toolkit_root`）是给「库已经部署进游戏目录、还想换工作目录」
+ * 用的：不必重编。
+ *
+ * clangd 不走 CMake、拿不到 `-D`，所以下面每个宏都必须有**能静态解析的默认值** ——
+ * 占位 `"."`（进程当前目录），不能 `#error`。
+ *
+ * `OUT_DIR` / `OPT_DIR` / `OPT_INI` / `OPT_SCRIPT` / `HOOK_LOG_DIR` 仍然可以被 `-D` 覆盖：
+ * 离线判据（simplexc/tools/hook_offline.py）靠它把工作目录隔离到 work/tmp/hook_offline/，
+ * 不能碰活数据 —— 转发层加载时会清空 OUT_DIR / OPT_DIR（见 purge_*），测试构建若共用真路径
+ * 就会把游戏抓到的捕获和 work/hook/hook.log 一起洗掉。 */
+#ifndef TC_TOOLKIT_ROOT
+#define TC_TOOLKIT_ROOT "."
+#endif
 #ifndef OUT_DIR
-#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\hook"
+#define OUT_DIR  TC_TOOLKIT_ROOT "\\work\\hook"
 #endif
 
 /* hook.log 的目录：默认就落在捕获目录（OUT_DIR = work/hook）里。
@@ -92,16 +108,13 @@
 #define HOOK_LOG_DIR OUT_DIR
 #endif
 
-/* 产物改写器（MVP：把产物交给外部 Python 走一趟，再**就地**写回原缓冲）
- *
- * 这两个路径与 OUT_DIR 一样只能写死：转发层住在游戏目录里，它无从知道项目在哪
- * （`compile_real.dll` 能用自身模块路径推导，是因为它与我们同在游戏目录 ——
- * 见 ensure_real。改机器上的路径要改这三行）。
- */
+/* 产物改写器（MVP：把产物交给外部 Python 走一趟，再**就地**写回原缓冲） */
 #ifndef OPT_DIR
-#define OPT_DIR     "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\opt"
+#define OPT_DIR     TC_TOOLKIT_ROOT "\\work\\opt"
 #endif
-#define OPT_PROJ    "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit"
+#ifndef OPT_PROJ
+#define OPT_PROJ    TC_TOOLKIT_ROOT
+#endif
 #ifndef OPT_SCRIPT
 #define OPT_SCRIPT  OPT_PROJ "\\tools\\optimize_image.py"
 #endif
@@ -113,6 +126,61 @@
 #define STDLIB_PREFIX OPT_PROJ "\\simplexc\\corpus\\stdlib_prefix.si"
 #define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
 #define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
+
+/* 生效的路径：上面那些宏是**默认值**，运行时还要被 `opt.ini` 的 `toolkit_root` 顶一次，
+ * 所以调用点一律读这里的字段，不再直接读宏。
+ * `ini` 例外 —— 它只能来自编译期：要读 `toolkit_root` 得先知道 opt.ini 在哪，自举不能绕回去。 */
+typedef struct {
+    char out_dir[MAX_PATH];    /* 捕获（hook_src_NNN.si / hook_out_NNN.bin / manifest.tsv）*/
+    char opt_dir[MAX_PATH];    /* 改写器中间产物 */
+    char proj[MAX_PATH];       /* 改写子进程的 cwd */
+    char script[MAX_PATH];     /* tools/optimize_image.py */
+    char ini[MAX_PATH];        /* opt.ini */
+    char stdlib[MAX_PATH];     /* simplexc/corpus/stdlib_prefix.si */
+    char log_dir[MAX_PATH];    /* hook.log 所在目录 */
+} toolkit_paths;
+
+static toolkit_paths g_paths;
+static int g_paths_ready = 0;
+
+/* `dst = <dir>\<name>`，`dir` 末尾已带分隔符就不重复加。
+ * 不直接用 `sprintf`：这条拼接会拿到 `opt.ini` 里人写的 root（长度不受我们控制）。 */
+static void path_join(char* dst, size_t cap, const char* dir, const char* name) {
+    size_t n = 0;
+    while (dir[n] && n + 1 < cap) { dst[n] = dir[n]; n++; }
+    if (n && dst[n - 1] != SEP && dst[n - 1] != '/' && n + 1 < cap) dst[n++] = (char)SEP;
+    while (*name && n + 1 < cap) dst[n++] = *name++;
+    dst[n] = 0;
+}
+
+/* 解析一次，之后只读。
+ *
+ * `toolkit_root` 非空时顶掉三者（OUT_DIR / OPT_DIR / OPT_PROJ），派生的四份跟着重算 ——
+ * 其中 hook.log 跟着**新的**捕获目录走：root 换到别处以后，日志留在旧目录里等于两边都对不上号。
+ */
+static void toolkit_paths_init(void) {
+    if (g_paths_ready) return;
+    lstrcpynA(g_paths.out_dir, OUT_DIR, MAX_PATH);
+    lstrcpynA(g_paths.opt_dir, OPT_DIR, MAX_PATH);
+    lstrcpynA(g_paths.proj, OPT_PROJ, MAX_PATH);
+    lstrcpynA(g_paths.script, OPT_SCRIPT, MAX_PATH);
+    lstrcpynA(g_paths.ini, OPT_INI, MAX_PATH);
+    lstrcpynA(g_paths.stdlib, STDLIB_PREFIX, MAX_PATH);
+    lstrcpynA(g_paths.log_dir, HOOK_LOG_DIR, MAX_PATH);
+
+    char root[MAX_PATH];
+    root[0] = 0;
+    GetPrivateProfileStringA("opt", "toolkit_root", "", root, sizeof(root), OPT_INI);
+    if (root[0]) {
+        lstrcpynA(g_paths.proj, root, MAX_PATH);
+        path_join(g_paths.out_dir, MAX_PATH, root, "work\\hook");
+        path_join(g_paths.opt_dir, MAX_PATH, root, "work\\opt");
+        path_join(g_paths.script, MAX_PATH, root, "tools\\optimize_image.py");
+        path_join(g_paths.stdlib, MAX_PATH, root, "simplexc\\corpus\\stdlib_prefix.si");
+        lstrcpynA(g_paths.log_dir, g_paths.out_dir, MAX_PATH);
+    }
+    g_paths_ready = 1;
+}
 
 /* 同目录的 C 边界（纯 C 头，冻结版）：核心（C++17）实现它，本文件只调它。
  * 用相对路径 include：转发层的编译命令就没有额外的 -I 要维护（它两个入口共用）。 */
@@ -133,7 +201,7 @@ static void*      g_ours_prev = NULL;    /* 我们上次给游戏的产物缓冲
  */
 static const char* resolve_compiler(void) {
     static char mode[32] = "";
-    GetPrivateProfileStringA("opt", "compiler", "ref", mode, sizeof(mode), OPT_INI);
+    GetPrivateProfileStringA("opt", "compiler", "ref", mode, sizeof(mode), g_paths.ini);
     if (lstrcmpA(mode, "ours") == 0) return "ours";
     if (lstrcmpA(mode, "ours_with_fallback") == 0) return "ours_with_fallback";
     return "ref";
@@ -152,7 +220,7 @@ static const char* resolve_compiler(void) {
  * 读不到 / 非法 → on（真路径）；配的原样值由 `raw` 带回，整行入选 `impl` 行（`stdlib_raw=`）——
  * 写错（`of`）会看起来与 on 一样能编，日志里必须留下痕迹。 */
 static int resolve_stdlib(char* raw, DWORD raw_cap) {
-    GetPrivateProfileStringA("opt", "stdlib", "on", raw, raw_cap, OPT_INI);
+    GetPrivateProfileStringA("opt", "stdlib", "on", raw, raw_cap, g_paths.ini);
     return lstrcmpA(raw, "off") != 0;   /* 只有明确的 off 才关 */
 }
 
@@ -210,7 +278,7 @@ static unsigned long long ours_budget_ms(void) {
         if (v != (unsigned long long)-1) return v;
     }
     buf[0] = 0;
-    GetPrivateProfileStringA("opt", OURS_TIMEOUT_INI_KEY, "", buf, sizeof(buf), OPT_INI);
+    GetPrivateProfileStringA("opt", OURS_TIMEOUT_INI_KEY, "", buf, sizeof(buf), g_paths.ini);
     unsigned long long v = parse_ms(buf);
     return v == (unsigned long long)-1 ? OURS_TIMEOUT_MS : v;
 }
@@ -428,9 +496,9 @@ static void ensure_real(void) {
    免得记录里指着一个因超限/失败而根本没落盘的捕获。 */
 static int dump(const char* tag, const char* ext, const void* p, long long n, LONG seq) {
     if (!p || n <= 0 || n > (64LL << 20)) return 0;
-    CreateDirectoryA(OUT_DIR, NULL);       /* 已存在会失败，无所谓 */
+    CreateDirectoryA(g_paths.out_dir, NULL);       /* 已存在会失败，无所谓 */
     char path[MAX_PATH];
-    sprintf(path, "%s%chook_%s_%03ld%s", OUT_DIR, SEP, tag, seq, ext);
+    sprintf(path, "%s%chook_%s_%03ld%s", g_paths.out_dir, SEP, tag, seq, ext);
     HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
@@ -549,9 +617,9 @@ static void manifest_line(LONG seq, int flags,
                           const char* out_name, long long out_len, const char* out_sha,
                           const void* out, const char* impl, const char* stdlib) {
     if (!out) return;                      /* 没有 out 缓冲就没什么可记 */
-    CreateDirectoryA(OUT_DIR, NULL);
+    CreateDirectoryA(g_paths.out_dir, NULL);
     char path[MAX_PATH];
-    sprintf(path, "%s%cmanifest.tsv", OUT_DIR, SEP);
+    sprintf(path, "%s%cmanifest.tsv", g_paths.out_dir, SEP);
     int fresh = GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES;
     HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -612,9 +680,9 @@ static BOOL read_entry(const char* path, long long* val) {
  * 系统保证；日志的价值也全在历史。
  */
 static void hook_log(LONG seq, const char* event, const char* kv) {
-    CreateDirectoryA(HOOK_LOG_DIR, NULL);
+    CreateDirectoryA(g_paths.log_dir, NULL);
     char path[MAX_PATH];
-    sprintf(path, "%s%chook.log", HOOK_LOG_DIR, SEP);
+    sprintf(path, "%s%chook.log", g_paths.log_dir, SEP);
     HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -640,14 +708,14 @@ static void hook_log(LONG seq, const char* event, const char* kv) {
  */
 static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     if (!buf || len <= 0 || len > (64LL << 20)) return;
-    CreateDirectoryA(OPT_DIR, NULL);
+    CreateDirectoryA(g_paths.opt_dir, NULL);
 
     char raw[MAX_PATH], opt[MAX_PATH], cmd[4 * MAX_PATH], err[MAX_PATH];
     char entry[MAX_PATH];
-    sprintf(raw, "%s%c%03ld.raw.bin", OPT_DIR, SEP, seq);
-    sprintf(opt, "%s%c%03ld.opt.bin", OPT_DIR, SEP, seq);
-    sprintf(err, "%s%copt_stderr.log", OPT_DIR, SEP);
-    sprintf(entry, "%s%c%03ld.entry.txt", OPT_DIR, SEP, seq);
+    sprintf(raw, "%s%c%03ld.raw.bin", g_paths.opt_dir, SEP, seq);
+    sprintf(opt, "%s%c%03ld.opt.bin", g_paths.opt_dir, SEP, seq);
+    sprintf(err, "%s%copt_stderr.log", g_paths.opt_dir, SEP);
+    sprintf(entry, "%s%c%03ld.entry.txt", g_paths.opt_dir, SEP, seq);
     DeleteFileA(entry);   /* 防残留：上一轮同号的入口文件不能影响本轮 */
 
     /* 读 rewrite 配置：**这里不判断合法性，连字符集也不查** —— 合法值集合只在
@@ -655,8 +723,7 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
        2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
        short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
     char mode[32] = "";
-    GetPrivateProfileStringA("opt", "rewrite", "", mode, sizeof(mode),
-                              OPT_PROJ "\\opt.ini");
+    GetPrivateProfileStringA("opt", "rewrite", "", mode, sizeof(mode), g_paths.ini);
     /* 写进 hook.log（起子进程前）：监听主频的程序要拿「编译时刻」的值 ——
        这一行与下面传给改写器的值同源，必然一致。 */
     char tag[64];
@@ -668,11 +735,11 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
        锚点；模式由转发层传过去，是为了让配置**只被读一次、只被判定一次**。 */
     if (mode[0])
         sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX --mode %s",
-                PY_EXE, OPT_SCRIPT, raw, opt,
+                PY_EXE, g_paths.script, raw, opt,
                 out ? *(long long*)((char*)out + 16) : 0LL, mode);
     else
         sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX",
-                PY_EXE, OPT_SCRIPT, raw, opt,
+                PY_EXE, g_paths.script, raw, opt,
                 out ? *(long long*)((char*)out + 16) : 0LL);
 
     /* 把子进程的输出/错误引到文件：游戏是 GUI 进程，标准句柄未必可用，
@@ -696,7 +763,7 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     ZeroMemory(&pi, sizeof(pi));
     BOOL started = CreateProcessA(NULL, cmd, NULL, NULL,
                                   sink != INVALID_HANDLE_VALUE,
-                                  CREATE_NO_WINDOW, NULL, OPT_PROJ, &si, &pi);
+                                  CREATE_NO_WINDOW, NULL, g_paths.proj, &si, &pi);
     if (sink != INVALID_HANDLE_VALUE) CloseHandle(sink);
     if (!started) { hook_log(seq, "error", "stage=spawn"); return; }
 
@@ -759,7 +826,7 @@ static int ends_with_ci(const char* name, const char* ext) {
 static void purge_captures(void) {
     char pat[MAX_PATH], path[MAX_PATH];
     WIN32_FIND_DATAA fd;
-    lstrcpyA(pat, OUT_DIR);
+    lstrcpyA(pat, g_paths.out_dir);
     lstrcatA(pat, "\\*");
     HANDLE h = FindFirstFileA(pat, &fd);
     if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在，没什么可清的 */
@@ -772,7 +839,7 @@ static void purge_captures(void) {
             !ends_with_ci(fd.cFileName, ".si") &&
             !ends_with_ci(fd.cFileName, ".bin") &&
             !ends_with_ci(fd.cFileName, ".tsv")) continue;   /* manifest.tsv 同批清 */
-        lstrcpyA(path, OUT_DIR);
+        lstrcpyA(path, g_paths.out_dir);
         lstrcatA(path, "\\");
         lstrcatA(path, fd.cFileName);
         DeleteFileA(path);
@@ -794,7 +861,7 @@ static void purge_captures(void) {
 static void purge_workdir(void) {
     char pat[MAX_PATH], path[MAX_PATH];
     WIN32_FIND_DATAA fd;
-    lstrcpyA(pat, OPT_DIR);
+    lstrcpyA(pat, g_paths.opt_dir);
     lstrcatA(pat, "\\*");
     HANDLE h = FindFirstFileA(pat, &fd);
     if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在 */
@@ -804,7 +871,7 @@ static void purge_workdir(void) {
             !ends_with_ci(fd.cFileName, ".opt.bin") &&
             !ends_with_ci(fd.cFileName, ".entry.txt") &&
             !ends_with_ci(fd.cFileName, ".log")) continue;
-        lstrcpyA(path, OPT_DIR);
+        lstrcpyA(path, g_paths.opt_dir);
         lstrcatA(path, "\\");
         lstrcatA(path, fd.cFileName);
         DeleteFileA(path);
@@ -816,6 +883,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     (void)hinst;
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
+        /* 路径先解析：下面两个 purge 清哪个目录全看它（`opt.ini` 的 `toolkit_root` 只在这里
+           读一次，之后每次 compile() 用同一组值）。 */
+        toolkit_paths_init();
         purge_captures();
         purge_workdir();
     }
@@ -867,7 +937,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     } else {
         if (out && !g_breaker) {
             ours_attempted = 1;
-            kind = ours_segment(out, (const char*)sp, slen, stdlib_on ? STDLIB_PREFIX : NULL,
+            kind = ours_segment(out, (const char*)sp, slen, stdlib_on ? g_paths.stdlib : NULL,
                                 &guard_installed, &budget_ms);
             ours_ok = kind == NULL;
         } else {

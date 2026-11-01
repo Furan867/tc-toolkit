@@ -314,22 +314,23 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 ## 7. 构建与链接
 
-- C/C++：`D:\bin\w64devkit\bin\g++.exe`（GCC 14.2），`-std=c++17 -O2`，**直调 gcc，不引入 CMake**
+- C/C++：`g++` / `gcc` 从 **PATH** 找（需要 MinGW-w64 GCC 14+），`-std=c++17 -O2`，**直调 gcc，不引入 CMake**
   （照抄 `tools/deploy_compile_hook.py` 的构建风格）；构建脚本 `simplexc/tools/build.py`。
 - LLVM：**`LLVM-C.dll` + C API**，版本锁定；三元组 `x86_64-pc-windows-gnu`，**`RelocMode=PIC`**，`CodeModel=Small`，
   禁 `uwtable`/异常。管线：`LLVMRunPasses`（`-O2`）+ `LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)`。
 - 取导入库：**已定走 ②**（① 未采用）—— ① MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，与目标三元组同源）；
   ② 官方 win64 发行包 + `gendef LLVM-C.dll` → `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
   （官方包只有 DLL，无 C++ 库/头）。取件与验证命令见 `docs/facts.md`。
-- 落地位置：DLL 与导入库放 `build/llvm/`（**不进 git**）；版本号 + DLL sha256 记进 `docs/facts.md`。
+- 落地位置：DLL 与导入库放 `simplexc/.deps/llvm/`（`fetch_llvm.py` 的默认落点，**不进 git**）；版本号 + DLL sha256 记进 `docs/facts.md`。
 - 导出机制：见 §5（`extern "C"` + `__declspec(dllexport)`），只导出那三个符号。
 - 部署：`build/compile_hook.dll` 拷进游戏目录时**改名 `compile.dll`**；一旦链接 `LLVM-C.dll`，
-  部署必须把 `LLVM-C.dll` 一起拷进去（否则游戏加载时解析依赖失败）。
+  部署必须把 `LLVM-C.dll` 一起拷进去（否则游戏加载时解析依赖失败）——
+  CMake 构建时已把它从 `simplexc/.deps/llvm/bin/` 拷到 `build/`，部署拿 `build/LLVM-C.dll`。
 - 构建产物：**现状** = `build/compile_hook.dll`（壳）、`build/tcblob.exe` / `build/llvm_prog.exe`（离线 CLI）；
   `simplexc.dll` / `simplexc-cli.exe` 是**接上前端（M4.5）之后**的目标名，现在还不存在
   （见 `simplexc/cli/README.md` 的“现状”节）。
-- 不依赖 PATH：工具链一律**绝对路径**（`W64DEVKIT_BIN` / `W64DEVKIT_CXX` / `W64DEVKIT_CC` 可覆盖，见 `build.py`），
-  入口只有 `build.py`。make/CMake 只在出现“全量重建太慢”或“改 header 未重编”时再引入（入口不变）。
+- 工具链从 PATH 找：`find_program(... NAMES g++/gcc REQUIRED)`（需要 GCC 14+），入口只有 `build.py`。
+  make/CMake 只在出现“全量重建太慢”或“改 header 未重编”时再引入（入口不变）。
 
 ---
 

@@ -3,7 +3,9 @@ import struct
 import sys
 import os
 
-EXE = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\Turing Complete.exe"
+import tc_common
+
+EXE = tc_common.game_exe()
 
 with open(EXE, "rb") as f:
     data = f.read()

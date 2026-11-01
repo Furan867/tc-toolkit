@@ -2,7 +2,7 @@
 """difftrace 的 C SDK 依赖：一条命令备齐 Unicorn 与 Capstone 的头文件与导入库。
 
 为什么要有这个脚本：两个 SDK 只存在于 PyPI wheel 和已装的 site-packages 里，都不进 git；
-README 那段手工流程是七条命令加写死的 `D:/bin/Python313/...`，换机器或换 Python 版本就失效。
+README 那段手工流程是七条命令加写死的解释器绝对路径，换机器或换 Python 版本就失效。
 这里把「下载/解包/gendef/dlltool/打印编译命令」固定下来，并把版本与 dll 的 sha256 记进
 `deps.json`，下次跑就能判断「已存在且校验通过」而不是盲目重建。
 
@@ -44,7 +44,6 @@ from typing import NoReturn
 
 REPO = Path(__file__).resolve().parents[3]
 DEFAULT_DEST = REPO / "work" / "tools" / "difftrace-deps"
-W64DEVKIT_BINS = (Path("D:/bin/w64devkit/bin"), Path("/d/bin/w64devkit/bin"))
 UNICORN_WHEEL_INSTRUCTIONS = (
     "  有网时先下载（或在浏览器里打开 https://pypi.org/simple/unicorn/ 取 win_amd64 的 wheel）:\n"
     "    python -m pip download unicorn --no-deps -d {wheel_dir}\n"
@@ -137,13 +136,9 @@ def find_tool(name: str) -> str:
     found = shutil.which(name)
     if found:
         return found
-    for base in W64DEVKIT_BINS:
-        for candidate in (base / name, base / f"{name}.exe"):
-            if candidate.is_file():
-                return str(candidate)
     die(
-        f"找不到 {name} —— 它在 w64devkit 里：{W64DEVKIT_BINS[0]}。\n"
-        f'  把该目录加进 PATH 再跑：export PATH="{W64DEVKIT_BINS[0]}:$PATH"'
+        f"找不到 {name} —— 它随 GCC 14+ 的 mingw-w64 一起装（gendef/dlltool 在 bin/ 里）。\n"
+        '  把那个 bin 目录加进 PATH 再跑：export PATH="<GCC 14+ 所在目录>/bin:$PATH"'
     )
 
 
@@ -368,7 +363,7 @@ def print_compile_recipe(layout: Layout) -> None:
     say("")
     say("编译（构建定义只有 CMakeLists.txt 一处，flags 不用手敲）:")
     say("  python simplexc/tools/build.py difftrace")
-    say("  # 等价：cmake --build build/cmake --target difftrace（无 cache 先 cmake --preset mingw）")
+    say("  # 等价：cmake --build build/cmake --target difftrace（无 cache 先 cd simplexc && cmake --preset mingw）")
     say("")
     say("运行前 difftrace.exe 旁边要有这两个 dll（构建时已拷到 build/；或用 PATH）:")
     say(f"  {shown_path(layout.unicorn_lib / 'unicorn.dll')}")

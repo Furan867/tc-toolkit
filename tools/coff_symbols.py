@@ -3,7 +3,9 @@ import struct
 import os
 from collections import defaultdict
 
-EXE = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\Turing Complete.exe"
+import tc_common
+
+EXE = tc_common.game_exe()
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
 OUTDIR = os.path.join(_ROOT, "work")
 

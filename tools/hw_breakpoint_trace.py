@@ -23,6 +23,8 @@ import subprocess
 import sys
 import time
 
+import tc_common
+
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 # x64 CONTEXT：只用到这几个字段的偏移
@@ -51,7 +53,7 @@ class DEBUG_EVENT(ctypes.Structure):
                 ("u", ctypes.c_byte * 176)]          # 容纳各事件的联合体
 
 
-def find_pid(name="Turing Complete.exe"):
+def find_pid(name=tc_common.GAME_EXE_NAME):
     out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
                          capture_output=True, text=True).stdout.strip()
     if not out.startswith('"'):

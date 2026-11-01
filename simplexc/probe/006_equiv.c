@@ -15,9 +15,9 @@
  * · 只有两个 kernel32 依赖（`Sleep` / `GetSystemTimePreciseAsFileTime`），参考产物走的是
  *   同一组函数的 DLL thunk —— 节奏类是宿主显式白名单，不进状态比较（见 docs/facts.md）。
  *
- * 编译（clang 必须来自 build/llvm/bin，不许 g++ 顶替）
- * --------------------------------------------------
- *   build/llvm/bin/clang.exe --target=x86_64-pc-windows-gnu -O2 -ffreestanding \
+ * 编译（clang 必须来自 simplexc/.deps/llvm/bin，不许 g++ 顶替）
+ * --------------------------------------------------------------
+ *   simplexc/.deps/llvm/bin/clang.exe --target=x86_64-pc-windows-gnu -O2 -ffreestanding \
  *       -fno-stack-protector -c -o 006_equiv.o 006_equiv.c
  *   build/tcblob.exe --obj 006_equiv.o --obj build/objs/entry_shim.o \
  *       --obj build/objs/rt_min.o --entry __tc_entry --out 006_ours.bin

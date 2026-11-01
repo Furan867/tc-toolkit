@@ -40,6 +40,7 @@ sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
 
+import tc_common  # noqa: E402
 from term import field, paint  # noqa: E402
 
 MEM_COMMIT = 0x1000
@@ -48,7 +49,7 @@ EXEC_MASK = 0x10 | 0x20 | 0x40 | 0x80
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 
-GAME_EXE = "Turing Complete.exe"
+GAME_EXE = tc_common.GAME_EXE_NAME
 
 
 class MBI(ctypes.Structure):

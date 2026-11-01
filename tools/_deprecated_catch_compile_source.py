@@ -47,6 +47,8 @@ import subprocess
 import sys
 import time
 
+import tc_common
+
 # Windows 下 stdout 被重定向或走管道时，Python 默认按 locale(GBK) 编码，脚本输出里
 # 的 ✅/❌/★ 会直接抛 UnicodeEncodeError，把整个流程打断（实测踩到）。显式改 UTF-8，
 # 无法编码的字符降级为替代符 —— 宁可显示成 ?，也不要中断。
@@ -59,7 +61,7 @@ for _stream in (sys.stdout, sys.stderr):
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
-GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
+GAME = str(tc_common.game_dir())
 PID_FILE = os.path.join(WORK, "last_pid.txt")
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -136,7 +138,7 @@ k32.CreateToolhelp32Snapshot.restype = wt.HANDLE
 
 # ────────────────────────────── 定位 ──────────────────────────────
 
-def find_pid(name="Turing Complete.exe"):
+def find_pid(name=tc_common.GAME_EXE_NAME):
     out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
                          capture_output=True, text=True).stdout.strip()
     if not out.startswith('"'):

@@ -20,9 +20,9 @@
  * · 默认只有两个 kernel32 依赖（`Sleep` / `GetSystemTimePreciseAsFileTime`，裸名 extern）+
  *   `rt_min.o` 的 `thread_exit`。参考产物走的是同一组函数的 DLL thunk。
  *
- * 编译（clang 必须来自 build/llvm/bin，不许 g++ 顶替）
- * --------------------------------------------------
- *   build/llvm/bin/clang.exe --target=x86_64-pc-windows-gnu -O2 -ffreestanding \
+ * 编译（clang 必须来自 simplexc/.deps/llvm/bin，不许 g++ 顶替）
+ * --------------------------------------------------------------
+ *   simplexc/.deps/llvm/bin/clang.exe --target=x86_64-pc-windows-gnu -O2 -ffreestanding \
  *       -fno-stack-protector -c -I <workdir> -o equiv_cc_and.o equiv_cc_and.c
  *   build/tcblob.exe --obj equiv_cc_and.o --obj build/objs/entry_shim.o \
  *       --obj build/objs/rt_min.o --entry __tc_entry --out ours.bin

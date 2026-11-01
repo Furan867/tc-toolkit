@@ -32,7 +32,12 @@ from pathlib import Path
 from typing import TypedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OBJDUMP = r"D:\bin\w64devkit\bin\objdump.exe"
+sys.path.insert(0, HERE)
+
+import tc_common  # noqa: E402
+
+# binutils 从 PATH 找：写死过一个 w64devkit 的绝对路径，换机器就失效
+OBJDUMP = tc_common.tool("objdump")
 
 #: objdump 的字节列上限是 7 字节，更长的指令（如 10 字节的 movabs）会把剩余
 #: 字节另起一行，那一行**没有助记符**（形态 `      6f:\t7f 00 00 `）。

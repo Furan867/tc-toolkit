@@ -3,7 +3,7 @@
 
 跑什么
 ------
-    1. `build/llvm/bin/clang.exe -O2` 编 `simplexc/probe/006_equiv.c` → COFF（**不许 g++ 顶替**）
+    1. `simplexc/.deps/llvm/bin/clang.exe -O2` 编 `simplexc/probe/006_equiv.c` → COFF（**不许 g++ 顶替**）
     2. `build/tcblob.exe` 装配（→ `<blob>` / `<blob>.entry` / `<blob>.stubs`）
     3. host 跑参考产物 `simplexc/corpus/ref/006.bin`
     4. host 跑我们的产物，逐 tick 比 pages / 状态字段 / extern 序列
@@ -51,18 +51,26 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
 REPO = os.path.dirname(SIMPLEXC)
+# LLVM 落点与 binutils 路径不写死（迁过一次目录）：`tools/tc_common.py` 是唯一一处定义。
+# 把**仓库根**塞进 sys.path 再走 `tools.` 前缀 —— 与 hook_offline.py 同一拼法。
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+from tools.tc_common import llvm_root, tool  # noqa: E402
+
 BUILD = os.path.join(REPO, "build")
 HOST_PY = os.path.join(SIMPLEXC, "tools", "host", "host.py")
 SRC_SI = os.path.join(SIMPLEXC, "corpus", "src", "006.si")
 REF_BIN = os.path.join(SIMPLEXC, "corpus", "ref", "006.bin")
 EQUIV_C = os.path.join(SIMPLEXC, "probe", "006_equiv.c")
-CLANG = os.path.join(BUILD, "llvm", "bin", "clang.exe")
+# 必须是 LLVM 资产里的 clang（**不许 g++ / 系统 clang 顶替**）：编的正是「LLVM -O2 能
+# 把这份电路折成什么样」这个结论，换编译器结论就不可比了。
+CLANG = str(llvm_root() / "bin" / "clang.exe")
 TCBLOB = os.path.join(BUILD, "tcblob.exe")
 ENTRY_SHIM = os.path.join(BUILD, "objs", "entry_shim.o")
 RT_MIN = os.path.join(BUILD, "objs", "rt_min.o")
 WORK = os.path.join(REPO, "work", "tmp", "m15")
 RESULTS = os.path.join(SIMPLEXC, "probe", "results")
-OBJDUMP = r"D:\bin\w64devkit\bin\objdump.exe"
+OBJDUMP = tool("objdump")
 
 # 差分白名单：{页地址（JSONL 里的十六进制小写）: 为什么可以不算差异}
 # 006 的实测结论是**空的** —— 逐 tick 全等，连一个页都不需要列白。

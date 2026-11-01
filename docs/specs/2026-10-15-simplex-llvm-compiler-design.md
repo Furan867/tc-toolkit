@@ -138,7 +138,7 @@ Result* compile(Result* out /*rcx*/, NimStr* src /*rdx*/, int flags /*r8d*/);
 
 | 来源 | 规模 | 说明 |
 |---|---|---|
-| 官方关卡测试代码 | 92 文件 / 464664 B（454 KB） | **在游戏安装目录**（`F:\opt\SteamLibrary\steamapps\common\Turing Complete`），不在仓库；需拷进 `simplexc/corpus/` 固化 |
+| 官方关卡测试代码 | 92 文件 / 464664 B（454 KB） | **在游戏安装目录**（`$TC_GAME_DIR`，`python tools/tc_common.py` 打印），不在仓库；需拷进 `simplexc/corpus/` 固化 |
 | 转发层抓取的生成源码 | `work/hook/all/`：180 份 `.si`（29 MB 含产物） | **去重后 98 份唯一源码**；最多一份重复 73 次（“地图电路”，切换关卡会重复加载） |
 | 生成源码的参考产物 | 180 份 `.bin`（与 `.si` 同名配对） | ⚠️ **`work/hook/all/` 里没有 manifest**（转发层每次加载都清 `work/hook/`；现存 `manifest.tsv` 只有最近一次会话的 9 行）→ 180 组只有「源码, 产物」，**entry 一个都没留**（entry 只在 manifest 的 `r2` 与 `NNN.entry.txt`，两者都已丢） |
 | stdlib 前缀 | 1 份 / 27711 B | 已提取（工作目录 `stdlib_prefix.si`） |
@@ -638,7 +638,7 @@ simplexc/
 | 项 | 当前值 |
 |---|---|
 | 游戏 | appid `1444480` / buildid `25294874` / `StateFlags 4` / 最后更新 2026-09-14 |
-| 路径 | `F:\opt\SteamLibrary\steamapps\common\Turing Complete`（`D:\symlink\steamapps_c2` 为符号链接） |
+| 路径 | `$TC_GAME_DIR`（本机曾用符号链接挂载同一份库，见 `docs/map.md`） |
 | 参考编译器 | `compile_real.dll`（1.8 MB） |
 | 转发层 | 游戏目录 `compile.dll` = `build/compile_hook.dll` |
 | LLVM | 固定到项目启动时的最新稳定版 |
@@ -693,5 +693,5 @@ simplexc/
 | 语料规模 180 份 / 去重 98 份 | `ls work/hook/all/*.si \| xargs md5sum \| awk '{print $1}' \| sort -u \| wc -l` |
 | 180 组「源码, 产物」配对（**无 entry**） | `ls work/hook/all/*.si \| wc -l` 与 `*.bin` 同名配对；`work/hook/manifest.tsv` 只有最近一次会话的 9 行，`all/` 里无 manifest |
 | 参考产物 bit62 = 0 | 读 `work/hook/all/hook_out_*.bin` 头 8 字节：低 32 位 == 文件长度、bit62 为 0 |
-| 游戏版本 | `F:\opt\SteamLibrary\steamapps\appmanifest_1444480.acf` |
+| 游戏版本 | `<steamapps>/appmanifest_1444480.acf`（`python tools/tc_common.py` 给 build_id 与 compile.dll 指纹） |
 | 社区前作 | `github.com/michalusio/TC-si`（MIT） |

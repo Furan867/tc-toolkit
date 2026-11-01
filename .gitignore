@@ -22,5 +22,17 @@ simplexc/shell/embedded_objs.cc
 # 会话相关生成物：地址按游戏进程实例变（simplexc/tools/gen_addrs.py 产出，别手改）
 simplexc/probe/addrs.h
 
+# 构建期生成：CMake 拷到 simplexc/ 给 clangd（含本机绝对路径，换机器就重建）
+simplexc/compile_commands.json
+
 # 运行时开关：每次「开 / 关」对照实验都要改，不进 git（模板见 opt.ini.example）
 opt.ini
+
+# LLVM 解包与下载缓存的落点（fetch_llvm.py 用，见 THIRD_PARTY_NOTICES.md）
+simplexc/.deps/
+
+# M1.5 一次性探针输出：已停止使用，留着只作本地查证
+simplexc/probe/results/
+
+# 编辑器本机配置（含绝对路径）
+.vscode/

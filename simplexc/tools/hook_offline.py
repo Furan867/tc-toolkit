@@ -106,6 +106,12 @@ from collections import OrderedDict
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
 ROOT = os.path.dirname(SIMPLEXC)                       # tc-toolkit/
+# 游戏目录不写死（装在哪是机器的事）：`tools/tc_common.py` 是唯一一处定义。
+# 把**仓库根**塞进 sys.path 再走 `tools.` 前缀 —— 与 tools/watch_freq.py 同一拼法：
+# 静态检查器（pyright）只认这种，`sys.path` 里塞 <repo>/tools 它解析不到。
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+from tools.tc_common import game_dir  # noqa: E402
 
 WORK = os.path.join(ROOT, "work", "tmp", "hook_offline")
 BIN = os.path.join(WORK, "bin")                        # 两份壳 + compile_real.dll 同居一处
@@ -140,8 +146,6 @@ USER_SYNTAX_ERR_SRC = b'main: while true {\n    let x = (1 + \n}\n'
 # 为什么是 176.si（这里的 ours 系 case 只要「一份能编过的真源码」）：它是当前 98 份里逐 tick 全等的
 # 三份之一。换掉旧值 058.si 是因为它现在编不过 —— 那是 lowering 的已知缺口（由 `tools/m5/coverage.py`
 # 的覆盖表跟踪），不是壳的回归；判据入口红着会淹没真信号。
-GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
-
 MAX_PRODUCT_MB = 64               # 产物长度的合理上限（与壳的 dump() 上限一致）；超过就当没拿到产物
 CASE_TIMEOUT = 300.0              # 单个 case 子进程的超时秒数
 DEFAULT_BUDGET = 5000             # 壳里 ours 段的默认预算（毫秒），用于人读输出
@@ -286,14 +290,24 @@ def build(verbose=True):
     """
     t0 = time.perf_counter()
     bm = _load_build()              # build.py：唯一的构建入口（configure + `cmake --build --target`）
-    llvm_lib = os.path.join(ROOT, "build", "llvm", "lib", "libLLVM-C.a")
+    # 顺序与 cmake/FindLLVMC.cmake 一致，判据也一致（有 include/llvm-c/Core.h 才算一份 LLVM）：
+    # 两份位置各查各的，否则这里认的 LLVM 和 CMake 认的可能不是同一份，报错会指错地方。
+    llvm_root = next((r for r in (os.environ.get("TC_LLVM_DIR"),
+                                  os.path.join(SIMPLEXC, ".deps", "llvm"),
+                                  os.path.join(ROOT, "build", "llvm"))
+                      if r and os.path.isfile(os.path.join(r, "include", "llvm-c", "Core.h"))), None)
+    if llvm_root is None:
+        raise BuildError("找不到 LLVM-C：$TC_LLVM_DIR、simplexc/.deps/llvm、build/llvm 三处都没有 "
+                         "include/llvm-c/Core.h —— 跑 python simplexc/tools/fetch_llvm.py 补齐（资产不进 git）")
+    llvm_lib = os.path.join(llvm_root, "lib", "libLLVM-C.a")
     if not os.path.isfile(llvm_lib):
-        raise BuildError(f"找不到 {llvm_lib} —— 新壳要链 LLVM-C（build/llvm 不进 git）")
-    llvm_dll = next((p for p in (os.path.join(ROOT, "build", "llvm", "bin", "LLVM-C.dll"),
-                                 os.path.join(ROOT, "build", "LLVM-C.dll"))
+        raise BuildError(f"找不到 {llvm_lib} —— 新壳要链 LLVM-C；跑 python simplexc/tools/fetch_llvm.py 补齐")
+    llvm_dll = next((p for p in (os.path.join(llvm_root, "bin", "LLVM-C.dll"),
+                                 os.path.join(llvm_root, "LLVM-C.dll"))
                      if os.path.isfile(p)), None)
     if llvm_dll is None:
-        raise BuildError("找不到 LLVM-C.dll（build/llvm/bin/ 或 build/）—— 新壳加载时会缺依赖")
+        raise BuildError(f"找不到 LLVM-C.dll（{llvm_root}/bin/ 或 {llvm_root}/）—— 新壳加载时会缺依赖；"
+                         "跑 python simplexc/tools/fetch_llvm.py 补齐")
     for v in VARIANTS:
         d = vdirs(v)
         for key in ("out", "opt"):
@@ -315,8 +329,11 @@ def build(verbose=True):
             f.write(STUB_SOURCE)
     except OSError as e:
         raise BuildError(f"写不了替身改写器 {STUB}：{e}") from e
+    # 游戏目录现算而不是模块级常量：导入本文件（`check.py` 就是按路径加载它）不该要求
+    # 这台机器上装着游戏，真缺东西在下面这个循环里报成 BuildError。
+    game = game_dir()
     for dep in ("compile_real.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"):
-        src = os.path.join(GAME, dep)
+        src = os.path.join(game, dep)
         if not os.path.isfile(src):
             raise BuildError(f"游戏目录里没有 {dep}：{src}（Steam 更新后路径变了？）")
         shutil.copyfile(src, os.path.join(BIN, dep))

@@ -28,9 +28,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
 REPO = os.path.dirname(SIMPLEXC)
 
-GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
-DLL_REAL = os.path.join(GAME, "compile_real.dll")
-
 # 源码里地址的写法（实测：这三类是全部；`#DATA_*` 是符号名不是字面量）
 ADDR_PATTERNS = [
     re.compile(r"\bPtr\s+(\d{10,})\b"),
@@ -50,6 +47,10 @@ def _load_by_path(path, name):
 
 
 CAA = _load_by_path(os.path.join(HERE, "classify_abs_addrs.py"), "classify_abs_addrs")
+TC = _load_by_path(os.path.join(REPO, "tools", "tc_common.py"), "tc_common")
+
+GAME = str(TC.game_dir())
+DLL_REAL = os.path.join(GAME, TC.GAME_REAL_DLL_NAME)
 
 
 def read_text(path):

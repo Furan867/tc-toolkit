@@ -156,3 +156,11 @@
   已两次命中：`static_type` 的 Ident 档漏「程序根体的 `const #`」（084 的 `#MOV`），Call 档漏 `random`/`ror`。
 - 别拿产物字节数当「漏编」的判据 —— 参考连空片段都返回固定 8581 B 的桩，编码密度能差数倍：
   031 那份我们 3404 B、参考 35000 B，两边函数集合相同（参考删掉 31 个未调用 def 后只差 4 字节）。
+- 别把未部署转发层时的 `check.py` 失败当回归 —— `corpus` / `host_selftest` / `lower_equiv` /
+  `hook_offline` 四步都要游戏目录里的 `compile_real.dll`（原版 `compile.dll` 的改名副本），
+  而这个文件只在部署过转发层时存在。症状是一句 `加载 …\compile_real.dll 失败 err=126`。
+- 别以为 `lower_equiv` 在 ref 侧失败就会红 —— 它只判 `ours` 侧的 tick，ref 加载失败时仍输出
+  PASS（`verdict` 里带「ref 侧宿主失败」）。看 PASS 前先读 verdict，否则会把判据退化当成通过。
+- 别为了跑 `check.py` 去**部署转发层** —— 那会把游戏目录的 `compile.dll` 换成 `build/compile_hook.dll`
+  （1.8 MB → 3.8 MB），而判据只需要一份**原版副本** `compile_real.dll`。部署过的机器上原版备份叫
+  `2026-*-compile_real.dll`，还原本就靠它；没部署的话 `cp compile.dll compile_real.dll` 即可。

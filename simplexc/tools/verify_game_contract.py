@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import re
@@ -64,9 +65,24 @@ for _s in (sys.stdout, sys.stderr):
     with contextlib.suppress(Exception):
         cast(Any, _s).reconfigure(encoding="utf-8", errors="replace")
 
-DEFAULT_GAME_DIR = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
-EXE_NAME = "Turing Complete.exe"
-REAL_DLL_NAME = "compile_real.dll"
+
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _load_by_path(path, name):
+    """按文件路径加载模块（tools/ 不是包，静态 import 解析不到）。"""
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"加载不了 {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+TC = _load_by_path(os.path.join(_REPO, "tools", "tc_common.py"), "tc_common")
+
+EXE_NAME = TC.GAME_EXE_NAME
+REAL_DLL_NAME = TC.GAME_REAL_DLL_NAME
 ACF_NAME = "appmanifest_1444480.acf"
 
 PASS, FAIL, UNKNOWN = "PASS", "FAIL", "UNKNOWN"
@@ -1050,12 +1066,19 @@ def print_report(ctx, version, results):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Steam 更新后重验主设计 §10 的断言（按符号名定位）")
-    ap.add_argument("--game-dir", default=DEFAULT_GAME_DIR, help="游戏目录（默认 %(default)s）")
+    ap.add_argument("--game-dir", default=None,
+                    help="游戏目录（默认 TC_GAME_DIR，否则从 Steam 库里找 Turing Complete）")
     ap.add_argument("--acf", default=None,
                     help=f"appmanifest 路径（默认从游戏目录推 <game-dir>/../../{ACF_NAME}）")
     ap.add_argument("--json", action="store_true", help="末尾额外打印一份 JSON 总结")
     ap.add_argument("--only", default=None, help="只跑某几条断言，逗号分隔，如 A,C")
     args = ap.parse_args(argv)
+
+    try:
+        args.game_dir = args.game_dir or str(TC.game_dir())
+    except RuntimeError as exc:
+        print(f"跑不起来：{exc}", file=sys.stderr)
+        return 2
 
     try:
         ctx = build_context(args)

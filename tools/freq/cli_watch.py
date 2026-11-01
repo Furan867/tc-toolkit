@@ -24,10 +24,10 @@ import sys
 import time
 from datetime import datetime
 
-from .. import term, winmem
+from .. import tc_common, term, winmem
 from . import products, report, sampler
 
-EXE = "Turing Complete.exe"
+EXE = tc_common.GAME_EXE_NAME
 
 
 def _say_line(on_heartbeat: list[bool]):

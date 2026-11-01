@@ -13,11 +13,11 @@
  *   - `probe_table` 是 .data 里的常量 → RIP 相对引用 → 指向 .data 的 REL32
  *   - `probe_bigframe` 栈帧 > 4 KiB → 看会不会拉出 `__chkstk`（CRT 符号，不是 kernel32）
  *
- * 编译：
- *   g++ -std=c++17 -O2 -I build/llvm/include simplexc/shell/llvm_link_probe.c \
- *       -o build/llvm/probe.exe -L build/llvm/lib -lLLVM-C
- * 运行：`probe.exe <输出.obj>`（PATH 里要有 build/llvm/bin 才找得到 LLVM-C.dll）
- * 看结果：`objdump -h/-t/-r/-d`（w64devkit 的 objdump）
+ * 编译（g++ / objdump 从 PATH 找，需要 MinGW-w64 GCC 14+）：
+ *   g++ -std=c++17 -O2 -I simplexc/.deps/llvm/include simplexc/shell/llvm_link_probe.cc \
+ *       -o simplexc/.deps/llvm/probe.exe -L simplexc/.deps/llvm/lib -lLLVM-C
+ * 运行：`probe.exe <输出.obj>`（PATH 里要有 simplexc/.deps/llvm/bin 才找得到 LLVM-C.dll）
+ * 看结果：`objdump -h/-t/-r/-d`（PATH 上的 objdump）
  */
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>

@@ -7,7 +7,8 @@
  *   2. **落码管线**：`default<O2>` + `EmitToMemoryBuffer(ObjectFile)` 这一条固定链路，
  *      参数（三元组 / PIC / Small）是接口 §7 冻结的，别在调用点各写一份。
  *
- * 链接方式照抄 `tools/build.py:step_llvm_prog`：`-I build/llvm/include` + `-L build/llvm/lib -lLLVM-C`。
+ * 链接方式照抄 `CMakeLists.txt` 的 `llvm_prog` 目标（导入目标 `LLVMC::LLVMC`）：`-I simplexc/.deps/llvm/include`
+ * 加 `-L simplexc/.deps/llvm/lib -lLLVM-C`。
  */
 #pragma once
 

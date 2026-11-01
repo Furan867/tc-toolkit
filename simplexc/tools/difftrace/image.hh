@@ -19,8 +19,15 @@
 struct Spec;
 
 // 与 `abs_scan.DLL_REAL` 同一个文件：导入名与 baked 基址都只能从它读出来（见 .cc 里的理由）。
-inline constexpr const char* kDllReal =
-    "F:\\opt\\SteamLibrary\\steamapps\\common\\Turing Complete\\compile_real.dll";
+//
+// 路径不写在源码里：游戏目录一台机器一个值，由 CMake 传 `-DTC_GAME_DIR=<游戏目录>`
+// （`SIMPLEXC_GAME_DIR`，默认取环境变量 `TC_GAME_DIR`）。clangd 不走 CMake、拿不到 `-D`，
+// 所以缺省值是能静态解析的占位 `.`（= 进程当前目录），不能 `#error`。
+// 运行期还有两条覆盖：`--dll-dir` > `DIFFTRACE_DLL_DIR` > 这个默认值（见 main.cc）。
+#ifndef TC_GAME_DIR
+#define TC_GAME_DIR "."
+#endif
+inline constexpr const char* kDllReal = TC_GAME_DIR "\\compile_real.dll";
 
 // Unicorn 里给代码页挑的加载地址。blob 位置无关（自引用走 RIP-relative），写死只是为了
 // 让站点 VA 可复现。

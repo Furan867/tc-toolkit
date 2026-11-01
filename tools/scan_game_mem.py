@@ -23,6 +23,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 
+import tc_common
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
@@ -78,7 +80,7 @@ MARKERS = [
 MARKER_RE = re.compile(rb"//\s*\d+\s+com_[a-z0-9_]+")
 
 
-def find_pid(name="Turing Complete.exe"):
+def find_pid(name=tc_common.GAME_EXE_NAME):
     """用 toolhelp 快照找进程 PID。"""
     TH32CS_SNAPPROCESS = 0x2
 

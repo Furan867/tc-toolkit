@@ -6,7 +6,9 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(__file__))
-from nim_demangle import demangle_symbol, decode_proc_name, demangle_module  # noqa: E402
+
+import tc_common  # noqa: E402
+from nim_demangle import decode_proc_name, demangle_module  # noqa: E402
 
 # compile.dll contains: compiler modules under OO/, plus Nim stdlib.
 # Allow only those; reject linker/CRT junk symbols.
@@ -30,13 +32,13 @@ def demangle_symbol_loose(sym: str):
         return None
     return proc, module
 
-DLL = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\compile.dll"
+DLL = tc_common.game_dll()
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
 OUTROOT = os.path.join(_ROOT, "recovered", "compiler-src")
 WORK = os.path.join(_ROOT, "work")
 
 out = subprocess.run(
-    [r"D:\bin\w64devkit\bin\nm.exe", DLL],
+    [tc_common.tool("nm"), DLL],
     capture_output=True, text=True, errors="replace",
 ).stdout
 

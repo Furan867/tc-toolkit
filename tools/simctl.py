@@ -59,9 +59,10 @@ from dataclasses import dataclass
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
+import tc_common  # noqa: E402
 import winmem  # noqa: E402
 
-EXE = "Turing Complete.exe"
+EXE = tc_common.GAME_EXE_NAME
 BASE_VA = 0x140000000
 OFF_CMDS = 0x1406F1E08 - BASE_VA      # simulation_commands（.bss 指针，解引用一层）
 OFF_SETS = 0x1406F1E00 - BASE_VA      # simulation_settings（同上）

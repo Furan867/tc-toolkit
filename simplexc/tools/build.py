@@ -1,6 +1,6 @@
 #!python3
 """simplexc 的构建入口：**转调 CMake**。构建定义（目标、源文件表、flags、依赖）只在
-`CMakeLists.txt` 一处 —— 这条路上再放第二份编译命令行时，「判据编出来的」与「交付物」
+`simplexc/CMakeLists.txt` 一处 —— 这条路上再放第二份编译命令行时，「判据编出来的」与「交付物」
 就可能不是同一份。
 
 用法
@@ -9,8 +9,8 @@
     build.py clean         清掉构建产物（保留 build/cmake 的缓存）
     build.py -l, --list    列出全部目标
 
-前置（两份资产都不进 git）：`W64DEVKIT_BIN`（默认 `D:/bin/w64devkit/bin`）·
-LLVM 要 `build/llvm/{include,lib}`（`simplexc/tools/fetch_llvm.py`，缺它 configure 直接失败）·
+前置：g++ / cmake / ninja 从 PATH 找（需要 GCC 14+）· 两份资产都不进 git：
+LLVM 要 `simplexc/.deps/llvm/{include,lib}`（`simplexc/tools/fetch_llvm.py` 默认解到这里，缺它 configure 直接失败）·
 difftrace 的 C SDK 要 `work/tools/difftrace-deps/`（`simplexc/tools/difftrace/fetch_deps.py`；
 缺它只有该目标不可用，hint 原文照印）。
 
@@ -26,10 +26,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))          # tc-toolkit/
-CMAKE_BUILD = os.path.join(REPO, "build", "cmake")     # = CMakePresets.json 的 binaryDir
+SIMPLEXC = os.path.dirname(HERE)                        # simplexc/（= CMakePresets.json 所在目录）
+REPO = os.path.dirname(SIMPLEXC)                        # tc-toolkit/
+CMAKE_BUILD = os.path.join(REPO, "build", "cmake")     # = CMakePresets.json 的 binaryDir（${sourceDir}/../build/cmake）
 
-# 与 CMakeLists.txt 头部的清单一一对应；其余目标在 CMake 里是 EXCLUDE_FROM_ALL（要显式 --target）。
+# 与 simplexc/CMakeLists.txt 头部的清单一一对应；其余目标在 CMake 里是 EXCLUDE_FROM_ALL（要显式 --target）。
 ALL = ("objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest",
        "analyze_selftest", "codegen_selftest")
 TARGETS = ALL + ("simplexc_dll", "core_selftest", "spike", "simplexc_cli", "difftrace",
@@ -39,13 +40,15 @@ TARGETS = ALL + ("simplexc_dll", "core_selftest", "spike", "simplexc_cli", "diff
 def cmake() -> str:
     exe = shutil.which("cmake")
     if exe is None:
-        raise SystemExit("FAIL 找不到 cmake —— 构建定义在 CMakeLists.txt，先装 CMake（3.20+）+ Ninja。")
+        raise SystemExit("FAIL 找不到 cmake —— 构建定义在 simplexc/CMakeLists.txt，先装 CMake（3.20+）+ Ninja。")
     return exe
 
 
 def configure_command(cache_args=()) -> list[str]:
     # `cache_args` 是额外 -D：判据 hook_offline.py 用它把自己的工作目录传进测试壳的路径宏。
-    return [cmake(), "--preset", "mingw", *cache_args]
+    # `-S` 显式给：presets 在 `simplexc/`，不写它就看调用方的 cwd —— hook_offline.py 是从仓库根
+    # 调这条命令的，靠 cwd 会两边各要求一种跑法。
+    return [cmake(), "--preset", "mingw", "-S", SIMPLEXC, *cache_args]
 
 
 def build_command(targets=()) -> list[str]:

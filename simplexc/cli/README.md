@@ -17,6 +17,6 @@
 
     python simplexc/tools/build.py all            # 三个都编出来
     build/tcblob.exe --obj … --entry __tc_entry --out blob.bin --run
-    build/llvm_prog.exe out.obj                   # PATH 里要有 build/llvm/bin 才找得到 LLVM-C.dll
+    build/llvm_prog.exe out.obj                   # PATH 里要有 simplexc/.deps/llvm/bin（或 TC_LLVM_DIR 指定的目录）才找得到 LLVM-C.dll
 
 `python simplexc/tools/build.py spike` 用它们装出 `build/blob_empty.bin` + `.entry`。

@@ -4,20 +4,21 @@
 资产 `clang+llvm-23.1.3-x86_64-pc-windows-msvc.tar.zst`（263.5 MB），
 sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 （GitHub API 的 `digest` 与本地重算一致）。
-取件：`python simplexc/tools/fetch_llvm.py --dest D:/downloads` → `build/llvm/{bin/LLVM-C.dll, include/**, lib/LLVM-C.lib}`
-（不进 git；`build/llvm/llvm.json` 记版本/资产名/sha256）。MinGW 导入库：
+取件：`python simplexc/tools/fetch_llvm.py` → `simplexc/.deps/llvm/{bin/LLVM-C.dll, include/**, lib/LLVM-C.lib}`
+（压缩包默认缓存进 `simplexc/.deps/downloads`，可用 `--dest` 覆盖；两处都不进 git；
+`simplexc/.deps/llvm/llvm.json` 记版本/资产名/sha256）。MinGW 导入库：
 `gendef LLVM-C.dll`（1240 个导出）→ `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
 （MSVC 那份 `LLVM-C.lib` 没用上）。运行期靠系统中已有的 MSVC 运行时
 （`vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`）。
-验证：`g++ -std=c++17 -O2 -I build/llvm/include simplexc/shell/llvm_link_probe.cc -o build/llvm/probe.exe -L build/llvm/lib -lLLVM-C`
-      编译通过，运行输出 `RESULT: OK`
+验证：`g++ -std=c++17 -O2 -I simplexc/.deps/llvm/include simplexc/shell/llvm_link_probe.cc -o simplexc/.deps/llvm/probe.exe -L simplexc/.deps/llvm/lib -lLLVM-C`
+      编译通过，运行输出 `RESULT: OK`（`g++` 与下面的 `objdump` 都从 PATH 找，需要 MinGW-w64 GCC 14+）
 最后验证：2026-10-16
 
 同一个包里解出的 `bin/clang.exe`（M1.5 的产物必须由 clang 生成）：
 `python simplexc/tools/fetch_llvm.py --offline --tag llvmorg-23.1.3 --extra bin/clang.exe`，sha256 `9584244d83bb…`。
 `--offline` 用本地压缩包 + `llvm.json` 里记的 sha256 重解（GitHub 临时 API 会 403）；
 顺手修了旧实现的一个 404：按 tag 查要走 `releases/tags/<tag>`（`releases/{ref}` 只对 `latest` 合法）。
-验证：`build/llvm/bin/clang.exe --version` → `clang version 23.1.3 (…0d261d1ca552…)`
+验证：`simplexc/.deps/llvm/bin/clang.exe --version` → `clang version 23.1.3 (…0d261d1ca552…)`
 最后验证：2026-10-17
 
 ### LLVM 产出的 COFF：装配器的输入形状
@@ -27,7 +28,8 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
   **`___chkstk_ms`**（>4 KiB 栈帧才出现，是 CRT 符号不是 kernel32）；
 - `.pdata` 用 `IMAGE_REL_AMD64_ADDR32NB`（指向 `.text`/`.xdata`）→ **整节丢弃**即可，别去解；
 - 未定义符号在 COFF 里是 `sec 0` + `scl 2`。
-验证：跑 `build/llvm/probe.exe build/llvm/probe_obj.obj` 后 `objdump -h/-t/-r build/llvm/probe_obj.obj`
+验证：跑 `simplexc/.deps/llvm/probe.exe simplexc/.deps/llvm/probe_obj.obj` 后
+      `objdump -h/-t/-r simplexc/.deps/llvm/probe_obj.obj`
 最后验证：2026-10-16
 
 ### COFF 的 REL32 addend 是**有符号**的

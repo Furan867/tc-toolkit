@@ -102,6 +102,19 @@
 验证：`md5sum build/compile_hook.dll "<游戏目录>/compile.dll"` 应相同
 最后验证：2026-10-11
 
+### 转发层的路径从哪来（编译期注入 + `opt.ini` 覆盖）
+`OUT_DIR` / `OPT_DIR` / `OPT_PROJ` 不再是源码里的绝对路径。生效值三层：
+`opt.ini` 的 **`[opt] toolkit_root`**（有且非空 → 顶掉三者并重算派生的 `script` / `stdlib` / `hook.log` 目录，
+日志跟着**新的**捕获目录走）> 编译期宏（CMake 传 `TC_TOOLKIT_ROOT=<仓库根>`，缺省占位 `"."`）> `"."`。
+默认落点仍是 `work/hook`（捕获 + `hook.log`）与 `work/opt`（改写器中间产物）。
+`OUT_DIR` 等仍可被 `-D` 覆盖：离线判据靠它把工作目录隔到 `work/tmp/hook_offline/`（否则加载时的 purge 会洗掉活数据）。
+LLVM-C 落 `simplexc/.deps/llvm`（`fetch_llvm.py` 默认解到这里、压缩包缓存 `simplexc/.deps/downloads`）；
+`FindLLVMC.cmake` 的查找顺序：`-DLLVMC_ROOT` / `-DLLVM_C_ROOT` > `$TC_LLVM_DIR` > `simplexc/.deps/llvm` > `build/llvm`（旧落点仍认）。
+验证：`grep -n 'TC_TOOLKIT_ROOT' tools/compile_hook.c simplexc/CMakeLists.txt`（缺省值在壳、实际值由 CMake 给）+
+      `grep -n 'deps/llvm\|TC_LLVM_DIR' cmake/FindLLVMC.cmake simplexc/tools/fetch_llvm.py`；
+      运行时判据 `python simplexc/tools/hook_offline.py`（11 case，测试壳的路径宏全由 `-D` 隔离）
+最后验证：2026-11-01
+
 ### 编号机制
 编号计数器是 DLL 全局变量，**每次加载（游戏启动）从 1 递增**；「同号即一对」——
 一次 `compile()` 取一个号，`hook_src_005.si` 与 `hook_out_005.bin` 是同一次调用。

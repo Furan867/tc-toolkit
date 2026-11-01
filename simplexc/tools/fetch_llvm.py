@@ -12,7 +12,7 @@
 
 用法
 ----
-    py simplexc/tools/fetch_llvm.py                               # 最新稳定版 → D:/downloads + build/llvm
+    py simplexc/tools/fetch_llvm.py                               # 最新稳定版 → simplexc/.deps/downloads + simplexc/.deps/llvm
     py simplexc/tools/fetch_llvm.py --tag llvmorg-23.1.3
     py simplexc/tools/fetch_llvm.py --list                        # 只列资产（含 sha256），不下载
     py simplexc/tools/fetch_llvm.py --extra bin/clang.exe          # 额外多解一个成员（可重复）
@@ -21,11 +21,14 @@
 产出
 ----
     <dest>/<asset 名>              压缩包（默认保留，`--no-keep` 删）
-    <repo>/build/llvm/bin/LLVM-C.dll
-    <repo>/build/llvm/include/llvm-c/*.h
-    <repo>/build/llvm/lib/LLVM-C.lib
-    <repo>/build/llvm/<--extra 给的路径>   例 `bin/clang.exe`（M1.5 用它编译 C 等价物）
-    <repo>/build/llvm/llvm.json    版本 / 资产名 / sha256 / 大小 / 每个文件的 sha256
+    <root>/bin/LLVM-C.dll
+    <root>/include/llvm-c/*.h
+    <root>/lib/LLVM-C.lib
+    <root>/<--extra 给的路径>      例 `bin/clang.exe`（M1.5 用它编译 C 等价物）
+    <root>/llvm.json               版本 / 资产名 / sha256 / 大小 / 每个文件的 sha256
+
+两份资产都落在 `simplexc/.deps/`（不进 git）：仓库里不放几百 MB 二进制，工作区里也只有
+一个位置。换位置就 `--root` / `--dest`，CMake 那边用 `-DLLVM_C_ROOT` 或 `TC_LLVM_DIR` 跟上。
 """
 from __future__ import annotations
 
@@ -38,16 +41,26 @@ import subprocess
 import sys
 import tarfile
 
-# 这一个文件在 simplexc/tools/ 下：往上是 simplexc/，再往上是仓库根（build/ 在那里）。
+# 这一个文件在 simplexc/tools/ 下：往上是 simplexc/ —— 两份资产的默认落点都在 simplexc/.deps/ 下。
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
-REPO = os.path.dirname(SIMPLEXC)
 
 API = "https://api.github.com/repos/llvm/llvm-project/releases/{ref}"
 ASSET_KEY = "x86_64-pc-windows-msvc.tar.zst"
 # 默认成员（LLVM-C 链接那一套）；`--extra` 的成员追加在后面，默认行为不变
 MEMBERS = ("bin/LLVM-C.dll", "include", "lib/LLVM-C.lib")
-ZSTD = r"D:\bin\msys2\usr\bin\zstd.exe"
+# 解压这 1 GB 窗口的 zst 要 `--long=30`。zstd 不写死路径：装在哪是机器的事 ——
+# PATH 里有就用，没有就看 ZSTD 环境变量，两者都没有直接报错（见 require_zstd）。
+DEFAULT_DEST = os.path.join(SIMPLEXC, ".deps", "downloads")
+DEFAULT_ROOT = os.path.join(SIMPLEXC, ".deps", "llvm")
+
+
+def require_zstd() -> str:
+    """zstd 的可执行文件：`PATH` → 环境变量 `ZSTD` → 报错。"""
+    path = shutil.which("zstd") or os.environ.get("ZSTD")
+    if not path:
+        raise SystemExit("找不到 zstd：装一个（如 `scoop install zstd`）或设 ZSTD 环境变量。")
+    return path
 
 
 def api(refl: str) -> dict:
@@ -155,10 +168,9 @@ def extract(archive: str, top: str, out_root: str, extras: tuple[str, ...] = ())
 
     幂等：重复跑就是重写同样的文件。`--extra` 漏解不出来会**报错**（不静默少给）。
     """
-    if not os.path.isfile(ZSTD):
-        raise SystemExit(f"找不到 zstd：{ZSTD}")
+    zstd = require_zstd()
     mkdirs(out_root)
-    pz = subprocess.Popen([ZSTD, "-dc", "--long=30", archive], stdout=subprocess.PIPE)
+    pz = subprocess.Popen([zstd, "-dc", "--long=30", archive], stdout=subprocess.PIPE)
     if pz.stdout is None:
         raise SystemExit("zstd 没有输出管道")
     got: list[str] = []
@@ -206,8 +218,8 @@ def write_meta(path: str, meta: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="取 LLVM Windows 发行包里的 LLVM-C.dll 与头文件")
     ap.add_argument("--tag", default="latest", help="如 llvmorg-23.1.3（默认 latest）")
-    ap.add_argument("--dest", default=r"D:\downloads", help="压缩包落盘目录")
-    ap.add_argument("--out", default=None, help="解出目录（默认 <repo>/build/llvm）")
+    ap.add_argument("--dest", default=DEFAULT_DEST, help="压缩包落盘目录（默认 simplexc/.deps/downloads）")
+    ap.add_argument("--root", default=None, help="解出目录（默认 simplexc/.deps/llvm）")
     ap.add_argument("--list", action="store_true", help="只列资产")
     ap.add_argument("--no-keep", action="store_true", help="解完删压缩包")
     ap.add_argument("--extra", action="append", default=[], metavar="PATH",
@@ -217,7 +229,7 @@ def main() -> int:
     a = ap.parse_args()
     extras = tuple(a.extra)
 
-    out_root = a.out or os.path.join(REPO, "build", "llvm")
+    out_root = a.root or DEFAULT_ROOT
 
     if a.offline:
         asset = local_asset(a.dest, a.tag, out_root)

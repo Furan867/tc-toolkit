@@ -26,12 +26,15 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
-DLL = os.path.join(GAME, "compile.dll")
+sys.path.insert(0, HERE)
+import tc_common  # noqa: E402
+
+GAME = str(tc_common.game_dir())
+DLL = os.path.join(GAME, tc_common.GAME_DLL_NAME)
 # 部署转发层期间，上面的 compile.dll 就是转发层 —— 它会把我们自己的调用记成
 # 「捕获」写进 work/hook/，而那里是游戏真实捕获的地方（profile_by_image 默认
 # 取最新一对）。所以离线编译**优先用原始 DLL**；未部署时它不存在，退回上面那个。
-DLL_REAL = os.path.join(GAME, "compile_real.dll")
+DLL_REAL = os.path.join(GAME, tc_common.GAME_REAL_DLL_NAME)
 
 _DLL_DIRS = []      # 见 load_dll()：add_dll_directory 的句柄必须存活
 

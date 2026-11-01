@@ -29,6 +29,7 @@ from ctypes import wintypes
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import tc_common  # noqa: E402
 from term import field  # noqa: E402
 
 # Windows 下 stdout 走管道时默认 GBK，输出的中文/符号会变成乱码（被
@@ -39,7 +40,7 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-HERE_PID_HINT = "Turing Complete.exe"
+HERE_PID_HINT = tc_common.GAME_EXE_NAME
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 

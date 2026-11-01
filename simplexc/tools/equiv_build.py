@@ -4,7 +4,7 @@
 一条命令做完五步
 ----------------
     1. `gen_addrs.py`：从 `--src` 抽出本会话的 11 个绝对地址 → `<workdir>/addrs.h`
-    2. `build/llvm/bin/clang.exe -O2` 编 `simplexc/probe/equiv_cc_and.c`（**不许 g++ 顶替**）
+    2. `simplexc/.deps/llvm/bin/clang.exe -O2` 编 `simplexc/probe/equiv_cc_and.c`（**不许 g++ 顶替**）
     3. `build/tcblob.exe` 装配 → `<workdir>/ours.bin`（+ `.entry` + `.stubs`）
     4. host 跑参考产物（`--bin`）与我们的产物 → 逐 tick 比 pages / sim_cycle / extern
     5. 静态：两边机器码的指令条数与字节数
@@ -52,8 +52,16 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
 REPO = os.path.dirname(SIMPLEXC)
+# LLVM 落点与 binutils 路径不写死（迁过一次目录）：`tools/tc_common.py` 是唯一一处定义。
+# 把**仓库根**塞进 sys.path 再走 `tools.` 前缀 —— 与 hook_offline.py 同一拼法。
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+from tools.tc_common import llvm_root, tool  # noqa: E402
+
 BUILD = os.path.join(REPO, "build")
-CLANG = os.path.join(BUILD, "llvm", "bin", "clang.exe")
+# 必须是 LLVM 资产里的 clang（**不许 g++ / 系统 clang 顶替**）：产物要与前面记的
+# 代码生成质量对得上，换编译器就不是同一件事了。
+CLANG = str(llvm_root() / "bin" / "clang.exe")
 TCBLOB = os.path.join(BUILD, "tcblob.exe")
 ENTRY_SHIM = os.path.join(BUILD, "objs", "entry_shim.o")
 RT_MIN = os.path.join(BUILD, "objs", "rt_min.o")
@@ -61,7 +69,8 @@ EQUIV_C = os.path.join(SIMPLEXC, "probe", "equiv_cc_and.c")
 GEN_ADDRS = os.path.join(HERE, "gen_addrs.py")
 HOST_PY = os.path.join(HERE, "host", "host.py")
 SELFTEST_PY = os.path.join(HERE, "host", "selftest.py")
-OBJDUMP = os.environ.get("OBJDUMP") or r"D:\bin\w64devkit\bin\objdump.exe"
+# 环境变量优先（换调试用的 objdump 时不用改代码），否则按 PATH 找
+OBJDUMP = os.environ.get("OBJDUMP") or tool("objdump")
 
 # 差分白名单：{页地址（JSONL 里的十六进制小写）: 为什么可以不算差异}。
 # 040 期望是**空的**；列白必须逐条写理由，且会原样进结果文件。

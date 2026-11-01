@@ -55,14 +55,25 @@ for _stream in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
-TARGET = os.path.join(GAME, "compile.dll")
-REAL = os.path.join(GAME, "compile_real.dll")
+# 游戏目录不写死（装在哪是机器的事）：`tools/tc_common.py` 是唯一一处定义，
+# 游戏在跑没在跑另由 `winmem.find_pid` 判断。
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from tc_common import game_dir, game_dll  # noqa: E402
+
 HOOK = os.path.join(ROOT, "build", "compile_hook.dll")
 
 
+def game_paths():
+    """`(compile.dll, compile_real.dll)` —— **用的时候现算**。
+
+    不在模块级算：导入本文件不应要求这台机器上装着游戏（`build` 子命令根本不碰游戏目录，
+    而 `game_dir()` 找不到时会抛）。
+    """
+    return game_dll(), game_dir() / "compile_real.dll"
+
+
 def find_pid():
-    sys.path.insert(0, HERE)
     try:
         from winmem import find_pid as fp
         return fp()
@@ -71,14 +82,15 @@ def find_pid():
 
 
 def status():
+    target, real = game_paths()
     pid = find_pid()
     print("游戏进程         : " + (f"PID {pid}" if pid else "未运行"))
-    print("compile.dll      : " + (f"存在（{os.path.getsize(TARGET)} B）"
-                                  if os.path.exists(TARGET) else "不存在"))
-    print("compile_real.dll : " + ("存在" if os.path.exists(REAL) else "不存在"))
+    print("compile.dll      : " + (f"存在（{target.stat().st_size} B）"
+                                  if target.exists() else "不存在"))
+    print("compile_real.dll : " + ("存在" if real.exists() else "不存在"))
     print("转发层 (build/)  : " + ("存在" if os.path.exists(HOOK) else "不存在"))
     print("当前状态         : " + ("**已部署**（原 DLL 在 compile_real.dll）"
-                                  if os.path.exists(REAL) else "**未部署**（原始状态）"))
+                                  if real.exists() else "**未部署**（原始状态）"))
     return 0
 
 
@@ -118,33 +130,34 @@ def build():
 def deploy():
     if not guard():
         return 1
+    target, real = game_paths()
     if not os.path.exists(HOOK):
         print(f"❌ 转发层不存在：{HOOK}\n   先编译：py tools/deploy_compile_hook.py build-deploy",
               file=sys.stderr)
         return 1
-    if os.path.exists(REAL):
+    if real.exists():
         # 已处于部署状态：只把新的转发层 DLL 盖上去（原 DLL 在 compile_real.dll，
         # 千万不要动它）。这样更新流程就是 --build → --deploy 两下，不必先还原。
         print("ℹ️ 已处于部署状态，只更新转发层 DLL")
         try:
-            shutil.copy2(HOOK, TARGET)
+            shutil.copy2(HOOK, target)
         except OSError as exc:
             print(f"❌ 复制失败：{exc}", file=sys.stderr)
             return 1
-        print(f"✅ 已更新 {TARGET}（{os.path.getsize(TARGET)} B）")
+        print(f"✅ 已更新 {target}（{target.stat().st_size} B）")
         return 0
     try:
-        shutil.move(TARGET, REAL)
+        shutil.move(target, real)
     except OSError as exc:
         print(f"❌ 改名失败（原 DLL 未被改动）：{exc}", file=sys.stderr)
         return 1
     print("✅ compile.dll → compile_real.dll")
     try:
-        shutil.copy2(HOOK, TARGET)
+        shutil.copy2(HOOK, target)
     except OSError as exc:
         # 复制失败就把原件改回去，不要留下半部署状态（游戏会干脆加载不了编译器）
         with contextlib.suppress(OSError):
-            shutil.move(REAL, TARGET)
+            shutil.move(real, target)
         print(f"❌ 复制失败（已还原原 DLL）：{exc}", file=sys.stderr)
         return 1
     print("✅ work/compile_hook.dll → compile.dll")
@@ -156,14 +169,15 @@ def deploy():
 def restore():
     if not guard():
         return 1
-    if not os.path.exists(REAL):
+    target, real = game_paths()
+    if not real.exists():
         print("⚠️ compile_real.dll 不存在 —— 看起来没部署过，无需还原。", file=sys.stderr)
         return 1
     try:
-        if os.path.exists(TARGET):
-            os.remove(TARGET)
+        if target.exists():
+            target.unlink()
             print("✅ 已删除转发层 compile.dll")
-        shutil.move(REAL, TARGET)
+        shutil.move(real, target)
     except OSError as exc:
         print(f"❌ 还原失败：{exc}", file=sys.stderr)
         return 1

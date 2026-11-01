@@ -49,11 +49,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import term, winmem
+from .. import tc_common, term, winmem
 from . import driver, probe, products, report, sampler, variants
 from .variants import Variant
 
-EXE = "Turing Complete.exe"
+EXE = tc_common.GAME_EXE_NAME
 BENCH_DIR = report.FREQ_DIR
 OPT_INI = variants.OPT_INI
 BACKUP = report.ROOT / "work" / "tmp" / "opt.ini.bak"

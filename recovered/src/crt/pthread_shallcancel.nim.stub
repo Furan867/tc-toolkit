@@ -1,4 +1,0 @@
-# Recovered symbol stub for: pthread_shallcancel
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc <module-init>()  # 0000000140972b5b

@@ -1,7 +1,0 @@
-# Recovered symbol stub for: OO/targets/cpu_x86_64
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc eqdestroy()  # 00000002fdd3e1b0
-proc eqdup()  # 00000002fdd3b690
-var .rdata$.refptr.CPU_x8664    # 00000002fde1c2d0
-var CPU_x8664    # 00000002fde2b280

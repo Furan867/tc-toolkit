@@ -1,4 +1,0 @@
-# Recovered symbol stub for: OO/passes/back_end/allocate_registers_u546
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc top_frame_transition_to()  # 00000002fddadc00

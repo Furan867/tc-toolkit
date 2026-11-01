@@ -1,4 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/bottom_panel/solution_warning
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build_solution_warning_panel()  # 00000001407a1a29

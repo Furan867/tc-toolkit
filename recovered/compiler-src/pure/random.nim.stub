@@ -1,7 +1,0 @@
-# Recovered symbol stub for: pure/random
-# (from compile.dll COFF symbol table, Nim mangling)
-
-var DefaultRandSeed    # 00000002fde0eb40
-var baseSeedLock    # 00000002fde3ff60
-var baseState    # 00000002fde3ff40
-var state    # 00000002fde3ff90

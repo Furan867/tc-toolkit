@@ -1,4 +1,0 @@
-# Recovered symbol stub for: presenter/user_input/board_io/action/link_watcher_assembler_watchee
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc handle_link_watcher_assembler_watchee()  # 00000001406c0d1d

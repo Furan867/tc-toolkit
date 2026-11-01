@@ -1,4 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/io_state_view
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build_io_state_view()  # 0000000140915369

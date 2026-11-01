@@ -1,7 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/popup/assembler_watchee_linker
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 00000001407fd3c7
-proc on_close()  # 00000001407fd0f7
-proc on_open()  # 00000001407fd13f
-var OPTIONS    # 0000000140bd2b20

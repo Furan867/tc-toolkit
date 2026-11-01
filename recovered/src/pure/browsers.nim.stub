@@ -1,5 +1,0 @@
-# Recovered symbol stub for: pure/browsers
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc openDefaultBrowser()  # 00000001408bdd8f
-proc openDefaultBrowserRaw()  # 00000001408bdae1

@@ -1,4 +1,0 @@
-# Recovered symbol stub for: imp__commode
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-var .rdata$.refptr.    # 0000000140bf1ce0

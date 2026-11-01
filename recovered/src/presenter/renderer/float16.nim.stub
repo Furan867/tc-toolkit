@@ -1,5 +1,0 @@
-# Recovered symbol stub for: presenter/renderer/float16
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc clamp()  # 000000014007a2e6
-proc toFloat16()  # 00000001404d80a7

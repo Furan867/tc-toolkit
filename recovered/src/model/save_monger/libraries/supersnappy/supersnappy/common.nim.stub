@@ -1,5 +1,0 @@
-# Recovered symbol stub for: model/save_monger/libraries/supersnappy/supersnappy/common
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc varint()  # 000000014017ba39
-proc varint()  # 000000014017bf81

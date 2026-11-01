@@ -1,7 +1,0 @@
-Godot Engine v3.4.2.stable.custom_build - https://godotengine.org
-OpenGL ES 3.0 Renderer: NVIDIA GeForce RTX 4070 Ti SUPER/PCIe/SSE2
-OpenGL ES Batching: ON
- 
-Turing Complete 0.1059 Beta on Windows
-WARNING: ObjectDB instances leaked at exit (run with --verbose for details).
-   at: ObjectDB::cleanup (core\object.cpp:2064) - ObjectDB instances leaked at exit (run with --verbose for details).

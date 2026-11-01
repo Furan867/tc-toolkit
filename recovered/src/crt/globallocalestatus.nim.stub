@@ -1,5 +1,0 @@
-# Recovered symbol stub for: globallocalestatus
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-var .rdata$.refptr.    # 0000000140bf1ca0
-var <module-init>    # 000000014097e9d0

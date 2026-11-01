@@ -1,6 +1,0 @@
-# Recovered symbol stub for: presenter/renderer/steam
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc dollar()  # 00000001406359e9
-proc steam_get_language()  # 00000001406356f7
-proc steam_take_account_token()  # 00000001406357f9

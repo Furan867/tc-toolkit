@@ -1,8 +1,0 @@
-# Recovered symbol stub for: std/assertions
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc eqdestroy()  # 00000002fdcf1db0
-proc eqdestroy()  # 00000002fdd01df0
-proc eqtrace()  # 00000002fdcf14a0
-proc failedAssertImpl()  # 00000002fdcf2bc0
-proc raiseAssert()  # 00000002fdcf2b30

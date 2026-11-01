@@ -1,6 +1,0 @@
-# Recovered symbol stub for: std/private/digitsutils
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc addInt()  # 00000002fdcf2260
-proc addInt()  # 00000002fdcf26a0
-var digits100    # 00000002fddf50a0

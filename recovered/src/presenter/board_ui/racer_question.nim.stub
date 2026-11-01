@@ -1,6 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/racer_question
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 000000014092da94
-proc eqeq()  # 00000001400698ee
-proc igColor()  # 00000001404ece2e

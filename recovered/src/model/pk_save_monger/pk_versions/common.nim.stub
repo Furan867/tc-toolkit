@@ -1,6 +1,0 @@
-# Recovered symbol stub for: model/pk_save_monger/pk_versions/common
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc add_file()  # 0000000140625705
-proc dollar()  # 00000001406254ae
-proc dollar()  # 0000000140625b01

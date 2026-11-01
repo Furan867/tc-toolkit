@@ -1,6 +1,0 @@
-# Recovered symbol stub for: std/formatfloat
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc addCstringN()  # 0000000140006b85
-proc writeFloatToBufferRoundtrip()  # 0000000140006aca
-proc writeFloatToBufferRoundtrip()  # 000000014000a527

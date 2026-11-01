@@ -1,8 +1,0 @@
-# Recovered symbol stub for: std/private/ntpath
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc eqcopy()  # 00000001401524b8
-proc eqdestroy()  # 00000001401501a0
-proc eqsink()  # 0000000140150d2d
-proc eqwasMoved()  # 000000014015022d
-proc splitDrive()  # 0000000140150e26

@@ -1,5 +1,0 @@
-# Recovered symbol stub for: presenter/renderer/renderer/c_ffi
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc dollar()  # 00000001404e49ff
-proc dollar()  # 00000001404e4f95

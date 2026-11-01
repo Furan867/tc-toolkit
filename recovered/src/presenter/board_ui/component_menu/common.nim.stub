@@ -1,7 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/component_menu/common
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-var .rdata$.refptr.ITEM_SIZE    # 0000000140bf13f0
-var .rdata$.refptr.SPACING    # 0000000140bf1a50
-var ITEM_SIZE    # 0000000140bd0598
-var SPACING    # 0000000140bd0590

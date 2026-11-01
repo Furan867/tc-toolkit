@@ -1,9 +1,0 @@
-# Recovered symbol stub for: model/save_monger/versions/v5
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc get_component()  # 00000001401a31df
-proc get_components()  # 00000001401a38c6
-proc get_wire()  # 00000001401a3db8
-proc get_wires()  # 00000001401a4596
-proc parse()  # 00000001401a4833
-var DIRECTIONS    # 000000014099eb80

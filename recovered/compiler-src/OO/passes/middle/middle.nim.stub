@@ -1,4 +1,0 @@
-# Recovered symbol stub for: OO/passes/middle/middle
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc middle()  # 00000002fddbca00

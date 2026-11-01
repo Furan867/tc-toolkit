@@ -1,5 +1,5 @@
-# 大体积二进制资源（可随时从游戏目录重新复制，见 README）
-recovered/res/
+# 反编译产物（可由 tools/ 从游戏目录重新生成，见 README）：整目录不入库，不只是 res/
+recovered/
 
 # 反编译工具（可下载）
 tools/gdre/
@@ -18,6 +18,9 @@ build/
 # 构建期生成：装配用的 entry_shim.o / rt_min.o 嵌成的 C++ 源（gen_embedded_objs.py → 见 build.py 的
 # simplexc_dll 目标）。它是派生物，入库就要跟 build/objs/*.o 的每次重编同步。
 simplexc/shell/embedded_objs.cc
+
+# 会话相关生成物：地址按游戏进程实例变（simplexc/tools/gen_addrs.py 产出，别手改）
+simplexc/probe/addrs.h
 
 # 运行时开关：每次「开 / 关」对照实验都要改，不进 git（模板见 opt.ini.example）
 opt.ini

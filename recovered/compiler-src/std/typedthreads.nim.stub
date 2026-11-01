@@ -1,6 +1,0 @@
-# Recovered symbol stub for: std/typedthreads
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc eqcopy()  # 00000002fdcffc30
-proc eqdestroy()  # 00000002fdd00b80
-proc eqsink()  # 00000002fdd021b0

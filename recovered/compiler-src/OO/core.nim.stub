@@ -1,5 +1,0 @@
-# Recovered symbol stub for: OO/core
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc compile_source()  # 00000002fddec000
-proc eqdestroy()  # 00000002fddec320

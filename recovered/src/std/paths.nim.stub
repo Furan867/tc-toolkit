@@ -1,4 +1,0 @@
-# Recovered symbol stub for: std/paths
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc getCurrentDir()  # 00000001404d917c

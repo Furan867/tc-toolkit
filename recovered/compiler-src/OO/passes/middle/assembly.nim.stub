@@ -1,5 +1,0 @@
-# Recovered symbol stub for: OO/passes/middle/assembly
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc backend_add_instruction()  # 00000002fddb5960
-proc convert_to_unnaloc()  # 00000002fddb5800

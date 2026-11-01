@@ -1,5 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/hint_ui
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 00000001407f69a7
-proc igColor()  # 00000001404ebf38

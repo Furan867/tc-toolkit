@@ -1,5 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/component_menu
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 00000001407f4550
-proc eqsink()  # 00000001405ca9cc

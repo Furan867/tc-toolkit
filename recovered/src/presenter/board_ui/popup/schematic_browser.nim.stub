@@ -1,9 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/popup/schematic_browser
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 00000001408d1690
-proc on_close()  # 00000001408d1107
-proc on_open()  # 00000001408d1174
-var COLOR_BUTTON_HOVERED`gensym11    # 0000000140be2050
-var COLOR_BUTTON_NORMAL`gensym11    # 0000000140be2040
-var COLOR_BUTTON_PRESSED`gensym11    # 0000000140be2060

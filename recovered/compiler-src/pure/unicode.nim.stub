@@ -1,6 +1,0 @@
-# Recovered symbol stub for: pure/unicode
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc binarySearch()  # 00000002fdd13f90
-var toLowerRanges    # 00000002fddf6c20
-var toLowerSinglets    # 00000002fddf5900

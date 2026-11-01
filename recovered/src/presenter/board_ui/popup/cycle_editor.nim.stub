@@ -1,9 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/popup/cycle_editor
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 00000001408d95ac
-proc on_close()  # 00000001408d9007
-proc on_open()  # 00000001408d90e2
-var .rdata$.refptr.buffer    # 0000000140bf1e40
-var buffer    # 00000001467ab860
-var has_just_opened    # 00000001467ab870

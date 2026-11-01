@@ -1,7 +1,0 @@
-# Recovered symbol stub for: system/countbits_impl
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc countSetBitsImpl()  # 000000014015f868
-proc countSetBitsImpl()  # 00000001401faafd
-proc countSetBitsImpl()  # 0000000140942cb2
-proc countSetBitsImpl()  # 0000000140942dc2

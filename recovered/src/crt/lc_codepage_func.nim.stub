@@ -1,4 +1,0 @@
-# Recovered symbol stub for: lc_codepage_func
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc <module-init>()  # 00000001409700d8

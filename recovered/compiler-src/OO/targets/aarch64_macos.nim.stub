@@ -1,5 +1,0 @@
-# Recovered symbol stub for: OO/targets/aarch64_macos
-# (from compile.dll COFF symbol table, Nim mangling)
-
-var .rdata$.refptr.aarch64_macos_target    # 00000002fde1c5d0
-var aarch64_macos_target    # 00000002fde2b700

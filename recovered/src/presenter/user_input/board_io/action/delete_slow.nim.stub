@@ -1,5 +1,0 @@
-# Recovered symbol stub for: presenter/user_input/board_io/action/delete_slow
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc eqeq()  # 000000014005e7da
-proc handle_delete_slow()  # 00000001406ba21e

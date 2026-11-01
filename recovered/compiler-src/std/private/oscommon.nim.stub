@@ -1,4 +1,0 @@
-# Recovered symbol stub for: std/private/oscommon
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc addQuoted()  # 00000002fdd08910

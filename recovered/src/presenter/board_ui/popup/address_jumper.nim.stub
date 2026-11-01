@@ -1,8 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/popup/address_jumper
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 00000001407fb942
-proc on_close()  # 00000001407fb517
-proc on_open()  # 00000001407fb5cd
-var .rdata$.refptr.buffer    # 0000000140bf1e30
-var buffer    # 00000001467ab730

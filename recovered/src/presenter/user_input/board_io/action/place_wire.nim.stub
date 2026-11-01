@@ -1,4 +1,0 @@
-# Recovered symbol stub for: presenter/user_input/board_io/action/place_wire
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc handle_place_wire()  # 00000001406debbe

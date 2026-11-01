@@ -1,6 +1,0 @@
-# Recovered symbol stub for: presenter/update_state_static
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc redraw_bg_tiles()  # 000000014094f55c
-proc redraw_components()  # 000000014094f8d7
-proc update_state_static()  # 0000000140950cab

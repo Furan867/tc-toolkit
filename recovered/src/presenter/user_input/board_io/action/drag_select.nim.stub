@@ -1,6 +1,0 @@
-# Recovered symbol stub for: presenter/user_input/board_io/action/drag_select
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc handle_drag_select()  # 00000001406bb27f
-proc is_between()  # 00000001405f87b7
-proc select_range()  # 00000001405f891c

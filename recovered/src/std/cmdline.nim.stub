@@ -1,4 +1,0 @@
-# Recovered symbol stub for: std/cmdline
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc commandLineParams()  # 00000001401655d1

@@ -1,7 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/popup/console
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build()  # 000000014080916c
-proc on_close()  # 0000000140808f97
-proc on_open()  # 0000000140808fdf
-var has_just_opened    # 00000001467ab740

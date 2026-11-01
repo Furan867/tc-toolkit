@@ -1,6 +1,0 @@
-# Recovered symbol stub for: presenter/renderer/shader/ubo_computed_cache
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc get_trig_cache()  # 00000001404e58fd
-proc init_ubo_computed_cache()  # 00000001404e52ed
-var ubo_computed_cache    # 00000001467aaca0

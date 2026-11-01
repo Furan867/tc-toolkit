@@ -1,4 +1,0 @@
-# Recovered symbol stub for: OO/passes/middle/suffix_tree_u2638
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc finalize()  # 00000002fddb6fc0

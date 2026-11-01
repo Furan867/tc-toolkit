@@ -1,5 +1,0 @@
-# Recovered symbol stub for: presenter/main_menu_ui
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build_main_menu_ui()  # 0000000140903233
-proc initialize_main_menu_ui()  # 0000000140902fec

@@ -1,5 +1,0 @@
-# Recovered symbol stub for: pure/strformat
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc alignString()  # 00000001401ca041
-proc mkDigit()  # 00000001401cbc7c

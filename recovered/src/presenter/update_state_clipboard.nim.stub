@@ -1,6 +1,0 @@
-# Recovered symbol stub for: presenter/update_state_clipboard
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc redraw_clipboard_component()  # 000000014094e029
-proc redraw_clipboard_wire_comments()  # 000000014094e8d2
-proc update_state_clipboard()  # 000000014094ec5b

@@ -1,4 +1,0 @@
-# Recovered symbol stub for: std/enumutils
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc add()  # 00000002fdd02b90

@@ -1,4 +1,0 @@
-# Recovered symbol stub for: OO/passes/middle/common_ancestors
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc first_common_ancestor()  # 00000002fdd98da0

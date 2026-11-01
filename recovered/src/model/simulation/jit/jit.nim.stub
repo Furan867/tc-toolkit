@@ -1,4 +1,0 @@
-# Recovered symbol stub for: model/simulation/jit/jit
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc jit()  # 000000014043a5ac

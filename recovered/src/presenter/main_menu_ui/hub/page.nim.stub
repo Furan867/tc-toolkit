@@ -1,4 +1,0 @@
-# Recovered symbol stub for: presenter/main_menu_ui/hub/page
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc build_hub_page()  # 0000000140902afc

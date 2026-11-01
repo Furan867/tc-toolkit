@@ -1,7 +1,0 @@
-# Recovered symbol stub for: presenter/board_ui/popup/dialogue/common
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc hash()  # 0000000140108922
-proc rawGet()  # 00000001401089b7
-var .rdata$.refptr.MENTOR_TYPES    # 0000000140bf1440
-var MENTOR_TYPES    # 0000000140bd4fd0

@@ -1,4 +1,0 @@
-# Recovered symbol stub for: std/private/osfiles
-# (from Turing Complete.exe COFF symbol table, Nim 2.x mangling)
-
-proc copyFileWithPermissions()  # 000000014015fedd

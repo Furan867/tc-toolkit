@@ -1,5 +1,0 @@
-# Recovered symbol stub for: pure/dynlib
-# (from compile.dll COFF symbol table, Nim mangling)
-
-proc loadLib()  # 00000002fdd15a00
-proc symAddr()  # 00000002fdd15a30

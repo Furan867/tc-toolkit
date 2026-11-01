@@ -6,12 +6,16 @@
 # 所以这里只做两件事：找到头目录与那份 .a，包成一个 IMPORTED target。
 #
 # 输入：LLVMC_ROOT（默认 <repo>/build/llvm，可用 -DLLVMC_ROOT=... 覆盖）。
+# 默认值的锚是**本模块所在目录**而不是 CMAKE_SOURCE_DIR：后者是顶层工程的目录，
+# 这个模块一旦被 add_subdirectory 引进来就会指到别人家去。
 # 产出：target LLVMC::LLVMC；变量 LLVMC_RUNTIME_DLL（`bin/LLVM-C.dll` 的路径，没有就是空）。
 
 if(NOT LLVMC_ROOT)
-  set(LLVMC_ROOT "${CMAKE_SOURCE_DIR}/build/llvm")
+  set(LLVMC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../build/llvm")
 endif()
 
+# NO_DEFAULT_PATH 是有意的：这份 LLVM-C 的位置由 fetch_llvm.py 钉死，环境里另一份同名的
+# 头 / .a（换 ABI 的、MSVC 的）被找进来只会得到看不懂的链接错误。
 find_path(LLVMC_INCLUDE_DIR
   NAMES llvm-c/Core.h
   PATHS "${LLVMC_ROOT}/include"
@@ -35,8 +39,12 @@ if(NOT LLVMC_LIBRARY)
 endif()
 
 add_library(LLVMC::LLVMC UNKNOWN IMPORTED)
+# 头目录走 SYSTEM（-isystem）：它们是别人的头，其告警不该撞本项目的 -Werror。
+# 两个属性都要写：`INTERFACE_INCLUDE_DIRECTORIES` 把路径交给消费者，
+# `INTERFACE_SYSTEM_INCLUDE_DIRECTORIES` 才把它标成 SYSTEM（只写后者，目录压根不会进命令行）。
 set_target_properties(LLVMC::LLVMC PROPERTIES
   IMPORTED_LOCATION "${LLVMC_LIBRARY}"
-  INTERFACE_INCLUDE_DIRECTORIES "${LLVMC_INCLUDE_DIR}")
+  INTERFACE_INCLUDE_DIRECTORIES "${LLVMC_INCLUDE_DIR}"
+  INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${LLVMC_INCLUDE_DIR}")
 
 mark_as_advanced(LLVMC_INCLUDE_DIR LLVMC_LIBRARY LLVMC_RUNTIME_DLL)

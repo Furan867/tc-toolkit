@@ -79,11 +79,6 @@ bool write_file(const std::string& path, const void* data, size_t n) {
   return put == n;
 }
 
-std::string dir_of(const std::string& p) {
-  const size_t k = p.find_last_of("/\\");
-  return k == std::string::npos ? std::string(".") : p.substr(0, k);
-}
-
 void usage() {
   std::fprintf(stderr,
                "用法：simplexc-cli --src <file.si> [--out <blob>] [--ir-out <ll>] [--obj-out <coff>]\n"

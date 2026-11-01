@@ -9,7 +9,7 @@
 # 产出：target Unicorn::Unicorn（UNKNOWN IMPORTED）；变量 UNICORN_RUNTIME_DLL（lib/unicorn.dll）
 
 if(NOT UNICORN_ROOT)
-  set(UNICORN_ROOT "${CMAKE_SOURCE_DIR}/work/tools/difftrace-deps/unicorn")
+  set(UNICORN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../work/tools/difftrace-deps/unicorn")
 endif()
 
 find_path(UNICORN_INCLUDE_DIR
@@ -30,9 +30,12 @@ find_package_handle_standard_args(Unicorn DEFAULT_MSG UNICORN_INCLUDE_DIR UNICOR
 
 if(Unicorn_FOUND)
   add_library(Unicorn::Unicorn UNKNOWN IMPORTED)
+  # SYSTEM 头（-isystem）：Unicorn 是别人的头，其告警不该撞本项目的 -Werror。
+  # 两个属性都要写：前者给路径，后者才把它标成 SYSTEM（见 FindLLVMC.cmake）。
   set_target_properties(Unicorn::Unicorn PROPERTIES
     IMPORTED_LOCATION "${UNICORN_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_INCLUDE_DIR}")
+    INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_INCLUDE_DIR}"
+    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${UNICORN_INCLUDE_DIR}")
 endif()
 
 mark_as_advanced(UNICORN_INCLUDE_DIR UNICORN_LIBRARY UNICORN_RUNTIME_DLL)

@@ -7,7 +7,7 @@
 # 产出：target Capstone::Capstone（UNKNOWN IMPORTED）；变量 CAPSTONE_RUNTIME_DLL（lib/capstone.dll）
 
 if(NOT CAPSTONE_ROOT)
-  set(CAPSTONE_ROOT "${CMAKE_SOURCE_DIR}/work/tools/difftrace-deps/capstone")
+  set(CAPSTONE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../work/tools/difftrace-deps/capstone")
 endif()
 
 find_path(CAPSTONE_INCLUDE_DIR
@@ -28,9 +28,12 @@ find_package_handle_standard_args(Capstone DEFAULT_MSG CAPSTONE_INCLUDE_DIR CAPS
 
 if(Capstone_FOUND)
   add_library(Capstone::Capstone UNKNOWN IMPORTED)
+  # SYSTEM 头（-isystem）：Capstone 是别人的头，其告警不该撞本项目的 -Werror。
+  # 两个属性都要写：前者给路径，后者才把它标成 SYSTEM（见 FindLLVMC.cmake）。
   set_target_properties(Capstone::Capstone PROPERTIES
     IMPORTED_LOCATION "${CAPSTONE_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CAPSTONE_INCLUDE_DIR}")
+    INTERFACE_INCLUDE_DIRECTORIES "${CAPSTONE_INCLUDE_DIR}"
+    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${CAPSTONE_INCLUDE_DIR}")
 endif()
 
 mark_as_advanced(CAPSTONE_INCLUDE_DIR CAPSTONE_LIBRARY CAPSTONE_RUNTIME_DLL)

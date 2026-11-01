@@ -2,4 +2,5 @@
 --gcc-toolchain=D:/bin/w64devkit
 -std=c++23
 -I..
--I../../build/llvm/include
+-isystem
+../../build/llvm/include

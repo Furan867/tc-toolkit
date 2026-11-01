@@ -5,7 +5,7 @@
 与声明符号性无关。所以 U-L8 报的那条反例**不是**「读了 8 字节、高 4 字节残留 0」——
 预填 `0xFF` 与预填 `0x00` 结果逐位相同；U-L7「提升按源类型的符号性」那句话只对常量成立，要改写。
 
-- 器材与原始输出：`reversing/work/tmp/ul7x/`（12 片段 + `.bin` + `.pages` + `evidence.txt`）
+- 器材与原始输出：`work/tmp/ul7x/`（12 片段 + `.bin` + `.pages` + `evidence.txt`）
 - 观测面：`work/tmp/ul7x/<frag>.pages/t0003_0232a9f50000.bin`（tick 3）；
   `#SIMULATION_STATE = Ptr 2416623026176 = 0x232A9F50000` 落在页基址 → **页内偏移 = `+k`**；
   `entry = 0x212F`。片段头逐字节抄自 `work/tmp/ul8/base.si`。
@@ -95,7 +95,7 @@
 每个片段一条（换 `fA` → `fB`/`fC`/`fD`/`fG`/`fH`/`fE`/`fI`/`fJ`/`x0` 即可复跑；首次编译会核对 `out_len == 文件大小`）：
 
 ```
-cd reversing
+cd tc-toolkit
 python tools/try_compile_dll.py --compile --src work/tmp/ul7x/fA.si          # [0]=0x3288=12936=文件大小, [2]=0x212F
 cp work/compile_out.bin work/tmp/ul7x/fA.bin
 PYTHONIOENCODING=utf-8 python simplexc/tools/host/host.py --src work/tmp/ul7x/fA.si \
@@ -105,7 +105,7 @@ python -c "d=open('work/tmp/ul7x/fA.pages/t0003_0232a9f50000.bin','rb').read(); 
 # 期望：f8 ff ff ff ff ff ff ff f8 ff ff ff 00 00 00 00 f8 ff ff ff 00 00 00 00
 ```
 
-一键脚本（在 `reversing/` 下）：`work/tmp/ul7x/run.sh <frag>`（编译+核对+cp+跑+打印 `+256..+400`）、
+一键脚本（在 `tc-toolkit/` 下）：`work/tmp/ul7x/run.sh <frag>`（编译+核对+cp+跑+打印 `+256..+400`）、
 `work/tmp/ul7x/rerun.sh <frag>`（用已存 `.bin` 重跑并比 tick3 页 md5）。
 
 `fA` 与 `fB` 只差一句 `store(p, U64 0xFFFFFFFFFFFFFFFF)` / `store(p, U64 0)` ——

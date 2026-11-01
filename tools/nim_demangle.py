@@ -18,8 +18,9 @@ import struct
 from collections import defaultdict
 
 EXE = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\Turing Complete.exe"
-WORK = r"D:\home\code-proj\Python\turing-complete\work"
-OUTROOT = r"D:\home\code-proj\Python\turing-complete\recovered\src"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
+WORK = os.path.join(_ROOT, "work")
+OUTROOT = os.path.join(_ROOT, "recovered", "src")
 
 # ---------- 1. module list from string table ----------
 with open(EXE, "rb") as f:

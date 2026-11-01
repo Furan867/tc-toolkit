@@ -1,7 +1,7 @@
 #!python3
 """按模块 / 函数名 / 地址查询符号表。
 
-数据源（均在 reversing/work/ 下，由 nm 与 pdata_bounds.py 生成）:
+数据源（均在 work/ 下，由 nm 与 pdata_bounds.py 生成）:
     symbols_raw.txt        nm 输出（函数名 + 地址）
     function_bounds.tsv    .pdata 函数边界（用于给出函数体大小）
 

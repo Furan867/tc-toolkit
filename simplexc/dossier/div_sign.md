@@ -27,7 +27,7 @@ tick 3、`cycle = 3`（物证 +568）；四个组合的被除数/除数都另外
 `+544/+552/+560` = `02 00 …` = 2 → 三个除数构造（常量 `S32 2`、运行期 `S32 (t0 + 2)`、store→load 回读）；
 `+568 U64 cycle` = `03` → 运行期构造的起点确认。
 
-验证：`cd reversing && bash work/tmp/div/run.sh f1`（编译 → 核对 `out[0] == 文件大小` → `cp` → 宿主跑两遍 → tick3 页 md5 对比 → 打字节）
+验证：`cd tc-toolkit && bash work/tmp/div/run.sh f1`（编译 → 核对 `out[0] == 文件大小` → `cp` → 宿主跑两遍 → tick3 页 md5 对比 → 打字节）
       原始字节全表：`work/tmp/div/bytes.txt`；产物与 md5：`work/tmp/div/evidence.txt`
       本文件里出现的**每一个数字**都由 `python work/tmp/div/check_claims.py` 从落盘的 tick3 页里断言（100 项，0 失败）
       `f1`：`out_len=0x39D9`(14809) `entry=0x212F` `bin_md5=f05cff7c880b` `page md5=e43d39602165`（两遍 SAME）
@@ -139,7 +139,7 @@ tick 3、`cycle = 3`（物证 +568）；四个组合的被除数/除数都另外
   本文件/`check_claims.py` 都不引用这两格（`f7` 只用 `+264..+288`、`+312`、`+320`）。
 - 一片段一套三连（`run.sh` 就是把下面三步串起来 + 自动比对）：
   ```bash
-  cd reversing
+  cd tc-toolkit
   python tools/try_compile_dll.py --compile --src work/tmp/div/f1.si   # 记 [0] out_len、[2] entry
   # 核对 out[0] == `stat -c %s work/compile_out.bin`（work/compile_out.bin 是共享路径！）之后再 cp
   cp work/compile_out.bin work/tmp/div/f1.bin

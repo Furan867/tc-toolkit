@@ -41,7 +41,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
-ROOT = os.path.dirname(SIMPLEXC)                        # reversing/
+ROOT = os.path.dirname(SIMPLEXC)                        # tc-toolkit/
 CORPUS = os.path.join(SIMPLEXC, "corpus")
 MANIFEST = os.path.join(CORPUS, "manifest.tsv")           # 名字会撞上面的 --manifest 参数，故全大写
 CLI = os.path.join(ROOT, "build", "simplexc_cli.exe")
@@ -73,7 +73,7 @@ def utf8_stdout():
 
 
 def rel(path):
-    """输出里一律用相对 reversing/ 的路径（换机器/换盘符也读得顺）。"""
+    """输出里一律用相对 tc-toolkit/ 的路径（换机器/换盘符也读得顺）。"""
     try:
         return os.path.relpath(path, ROOT).replace("\\", "/")
     except ValueError:
@@ -403,7 +403,7 @@ def print_diff(item):
               "（产物目录过期或被改过，需重新 record）：")
         for field, tsv_value, blob_value in item["mismatch"]:
             print(f"  {field:<13} 清单 {tsv_value}   产物 {blob_value}")
-    if item["bytes"]:
+    if item["bytes"] and item["bytes"][1]:
         count, spans = item["bytes"]
         shown = "、".join(spans[:4]) + ("…" if len(spans) > 4 else "")
         print(f"  字节差区间     首个 {spans[0]}；归一化后共 {count} 处（{shown}）")

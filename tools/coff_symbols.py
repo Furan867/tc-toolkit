@@ -4,7 +4,8 @@ import os
 from collections import defaultdict
 
 EXE = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\Turing Complete.exe"
-OUTDIR = r"D:\home\code-proj\Python\turing-complete\work"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
+OUTDIR = os.path.join(_ROOT, "work")
 
 with open(EXE, "rb") as f:
     data = f.read()

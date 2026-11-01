@@ -16,5 +16,5 @@
 包内模块一律 `from .. import winmem` 这样的相对导入，因此**两个入口都能用**：
 
     py tools/watch_freq.py           # 人用的薄壳
-    python -m tools.freq.cli_watch   # 等价（在 reversing/ 下跑）
+    python -m tools.freq.cli_watch   # 等价（在 tc-toolkit/ 下跑）
 """

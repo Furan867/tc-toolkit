@@ -17,7 +17,7 @@
 | `tools/freq/products.py` | `Product`/`latest_product`、`fingerprint`/`product_fp`、`scan_products`/`scan_captures`、`ownership`（cfg/opt/impl 三行）、`opt_info`/`mode_from_hook_log`、`wait_new_product`、`hook_log_path`/`hook_log_lines` | 不采样、不驱动游戏；`hook.log` 路径只从 `hook_log.PATH` 取 |
 | `tools/freq/cli_read.py` | 人读的一次性入口（`--samples`/`--watch`/`--interval`），输出形状与旧 `read_freq.py` 一致 | 不做分段/相位/停机判据（批 2 的 `sampler`）；不产出机器可解析的报告 |
 
-`tools/read_freq.py` = 21 行薄壳：把 `reversing/` 放进 `sys.path` 后调 `tools.freq.cli_read.main()`。
+`tools/read_freq.py` = 21 行薄壳：把 `tc-toolkit/` 放进 `sys.path` 后调 `tools.freq.cli_read.main()`。
 包内模块一律相对导入（`from .. import winmem`），所以 `py tools/read_freq.py` 与
 `python -m tools.freq.cli_read` 两条路都通（`tools/` 没有 `__init__.py`，靠命名空间包）。
 

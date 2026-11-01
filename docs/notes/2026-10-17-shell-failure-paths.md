@@ -46,7 +46,7 @@
 
 ## 判据
 
-命令（都在 `D:/home/code-proj/Agent/proj/tc/reversing` 下）：
+命令（都在 `D:/home/code-proj/Agent/proj/tc/tc-toolkit` 下）：
 
 | 命令 | 结果 |
 |---|---|

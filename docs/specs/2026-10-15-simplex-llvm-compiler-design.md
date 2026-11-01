@@ -3,7 +3,7 @@
 - 日期：2026-10-15
 - 分支：`main`（本设计尚未落代码）
 - 状态：**设计定稿；实现进行中**（M4.5 已完成，M5 卡点见 `docs/status.md`）。产物契约由 T1–T5 实测闭合（见 §2、§4）。
-  2026-10-15 负责人确认：§7.5 判据入口 / §8 agent 工作流 / §10 版本锁定与重验脚本；代码落库位置 = `reversing/simplexc/`；
+  2026-10-15 负责人确认：§7.5 判据入口 / §8 agent 工作流 / §10 版本锁定与重验脚本；代码落库位置 = `simplexc/`；
   **LLVM 链接方式 = `LLVM-C.dll` + C API + 现有 w64devkit g++**（不引入 CMake；构建方式照抄
   `tools/deploy_compile_hook.py` 的直调 gcc）；语料实测见 §2.7；MVP 验收下界 = 沙盒模式能跑起来。
 - **2026-10-18 重构**：确定四层分层（`frontend`→无类型 AST → `sema`→HIR → `codegen`→LLVM IR → `assemble`→blob），
@@ -543,7 +543,7 @@ struct 布局与对齐、enum 取值、字符串字面量编码、`$` 写回时�
 **接口以 `docs/specs/2026-10-15-simplexc-interfaces.md`（接口冻结版 1.4）为唯一权威** —— 本节只定分区与纪律，
 不复制契约内容；两者冲突以接口冻结版为准（改接口要走那份文档的版本号登记）。
 
-实现几乎全部交给 agent，因此**先冻结接口、再并行开工**。代码落库位置已定：`reversing/simplexc/`（2026-10-15）：
+实现几乎全部交给 agent，因此**先冻结接口、再并行开工**。代码落库位置已定：`simplexc/`（2026-10-15）：
 
 ```
 simplexc/
@@ -664,7 +664,7 @@ simplexc/
 | U3 | `print_using_stack` 在 Windows x86-64 是否真是空操作 | 决定 runtime 是否要复刻打印 | 待验证 |
 | U4 | 语言版本（当前安装版 vs 社区提到的 TC 2.0 新版 Simplex） | 文法差异会改变前端 | 锁定当前构建；出现新版时重新对齐 |
 | U5 | 内建清单完备性 | 决定 lowering 表 | 语料已扩到 180 份（去重 98）+ 与 `compile.dll` 的 `INTRINSIC_*` 常量表交叉验证 |
-| U6 | 代码落库位置 | 影响 agent 工作流 | **已定：`reversing/simplexc/`**（2026-10-15） |
+| U6 | 代码落库位置 | 影响 agent 工作流 | **已定：`simplexc/`**（2026-10-15） |
 | U7 | benchmark 与性能目标 | 暂缓 | 测法已定（`watch_freq.py` + 转发层切换） |
 | U8 | 主频/bench 层重写的架构（模块与接口） | 决定 A/B 验证基础设施 | **已定**：见 `docs/specs/2026-10-15-freq-measurement-design.md` |
 | U9 | 并发写者协调 | 决定多 agent 并行纪律 | **已定：静态分区 + `game.lock` + `ledger.lock`**（见 §8） |

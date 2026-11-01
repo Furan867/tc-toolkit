@@ -30,7 +30,7 @@
 
 需要 w64devkit（默认 `D:/bin/w64devkit/bin`，可用 `W64DEVKIT_BIN` 覆盖）与 `build/llvm/`
 （头 + 自造 MinGW 导入库，不进 git；没有就先 `python simplexc/tools/fetch_llvm.py --dest D:/downloads`）。
-产物全部落在 `reversing/build/`，两条路径写法上的硬要求（为什么产物得与基线逐字节相同）
+产物全部落在 `build/`，两条路径写法上的硬要求（为什么产物得与基线逐字节相同）
 见 `simplexc/tools/build.py` 头部与 `CMakeLists.txt` 里对应小节的注释。
 
 CMake 是构建定义的**唯一**出处（目标 / 源文件表 / flags 都在 `CMakeLists.txt`），`build.py` 只是它的一层薄壳：

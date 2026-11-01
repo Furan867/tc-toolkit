@@ -29,7 +29,7 @@
 产物不吃 git（98 份 blob 合计约 10 MB），清单吃 git（十几 KB）：
 
 ```bash
-cd reversing/
+cd tc-toolkit/
 
 # 1. 先有产物（build/ 不进 git）
 python simplexc/tools/build.py

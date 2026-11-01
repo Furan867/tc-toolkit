@@ -125,7 +125,7 @@
 
 ### 3.1 规模与依赖
 
-`[代码]` `reversing/simplexc/` 53 文件、24388 行（代码 20202，占 82.8%）；其中 C++ 11952 行、Python 12436 行（Python 大头在 `tools/`）。
+`[代码]` `simplexc/` 53 文件、24388 行（代码 20202，占 82.8%）；其中 C++ 11952 行、Python 12436 行（Python 大头在 `tools/`）。
 
 | 目录 | 文件 | 代码行 |
 |---|---|---|
@@ -244,7 +244,7 @@
 python %TEMP%\tc-front\probe1.py
 
 # 单个 def 的 AST 与可达性
-cd reversing
+cd tc-toolkit
 ./build/ast_dump.exe --src simplexc/corpus/stdlib_prefix.si --def memory_clear
 ./build/ast_dump.exe --src "<prefix+语料拼接源>" --all      # 看 reachable 列
 ```

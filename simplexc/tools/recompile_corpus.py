@@ -40,11 +40,11 @@ import classify_abs_addrs as C  # 同目录：movabs/PE/差异分析的唯一定
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
-REPO = os.path.dirname(SIMPLEXC)                      # reversing/
+REPO = os.path.dirname(SIMPLEXC)                      # tc-toolkit/
 
 
 def _load_by_path(path, name):
-    """按文件路径加载模块（reversing/tools/ 不是包，静态 import 解析不到）。"""
+    """按文件路径加载模块（tools/ 不是包，静态 import 解析不到）。"""
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"加载不了 {path}")

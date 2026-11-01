@@ -26,7 +26,7 @@
 ## 0. 代码落库与所有权
 
 ```
-reversing/simplexc/
+simplexc/
   frontend/   词法/语法/ast（无类型）/#if in_scope 的裁剪点/span              → Ast
   sema/       名字解析/类型/consteval/单态化/内建识别/根确定与 DCE            → HIR
   codegen/    HIR → LLVM IR（内存模型、$ 写回、extern、entry 包装）           → LLVMModuleRef
@@ -42,7 +42,7 @@ reversing/simplexc/
 - **语言分工（唯一权威）**：产品路径的 `frontend/` / `sema/` / `codegen/` / `runtime/` / `assemble/` / `shell/` / `cli/`
   = **C++17**（必要时汇编）；`tools/` 下的脚本 = Python（离线工具，不进产品路径）；
   **产品路径不得依赖 Python**（判据 = 主设计 §7.5 依赖门）。M3 期的 Python 原型已于 2026-10-18 删除。
-- 既有 `reversing/tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
+- 既有 `tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
 - 一个写者一个目录（主设计 §8）；`tools/compile_hook.c` 由 `work/tmp/locks/compile-hook.lock` 串行化。
 
 ---
@@ -140,7 +140,7 @@ BUILTIN(grow,   "grow(arena?, Arr[T], Int) -> Arr[T]", YES, alloc+copy, - , RT_g
   1. `compile_real.dll` 的字面量池 —— `mac_*` 名表已实测提取到（17 个：`mac_in_scope, mac_uint_of_size,
      mac_raw_cast, mac_type_of_element, mac_type_of, mac_append, mac_shrink, mac_grow, mac_join, mac_clone,
      mac_array, mac_empty_array_address, mac_default, mac_int_of_size, mac_store, mac_load, mac_size`），
-     提取器 `reversing/tools/extract_nim_strings.py`；**裸名表（store/min/max/clz/ctz/asr/lsr/lsl/ror/rol/
+     提取器 `tools/extract_nim_strings.py`；**裸名表（store/min/max/clz/ctz/asr/lsr/lsl/ror/rol/
      bswap/…）也在同一池里，但类别分组（STANDARD/UNARY/BINARY/BINARY_MUTATING）尚未从容器结构确认 → §9 U-L13**。
   2. stdlib 前缀里「被调用但未定义」的名字。
   3. 98 份语料里「被调用但未定义」的名字。
@@ -210,7 +210,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 **冻结的装配规则**
 1. 输入是 COFF 目标文件（`LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)` 的字节）；
-   解析节/符号/重定位，**复用 `reversing/tools/coff_symbols.py` 已探明的解析方式，不另起一套**。
+   解析节/符号/重定位，**复用 `tools/coff_symbols.py` 已探明的解析方式，不另起一套**。
 2. 允许的重定位：`IMAGE_REL_AMD64_REL32`(0x04) 及其 `+1..+5` 变体（内部符号）。
    **任何指向内部符号的绝对重定位（`ADDR64`=0x01 / `ADDR32`=0x02 / `ADDR32NB`）一律 `UnsupportedReloc` 硬错误**
    （已批准项 b：blob 会被拷到任意地址执行，内部绝对地址必然失效）。
@@ -321,11 +321,11 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 - 取导入库：**已定走 ②**（① 未采用）—— ① MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，与目标三元组同源）；
   ② 官方 win64 发行包 + `gendef LLVM-C.dll` → `dlltool -m i386:x86-64 -d LLVM-C.def -l lib/libLLVM-C.a`
   （官方包只有 DLL，无 C++ 库/头）。取件与验证命令见 `docs/facts.md`。
-- 落地位置：DLL 与导入库放 `reversing/build/llvm/`（**不进 git**）；版本号 + DLL sha256 记进 `docs/facts.md`。
+- 落地位置：DLL 与导入库放 `build/llvm/`（**不进 git**）；版本号 + DLL sha256 记进 `docs/facts.md`。
 - 导出机制：见 §5（`extern "C"` + `__declspec(dllexport)`），只导出那三个符号。
 - 部署：`build/compile_hook.dll` 拷进游戏目录时**改名 `compile.dll`**；一旦链接 `LLVM-C.dll`，
   部署必须把 `LLVM-C.dll` 一起拷进去（否则游戏加载时解析依赖失败）。
-- 构建产物：**现状** = `reversing/build/compile_hook.dll`（壳）、`build/tcblob.exe` / `build/llvm_prog.exe`（离线 CLI）；
+- 构建产物：**现状** = `build/compile_hook.dll`（壳）、`build/tcblob.exe` / `build/llvm_prog.exe`（离线 CLI）；
   `simplexc.dll` / `simplexc-cli.exe` 是**接上前端（M4.5）之后**的目标名，现在还不存在
   （见 `simplexc/cli/README.md` 的“现状”节）。
 - 不依赖 PATH：工具链一律**绝对路径**（`W64DEVKIT_BIN` / `W64DEVKIT_CXX` / `W64DEVKIT_CC` 可覆盖，见 `build.py`），
@@ -401,5 +401,5 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 | 数组布局 = `(len<<16)\|cap`，`get_capacity = (1<<cap)>>1` | 读 `stdlib_prefix.si` 的 `allocate_raw`/`get_length`/`set_length`/`get_capacity` |
 | 游戏把自己的数组硬编码交给生成代码 | `grep -n 'raw_cast(<Arr\|#SIMULATION_STATE' work/hook/all/hook_src_001.si` |
 | `#` 只有 `#if in_scope` 与 `const #NAME` 两类 | `grep -oh '#[A-Za-z_][A-Za-z0-9_]*' work/hook/all/*.si \| sort -u` |
-| 内建/宏名表在 DLL 的字面量池里 | `reversing/tools/extract_nim_strings.py <dll>` → `mac_*` 组 |
+| 内建/宏名表在 DLL 的字面量池里 | `tools/extract_nim_strings.py <dll>` → `mac_*` 组 |
 | extern 调用 = Win64 ABI + `sub rsp,imm16` 影子空间 | 反汇编任一 `work/hook/all/hook_out_*.bin`（U10）；调用目标是 `compile_real.dll` 的导入 thunk，见 `docs/facts.md` |

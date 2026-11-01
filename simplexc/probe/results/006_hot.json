@@ -10,8 +10,8 @@
   "clang_sha256": "9584244d83bb095c5a2983f814692cb50e0b8d2916585516cad8f3e8596d8261",
   "ref_sha256": "290b644196b94ff21324b7035e12a3adc85ec6be70014f9e17c2d6fe3c83871b",
   "ours": {
-    "obj": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_equiv_hot.o",
-    "blob": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+    "obj": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_equiv_hot.o",
+    "blob": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin",
     "entry": 1520,
     "stubs": [
       {
@@ -46,7 +46,7 @@
       }
     ],
     "compile_cmd": [
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\llvm\\bin\\clang.exe",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\llvm\\bin\\clang.exe",
       "--target=x86_64-pc-windows-gnu",
       "-O2",
       "-ffreestanding",
@@ -54,23 +54,23 @@
       "-c",
       "-DTC_006_HOT_CYCLE",
       "-o",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_equiv_hot.o",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\probe\\006_equiv.c"
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_equiv_hot.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\probe\\006_equiv.c"
     ],
     "assemble_cmd": [
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\tcblob.exe",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\tcblob.exe",
       "--obj",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_equiv_hot.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_equiv_hot.o",
       "--obj",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\objs\\entry_shim.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\objs\\entry_shim.o",
       "--obj",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\objs\\rt_min.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\objs\\rt_min.o",
       "--entry",
       "__tc_entry",
       "--out",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin"
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin"
     ],
-    "assemble_stdout": "blob: out_len=2292 entry=0x5F0 text=2106 rdata=80 data=8 bss=8 stubs=6 relocs=28\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin（2292 字节）\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin.stubs（6 处 extern 跳板）",
+    "assemble_stdout": "blob: out_len=2292 entry=0x5F0 text=2106 rdata=80 data=8 bss=8 stubs=6 relocs=28\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin（2292 字节）\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin.stubs（6 处 extern 跳板）",
     "obj_sha256": "8a2a0b7b70eee36aac29246557ed0acc48dcc89125b2b77fa03106a516d7810f",
     "blob_sha256": "3565c3383f56a1c0b80051a4599c09a7813b39c299ad0b7a48b7baca674c0ad5"
   },
@@ -111,8 +111,8 @@
       0
     ],
     "commands": [
-      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\probe\\results\\006_hot.ref.jsonl --quiet",
-      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\probe\\results\\006_hot.ours.jsonl --quiet --entry 0x5f0"
+      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\probe\\results\\006_hot.ref.jsonl --quiet",
+      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\probe\\results\\006_hot.ours.jsonl --quiet --entry 0x5f0"
     ],
     "jsonl": [
       "simplexc\\probe\\results\\006_hot.ref.jsonl",
@@ -202,7 +202,7 @@
       "per_tick_seconds_median": 0.005188999930396676,
       "per_tick_rounds": [
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -227,7 +227,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -252,7 +252,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -277,7 +277,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -302,7 +302,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -436,7 +436,7 @@
       "per_tick_seconds_median": 0.005028599873185158,
       "per_tick_rounds": [
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin",
           "entry": 1520,
           "target": 0,
           "kind": "ticks",
@@ -461,7 +461,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin",
           "entry": 1520,
           "target": 0,
           "kind": "ticks",
@@ -486,7 +486,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin",
           "entry": 1520,
           "target": 0,
           "kind": "ticks",
@@ -511,7 +511,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin",
           "entry": 1520,
           "target": 0,
           "kind": "ticks",
@@ -536,7 +536,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.bin",
           "entry": 1520,
           "target": 0,
           "kind": "ticks",
@@ -618,7 +618,7 @@
       "out_len_in_header": 13069,
       "instructions": 3090,
       "decoded_bytes": 12658,
-      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ref.code"
+      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ref.code"
     },
     "ours": {
       "bytes": 2292,
@@ -626,7 +626,7 @@
       "out_len_in_header": 2292,
       "instructions": 543,
       "decoded_bytes": 2107,
-      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_hot.code"
+      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_hot.code"
     }
   }
 }

@@ -51,7 +51,7 @@ from collections import OrderedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
-ROOT = os.path.dirname(SIMPLEXC)                       # reversing/
+ROOT = os.path.dirname(SIMPLEXC)                       # tc-toolkit/
 WORK = os.path.join(ROOT, "work", "tmp", "check")
 
 CORPUS = os.path.join(HERE, "recompile_corpus.py")
@@ -100,7 +100,7 @@ def utf8_stdout():
 
 
 def rel(path):
-    """输出里一律用相对 reversing/ 的路径（换机器/换盘符也读得顺）。"""
+    """输出里一律用相对 tc-toolkit/ 的路径（换机器/换盘符也读得顺）。"""
     try:
         return os.path.relpath(path, ROOT)
     except ValueError:
@@ -478,7 +478,7 @@ def main(argv=None):
     info = git_info()
     head = info["head"] or "?"
     dirty = "，工作区有未提交改动" if info["dirty"] else ""
-    print(f"判据入口 · reversing/（HEAD {head}{dirty}）· Python {sys.version.split()[0]} · "
+    print(f"判据入口 · tc-toolkit/（HEAD {head}{dirty}）· Python {sys.version.split()[0]} · "
           f"{len(names)} 个步骤")
     print(f"工作目录：{rel(WORK)}/\n")
 

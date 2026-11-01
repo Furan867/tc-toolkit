@@ -1,7 +1,7 @@
 # shell
 
 壳里**新增的那部分**：选实现（reference / ours…）、失败转交、核心入口。既有壳
-`reversing/tools/compile_hook.c` 继续演进，**不做第二份壳**（所有权见接口 §0）。
+`tools/compile_hook.c` 继续演进，**不做第二份壳**（所有权见接口 §0）。
 
 现状：
 

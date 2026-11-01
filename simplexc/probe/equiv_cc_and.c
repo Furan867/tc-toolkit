@@ -30,7 +30,7 @@
  * `-DTC_MARK`：进入 `tc_main` 时往固定路径追加一行（游戏内验证「我们的产物真的跑到了」）。
  * **默认不编进去** —— 标记会进 extern 序列，破坏与参考产物的「逐 tick 全等」。
  */
-#include "addrs.h"                 /* 由 tools/gen_addrs.py 从本次会话的 .si 生成 */
+#include "addrs.h"                 /* 由 simplexc/tools/gen_addrs.py 从本次会话的 .si 生成（生成物不入库） */
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -115,8 +115,10 @@ static void sleep_ms(u64 ms) { Sleep((u32)ms); }       /* `1.ms()` = 10^6 ns →
  * 为什么无条件调 `WriteFile`/`CloseHandle`（不判 INVALID_HANDLE_VALUE 就返回）：宿主的
  * `CreateFileA` 桩恒返回 INVALID_HANDLE_VALUE（真开文件会引入真实磁盘/时间，见 host.py 的 Detours），
  * 而我们正是靠宿主记下的 `WriteFile` 记录来证明「标记路径被执行、内容是这一行」。
- * 游戏内拿到的是有效句柄，这三个调用就是一次普通的追加写。 */
-#define MARK_PATH "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\equiv\\equiv_cc_and.log"
+ * 游戏内拿到的是有效句柄，这三个调用就是一次普通的追加写。
+ * 路径用相对路径：离线宿主跑时 cwd = 仓库根；游戏内跑时会落到游戏目录旁边，
+ * 那里只是留一行痕迹，不影响验证（真需要换位置用 `-D MARK_PATH=...`）。 */
+#define MARK_PATH "work/tmp/equiv/equiv_cc_and.log"
 #define MARK_ACCESS     0x00000004u                    /* FILE_APPEND_DATA */
 #define MARK_SHARE      0x00000001u                    /* FILE_SHARE_READ */
 #define MARK_OPEN_ALWAYS 4u

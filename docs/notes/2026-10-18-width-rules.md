@@ -34,7 +34,7 @@ diver `work/tmp/width/run.py`：同一份片段分别喂参考（`work/tmp/m5gap
 读第 3 tick 的 `t0003_0232a9f50000.bin`。
 
 ```bash
-cd reversing
+cd tc-toolkit
 PYTHONIOENCODING=utf-8 python work/tmp/width/run.py            # 全部 5 组
 PYTHONIOENCODING=utf-8 python work/tmp/width/run.py arith cmp  # 单组
 ```

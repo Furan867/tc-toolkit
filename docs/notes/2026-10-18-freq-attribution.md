@@ -87,7 +87,7 @@ python work/tmp/attr/replay.py > work/tmp/attr/after.txt    # 修复后：rc=0
 ```
 
 「旧判据」列是把修复前 `latest_product()` 的函数体照抄进 harness 得到的对照
-（`git` 里没有这段历史：`reversing/**` 被 `.gitignore` 挡在仓外；真机现场见 `ab2.json`
+（`git` 里没有这段历史：`tc-toolkit/**` 被 `.gitignore` 挡在仓外；真机现场见 `ab2.json`
 与当时的终端输出）。①②③ 的「修复前」是**同一份 harness 在改代码之前**跑出来的真实输出。
 
 真数据直查（只读，游戏在跑）：

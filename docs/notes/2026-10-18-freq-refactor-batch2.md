@@ -19,7 +19,7 @@
 | `driver.py` | `simctl` 薄封装（`run`/`stop`/`recompile`/`restore`/`blocking_dialog`/`find_window`）+ `preflight()` 六条前置断言；`Result`/`Check` 都带可执行 `hint` | 不做编排（`cli_bench`）、不改 `simctl` 接口 |
 | `cli_watch.py` | watch 的循环：编译点/游戏退出重连/心跳/总结 | 采样与排版都在上面两层 |
 | `cli_bench.py` | 编排（换变体 → 重编译 → 运行 → 采样 → 停止）、`--variant`、`--json`、`opt.ini` 备份恢复 | 单步原语都在 `driver`/`sampler` |
-| `tools/watch_freq.py`·`tools/bench_rewrite.py` | 各 ~20 行薄壳：把 `reversing/` 加进 `sys.path` 后转调 `tools.freq.cli_*` | —— |
+| `tools/watch_freq.py`·`tools/bench_rewrite.py` | 各 ~20 行薄壳：把 `tc-toolkit/` 加进 `sys.path` 后转调 `tools.freq.cli_*` | —— |
 
 ## 2. sampler 的四条判据怎么落的
 

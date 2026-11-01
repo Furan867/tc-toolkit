@@ -31,8 +31,9 @@ def demangle_symbol_loose(sym: str):
     return proc, module
 
 DLL = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\compile.dll"
-OUTROOT = r"D:\home\code-proj\Python\turing-complete\recovered\compiler-src"
-WORK = r"D:\home\code-proj\Python\turing-complete\work"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
+OUTROOT = os.path.join(_ROOT, "recovered", "compiler-src")
+WORK = os.path.join(_ROOT, "work")
 
 out = subprocess.run(
     [r"D:\bin\w64devkit\bin\nm.exe", DLL],

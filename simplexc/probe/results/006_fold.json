@@ -10,8 +10,8 @@
   "clang_sha256": "9584244d83bb095c5a2983f814692cb50e0b8d2916585516cad8f3e8596d8261",
   "ref_sha256": "290b644196b94ff21324b7035e12a3adc85ec6be70014f9e17c2d6fe3c83871b",
   "ours": {
-    "obj": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_equiv_fold.o",
-    "blob": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin",
+    "obj": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_equiv_fold.o",
+    "blob": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin",
     "entry": 1376,
     "stubs": [
       {
@@ -46,30 +46,30 @@
       }
     ],
     "compile_cmd": [
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\llvm\\bin\\clang.exe",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\llvm\\bin\\clang.exe",
       "--target=x86_64-pc-windows-gnu",
       "-O2",
       "-ffreestanding",
       "-fno-stack-protector",
       "-c",
       "-o",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_equiv_fold.o",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\probe\\006_equiv.c"
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_equiv_fold.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\probe\\006_equiv.c"
     ],
     "assemble_cmd": [
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\tcblob.exe",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\tcblob.exe",
       "--obj",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_equiv_fold.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_equiv_fold.o",
       "--obj",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\objs\\entry_shim.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\objs\\entry_shim.o",
       "--obj",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\build\\objs\\rt_min.o",
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\build\\objs\\rt_min.o",
       "--entry",
       "__tc_entry",
       "--out",
-      "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin"
+      "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin"
     ],
-    "assemble_stdout": "blob: out_len=2164 entry=0x560 text=1959 rdata=80 data=8 bss=8 stubs=6 relocs=29\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin（2164 字节）\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin.stubs（6 处 extern 跳板）",
+    "assemble_stdout": "blob: out_len=2164 entry=0x560 text=1959 rdata=80 data=8 bss=8 stubs=6 relocs=29\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin（2164 字节）\n写出 D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin.stubs（6 处 extern 跳板）",
     "obj_sha256": "5baebb2a8ba4a35963d116011e8d6d2f563db9179bbd23033a075d9d6583eae4",
     "blob_sha256": "d217850a0a31e967d967497b2d017dd74c818390e499fde96918dbf0ce5f8701"
   },
@@ -110,8 +110,8 @@
       0
     ],
     "commands": [
-      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\probe\\results\\006_fold.ref.jsonl --quiet",
-      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\probe\\results\\006_fold.ours.jsonl --quiet --entry 0x560"
+      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\probe\\results\\006_fold.ref.jsonl --quiet",
+      "D:\\bin\\Python313\\python.exe D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\tools\\host\\host.py --src D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\src\\006.si --bin D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin --ticks 10 --out D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\probe\\results\\006_fold.ours.jsonl --quiet --entry 0x560"
     ],
     "jsonl": [
       "simplexc\\probe\\results\\006_fold.ref.jsonl",
@@ -201,7 +201,7 @@
       "per_tick_seconds_median": 0.005371000152081251,
       "per_tick_rounds": [
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -226,7 +226,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -251,7 +251,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -276,7 +276,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -301,7 +301,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\simplexc\\corpus\\ref\\006.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\simplexc\\corpus\\ref\\006.bin",
           "entry": 8495,
           "target": 0,
           "kind": "ticks",
@@ -435,7 +435,7 @@
       "per_tick_seconds_median": 0.0049189000856131315,
       "per_tick_rounds": [
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin",
           "entry": 1376,
           "target": 0,
           "kind": "ticks",
@@ -460,7 +460,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin",
           "entry": 1376,
           "target": 0,
           "kind": "ticks",
@@ -485,7 +485,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin",
           "entry": 1376,
           "target": 0,
           "kind": "ticks",
@@ -510,7 +510,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin",
           "entry": 1376,
           "target": 0,
           "kind": "ticks",
@@ -535,7 +535,7 @@
           "close": "exited_clean"
         },
         {
-          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.bin",
+          "bin": "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.bin",
           "entry": 1376,
           "target": 0,
           "kind": "ticks",
@@ -617,7 +617,7 @@
       "out_len_in_header": 13069,
       "instructions": 3090,
       "decoded_bytes": 12658,
-      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ref.code"
+      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ref.code"
     },
     "ours": {
       "bytes": 2164,
@@ -625,7 +625,7 @@
       "out_len_in_header": 2164,
       "instructions": 508,
       "decoded_bytes": 1954,
-      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\m15\\006_ours_fold.code"
+      "objdump_cmd": "D:\\bin\\w64devkit\\bin\\objdump.exe -D -b binary -m i386:x86-64 -M intel D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\tmp\\m15\\006_ours_fold.code"
     }
   }
 }

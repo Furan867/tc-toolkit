@@ -49,7 +49,8 @@ if overlay_size > 0:
     print(f"\n--- Overlay as ASCII (first 256) ---")
     print(overlay[:256])
     # save overlay
-    out = r"D:\home\code-proj\Python\turing-complete\work\overlay.bin"
+    out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "work", "overlay.bin")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "wb") as f:
         f.write(overlay)

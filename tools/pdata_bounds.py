@@ -27,7 +27,7 @@ import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)  # reversing/
+ROOT = os.path.dirname(HERE)  # tc-toolkit/
 
 DEFAULT_EXE = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete\Turing Complete.exe"
 DEFAULT_OUT = os.path.join(ROOT, "work", "function_bounds.tsv")

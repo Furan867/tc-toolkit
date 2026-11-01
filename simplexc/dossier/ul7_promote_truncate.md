@@ -56,7 +56,7 @@ store(#SIMULATION_STATE + 312, U64 (U8 (cycle * 1000)))   // 3000
 验证：
 
 ```bash
-cd reversing
+cd tc-toolkit
 python tools/try_compile_dll.py --compile --src work/tmp/ul7/q1.si          # q1 的 [0]=0x31DF（=12767）；先核对 out_len == 文件大小，见下「坑」
 cp work/compile_out.bin work/tmp/ul7/q1.bin
 PYTHONIOENCODING=utf-8 python simplexc/tools/host/host.py --src work/tmp/ul7/q1.si --bin work/tmp/ul7/q1.bin --entry 0x212F --ticks 3 --out work/tmp/ul7/q1.jsonl --dump-pages work/tmp/ul7/q1.pages
@@ -120,7 +120,7 @@ store(#SIMULATION_STATE + 368, U64 (U10 0x7FF))              // 11 位，超宽
 验证（q2 / q2b / q2c 同法，只换文件名与偏移）：
 
 ```bash
-cd reversing
+cd tc-toolkit
 python tools/try_compile_dll.py --compile --src work/tmp/ul7/q2c.si ; cp work/compile_out.bin work/tmp/ul7/q2c.bin
 PYTHONIOENCODING=utf-8 python simplexc/tools/host/host.py --src work/tmp/ul7/q2c.si --bin work/tmp/ul7/q2c.bin --entry 0x212F --ticks 3 --out work/tmp/ul7/q2c.jsonl --dump-pages work/tmp/ul7/q2c.pages
 python -c "d=open('work/tmp/ul7/q2c.pages/t0003_0232a9f50000.bin','rb').read();print(' '.join(f'{b:02x}' for b in d[336:376]))"

@@ -46,7 +46,8 @@ extern "C" void* tc_array_alloc(unsigned long long count, unsigned long long ele
  * 都是 `ExternResolver` 解析不了的未定义符号 —— 只能用 kernel32 + 纯算数。
  * 正式实现里不会有它。
  */
-#define SPIKE_LOG "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\tmp\\blob_ran.log"
+/* 相对路径：这个 spike 只在离线宿主里跑（cwd = 仓库根），游戏内不会走到这里。 */
+#define SPIKE_LOG "work/tmp/blob_ran.log"
 
 extern "C" unsigned long long tc_spike_mark(unsigned long long tag) {
     char line[48];

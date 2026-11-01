@@ -6,7 +6,7 @@
 正确性判据：同一份 `.si`，我们的产物与参考产物**逐 tick 状态等价**。
 
 - 接口权威 = `docs/specs/2026-10-15-simplexc-interfaces.md`（冻结版 1.4）；主设计 = `…-simplex-llvm-compiler-design.md`。
-- 代码在 `reversing/simplexc/`；LLVM 固定 23.1.3。语义档案 `docs/facts/semantics.md`。
+- 代码在 `simplexc/`；LLVM 固定 23.1.3。语义档案 `docs/facts/semantics.md`。
 
 ## M5 stdlib 全量兼容：编译层已达成（2026-10-25）
 

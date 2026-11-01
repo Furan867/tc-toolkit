@@ -173,8 +173,8 @@ def main():
     if args.watch:
         return watch(args)
 
-    # 子进程统一以 reversing/ 为工作目录运行，所以路径必须先转成绝对路径 ——
-    # 否则 'reversing/work/x.bin' 会被拼成 'reversing/reversing/work/x.bin'（踩过）
+    # 子进程统一以 tc-toolkit/ 为工作目录运行，所以路径必须先转成绝对路径 ——
+    # 否则 'work/x.bin' 会被拼成 'tc-toolkit/work/x.bin'（踩过）
     if not args.src or not args.img:
         # 默认用**最新的** src/out 对 —— 它就是当前最新电路状态
         pairs = discover_pairs()

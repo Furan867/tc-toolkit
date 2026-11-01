@@ -105,7 +105,7 @@ from collections import OrderedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
-ROOT = os.path.dirname(SIMPLEXC)                       # reversing/
+ROOT = os.path.dirname(SIMPLEXC)                       # tc-toolkit/
 
 WORK = os.path.join(ROOT, "work", "tmp", "hook_offline")
 BIN = os.path.join(WORK, "bin")                        # 两份壳 + compile_real.dll 同居一处

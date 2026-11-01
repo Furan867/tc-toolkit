@@ -137,7 +137,7 @@ MOV_IMM_RE = re.compile(r"^(\w+),(0x[0-9a-f]+|\d+)$")
 #: CSE：两条同值装载之间最多隔几条指令。间隔越大越容易踩到别的路径（且收益越小），
 #: 实测 ≤5 与 ≤30 的安全子集几乎相同（484 vs 489），所以取小的。
 CSE_GAP = 5
-#: 配置文件：reversing/opt.ini 的 [opt] 段。**每次编译重新读**，
+#: 配置文件：opt.ini 的 [opt] 段。**每次编译重新读**，
 #: 所以改完下次编译就生效，不用重启游戏。
 CONF = os.path.normpath(os.path.join(HERE, os.pardir, "opt.ini"))
 #: REX 前缀（0x40~0x4F）

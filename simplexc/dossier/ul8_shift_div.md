@@ -30,7 +30,7 @@
 统一三连（换片段名与偏移即可）：
 
 ```bash
-cd reversing
+cd tc-toolkit
 python tools/try_compile_dll.py --compile --src work/tmp/ul8/q1.si   # 记下 [0] out_len、[2] entry
 # 核对 out[0] == `stat -c %s work/compile_out.bin` 之后再 cp（work/compile_out.bin 是共享路径）
 cp work/compile_out.bin work/tmp/ul8/q1.bin

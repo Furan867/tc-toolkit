@@ -53,7 +53,7 @@ from typing import NoReturn
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)                                 # simplexc/tools/
 SIMPLEXC = os.path.dirname(TOOLS)                             # simplexc/
-ROOT = os.path.dirname(SIMPLEXC)                              # reversing/
+ROOT = os.path.dirname(SIMPLEXC)                              # tc-toolkit/
 
 CLI = os.path.join(ROOT, "build", "simplexc_cli.exe")
 DIFFTRACE = os.path.join(ROOT, "build", "difftrace.exe")

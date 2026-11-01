@@ -61,7 +61,7 @@ def api(refl: str) -> dict:
     if not url.startswith("https://"):
         raise SystemExit(f"拒绝非 https 地址：{url}")
     r = subprocess.run(["curl", "-sS", "-L", "--fail", "--retry", "3",
-                        "-H", "User-Agent: tc-reversing/fetch_llvm", url],
+                        "-H", "User-Agent: tc-fetch_llvm", url],
                        capture_output=True, check=False)
     if r.returncode != 0:
         raise SystemExit(f"取发行信息失败（curl {r.returncode}）："

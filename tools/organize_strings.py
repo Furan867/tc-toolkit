@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 
-WORK = r"D:\home\code-proj\Python\turing-complete\reversing\work"
+WORK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "work")
 SRC = os.path.join(WORK, "exe_strings.txt")
 OUT = os.path.join(WORK, "strings")
 
@@ -73,7 +73,8 @@ for name, cnt in sorted(stats.items(), key=lambda x: -x[1]):
     print(f"  {name:20s} {cnt:6d}")
 
 # 翻译键不在 exe 中，从关卡文件提取（键格式: 数字ID_数字ID）
-CAMPAIGN = r"D:\home\code-proj\Python\turing-complete\reversing\recovered\res\campaign"
+CAMPAIGN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "recovered", "res", "campaign")
 keys = set()
 for root, _, files in os.walk(CAMPAIGN):
     for fn in files:

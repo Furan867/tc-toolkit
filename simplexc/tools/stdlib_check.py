@@ -29,7 +29,7 @@ r"""stdlib 全量编译的尺子：现在能编到第几行、卡在哪类构造
 退出码：0 = 全量编过；1 = 有编译错误（已算出行号）；2 = 工具自身失败
 （找不到 CLI / 读不了源 / 错误消息格式不认识 / 区间表行号越界）。
 
-区间表来源（逐条可核对；在 `reversing/` 下跑，`f=simplexc/corpus/stdlib_prefix.si`）
+区间表来源（逐条可核对；在 `tc-toolkit/` 下跑，`f=simplexc/corpus/stdlib_prefix.si`）
 ------------------------------------------------------------------------------
     枚举              grep -n '^type .*Enum\[' f                     → 17
     类型别名          grep -n '^type ' f                           → 17,38,39,40,41,42,43（去掉枚举那行 = 6）
@@ -149,7 +149,7 @@ def utf8_stdout() -> None:
 
 
 def rel(path: str) -> str:
-    """输出里一律用相对 reversing/ 的路径。"""
+    """输出里一律用相对 tc-toolkit/ 的路径。"""
     try:
         r = os.path.relpath(path, ROOT)
     except ValueError:
@@ -158,7 +158,7 @@ def rel(path: str) -> str:
 
 
 def resolve(path: str) -> str:
-    """相对路径按 reversing/ 解释，不受当前目录影响。"""
+    """相对路径按 tc-toolkit/ 解释，不受当前目录影响。"""
     return path if os.path.isabs(path) else os.path.join(ROOT, path)
 
 

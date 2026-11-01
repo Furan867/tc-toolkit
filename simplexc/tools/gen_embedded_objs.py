@@ -81,9 +81,9 @@ def generate(objs_dir: str) -> str:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="build/objs/{entry_shim,rt_min}.o → shell/embedded_objs.cc")
     ap.add_argument("--objs-dir", default=os.path.join(REPO, "build", "objs"),
-                    help="目标文件目录（默认 reversing/build/objs）")
+                    help="目标文件目录（默认 build/objs）")
     ap.add_argument("--out", default=os.path.join(SIMPLEXC, "shell", "embedded_objs.cc"),
-                    help="生成物路径（默认 reversing/simplexc/shell/embedded_objs.cc）")
+                    help="生成物路径（默认 simplexc/shell/embedded_objs.cc）")
     args = ap.parse_args(argv)
 
     text = generate(args.objs_dir)

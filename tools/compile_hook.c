@@ -81,7 +81,7 @@
  * 覆盖 = 只在**测试构建**的命令行上给 -D，正式构建（tools/deploy_compile_hook.py build）
  * 一个都不给，行为与以前完全一致。 */
 #ifndef OUT_DIR
-#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\hook"
+#define OUT_DIR  "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\hook"
 #endif
 
 /* hook.log 的目录：默认就落在捕获目录（OUT_DIR = work/hook）里。
@@ -99,9 +99,9 @@
  * 见 ensure_real。改机器上的路径要改这三行）。
  */
 #ifndef OPT_DIR
-#define OPT_DIR     "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing\\work\\opt"
+#define OPT_DIR     "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit\\work\\opt"
 #endif
-#define OPT_PROJ    "D:\\home\\code-proj\\Agent\\proj\\tc\\reversing"
+#define OPT_PROJ    "D:\\home\\code-proj\\Agent\\proj\\tc\\tc-toolkit"
 #ifndef OPT_SCRIPT
 #define OPT_SCRIPT  OPT_PROJ "\\tools\\optimize_image.py"
 #endif

@@ -13,7 +13,7 @@
    喂 040 得到本次会话那套（`0x210AEE20000`…）—— 这是「按会话提取」的直接证明。
 3. **可复用命令序列（地址变了也不用改）**：
    ```
-   cd reversing
+   cd tc-toolkit
    python simplexc/tools/equiv_build.py --src work/hook/hook_src_040.si \
        --bin work/hook/hook_out_040.bin --entry 0x212F --workdir work/tmp/equiv --mark
    ```

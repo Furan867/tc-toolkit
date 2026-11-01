@@ -26,7 +26,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))          # reversing/
+REPO = os.path.dirname(os.path.dirname(HERE))          # tc-toolkit/
 CMAKE_BUILD = os.path.join(REPO, "build", "cmake")     # = CMakePresets.json 的 binaryDir
 
 # 与 CMakeLists.txt 头部的清单一一对应；其余目标在 CMake 里是 EXCLUDE_FROM_ALL（要显式 --target）。
@@ -70,7 +70,7 @@ def clean() -> int:
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description="simplexc 的一键构建（转调 CMake，产物在 reversing/build/）："
+    ap = argparse.ArgumentParser(description="simplexc 的一键构建（转调 CMake，产物在 build/）："
                                  "all = " + "+".join(ALL))
     ap.add_argument("targets", nargs="*", default=[],
                     help="all | clean | " + " | ".join(TARGETS) + "（默认 all）")

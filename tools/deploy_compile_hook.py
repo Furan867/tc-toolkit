@@ -20,8 +20,7 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
 编译做的事（build）
 ------------------
     转调 `python simplexc/tools/build.py simplexc_dll` —— 转发层现在是「C 壳 + C++ 编译器核心」，
-    构建命令不再是单文件 gcc（要 g++ 链 `-lLLVM-C`）。构建命令只留在 build.py 一处，
-    这里只负责「部署前先把 DLL 重编一份」。
+    构建命令只有 `CMakeLists.txt` 一处定义，本脚本只负责「部署前先把 DLL 重编一份」。
 
     ⚠️ 因为链了 `LLVM-C.dll`，**部署必须把它（build/LLVM-C.dll）一起拷进游戏目录**
     （否则游戏加载时解析依赖失败，接口 §7）。本脚本不替你做这一步。
@@ -95,9 +94,8 @@ def guard():
 def build():
     """编译转发层到 build/compile_hook.dll —— 转调 build.py 的 `simplexc_dll` 目标。
 
-    为什么不再自己拼 gcc 命令：转发层已经变成「C 壳 + C++ 核心 + LLVM-C」，
-    三条命令（生成嵌入目标文件 / 编 C 壳 / g++ 链接）在任何两个地方写都会漂。
-    build.py 才是构建入口（接口 §7）；本脚本只保留部署相关的动作。
+    为什么不再自己拼命令：转发层是「C 壳 + C++ 核心 + LLVM-C」，构建定义（flags、源文件表、
+    objs 依赖）只有 CMakeLists.txt 一处；本脚本只保留部署相关的动作。
     """
     script = os.path.join(ROOT, "simplexc", "tools", "build.py")
     if not os.path.exists(script):

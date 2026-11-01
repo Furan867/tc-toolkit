@@ -26,7 +26,7 @@ README 那段手工流程是七条命令加写死的 `D:/bin/Python313/...`，�
     python simplexc/tools/difftrace/fetch_deps.py --force       # 已存在的全部重建
     python simplexc/tools/difftrace/fetch_deps.py --dest <dir>
 
-成功跑完会打印可直接复制的编译命令与运行期需要的 dll。
+成功跑完会打印「怎么编 difftrace」与运行期需要的 dll。
 """
 from __future__ import annotations
 
@@ -113,10 +113,6 @@ def shown_source(path: Path) -> str:
     """只用于给人看的出处：跑到当前目录之外时给绝对路径，不堆一长串 `../`。"""
     relative = shown_path(path)
     return Path(path).resolve().as_posix() if relative.startswith("..") else relative
-
-
-def shell_arg(text: str) -> str:
-    return f'"{text}"' if " " in text else text
 
 
 def tail(text: str, lines: int = 12) -> str:
@@ -368,29 +364,20 @@ def ensure_capstone(layout: Layout, manifest: dict, force: bool) -> bool:
 
 
 def print_compile_recipe(layout: Layout) -> None:
-    unicorn_include = shell_arg(shown_path(layout.unicorn_include))
-    capstone_include = shell_arg(shown_path(layout.capstone_include))
-    unicorn_lib = shell_arg(shown_path(layout.unicorn_lib))
-    capstone_lib = shell_arg(shown_path(layout.capstone_lib))
-    sources = shell_arg(shown_path(REPO / "simplexc" / "tools" / "difftrace") + "/*.cc")
+    """备齐 SDK 后怎么编 `difftrace` —— 指向 CMake 目标，不再打印一份命令行。"""
     say("")
-    say("编译（路径相对当前目录；在仓库根跑就不用改）:")
-    say("  g++ -O2 -std=c++17 -Wall -Wextra -Wpedantic \\")
-    say(f"    -I{unicorn_include} \\")
-    say(f"    -I{capstone_include} \\")
-    say(f"    {sources} \\")
-    say(f"    -L{unicorn_lib} -lunicorn \\")
-    say(f"    -L{capstone_lib} -lcapstone \\")
-    say("    -o difftrace.exe")
+    say("编译（构建定义只有 CMakeLists.txt 一处，flags 不用手敲）:")
+    say("  python simplexc/tools/build.py difftrace")
+    say("  # 等价：cmake --build build/cmake --target difftrace（无 cache 先 cmake --preset mingw）")
     say("")
-    say("运行前 difftrace.exe 旁边要有这两个 dll（或把这两个目录加进 PATH）:")
+    say("运行前 difftrace.exe 旁边要有这两个 dll（构建时已拷到 build/；或用 PATH）:")
     say(f"  {shown_path(layout.unicorn_lib / 'unicorn.dll')}")
     say(f"  {shown_path(layout.capstone_lib / 'capstone.dll')}")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="备齐 difftrace 的 Unicorn / Capstone C SDK，并打印编译命令。"
+        description="备齐 difftrace 的 Unicorn / Capstone C SDK，并指明怎么编 difftrace。"
     )
     parser.add_argument(
         "--dest",

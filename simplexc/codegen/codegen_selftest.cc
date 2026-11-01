@@ -55,7 +55,7 @@ void bad(const std::string& what) {
     g_failed++;
 }
 
-/* 用例目录从 `__FILE__` 推（`build.py` 在仓库根用相对路径编这个文件）：既不依赖 cwd，
+/* 用例目录从 `__FILE__` 推（相对还是绝对由构建决定）：既不依赖 cwd，
  * 打印出来的重生成命令也能原样粘回仓库根。 */
 std::filesystem::path cases_dir() {
     std::string self = __FILE__;

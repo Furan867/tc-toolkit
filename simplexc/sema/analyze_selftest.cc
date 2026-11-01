@@ -70,9 +70,8 @@ void bad(const std::string& what) {
     g_failed++;
 }
 
-/* 用例目录从 `__FILE__` 推：build.py 在仓库根用相对路径编这个文件，所以 `__FILE__` =
- * `simplexc/sema/analyze_selftest.cc`，拼出来既是仓库根下的路径、也是打印重生成命令时
- * 能原样粘回去的写法（不用传参、不怕 cwd）。 */
+/* 用例目录从 `__FILE__` 推：拼出来是仓库根下的路径，打印重生成命令时能原样粘回去
+ * （不用传参、不怕 cwd）。`__FILE__` 是相对还是绝对由构建决定（CMake 传绝对路径）。 */
 std::filesystem::path cases_dir() {
     std::string self = __FILE__;
     const std::size_t slash = self.find_last_of("/\\");

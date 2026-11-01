@@ -47,21 +47,21 @@
 
 两份壳怎么编
 ------------
+两份都是 **CMake 目标**（`CMakeLists.txt` 的「离线判据的两份壳」一节）：判据不再自带
+编译命令行 —— 两份壳必须与交付物同一套核心，而 flags / 源文件表只有一处定义时它才成立。
+唯一从这里传过去的是 `-DSIMPLEXC_HOOK_OFFLINE_WORK=<本目录>`：那五个路径宏由 CMake 用它算。
+
 - `base`（改动前）：`git show <BASELINE_REF>:tools/compile_hook.c` + 只把 5 个路径宏包一层
-  `#ifndef`（值逐字符不变）编成第二份 dll。测试构建要换路径，而基线壳把路径写死；只包一层
-  `#ifndef` 不可能改变任何运行期行为，所以它仍是「改动前」的语义。
+  `#ifndef`（值逐字符不变）编成第二份 dll（目标 `hook_offline_base`）。测试构建要换路径，
+  而基线壳把路径写死；只包一层 `#ifndef` 不可能改变任何运行期行为，所以它仍是「改动前」的语义。
   **只用于 reference 实现那一趟的 `refcmp`**（`case_refcmp` 里 `set_mode("base", None)`）：
   那版壳的 ours 段读预编译 blob，`build/blob_empty.bin` 与 `OURS_BLOB` 路径都已退役 ——
   拿它跑 ours case 无从判起。
-  **gcc 单文件编**：基线壳不引用 `simplexc_compile`，不需要 C++ 运行库。
-- `new`（当前壳）：**与 `python simplexc/tools/build.py simplexc_dll` 同一条命令** ——
-  `gcc -c -O2 <壳> -o <shell.o>`，再 `g++ -shared -O2 -static -o <dll> <shell.o> \
-  <核心源文件…> -I simplexc -I build/llvm/include -L build/llvm/lib -lLLVM-C`。
-  源文件表直接取 `build.py` 的 `CORE_SOURCES`（不另抄一份 —— 判据编出来的必须是交付物的
-  同一套核心）；路径用**相对写法 + cwd=仓库根**，这是同一条命令的必要条件
-  （`build.py` 的 docstring 第 1 条：ld 的输出随路径写法变）。
-- 路径宏（`OUT_DIR` / `OPT_DIR` / `HOOK_LOG_DIR` / `OPT_INI` / `OPT_SCRIPT`）逐个 `-D` 给
-  **壳**的编译（case 之间的隔离全靠它们）；链接那一步不需要它们。
+  单文件 C：基线壳不引用 `simplexc_compile`，不需要 C++ 运行库。
+- `new`（当前壳，目标 `hook_offline_new`）：源文件表与产品 `hook` **同一份** —— 判据编出来的
+  必须是交付物的同一套核心。
+- 路径宏（`OUT_DIR` / `OPT_DIR` / `HOOK_LOG_DIR` / `OPT_INI` / `OPT_SCRIPT`）只给**壳**的编译
+  （case 之间的隔离全靠它们）；链接那一步不需要它们。
 - `LLVM-C.dll` 拷进 `bin/`：ctypes 用 LOAD_WITH_ALTERED_SEARCH_PATH 加载 dll，依赖从
   **被加载 dll 自己的目录**开始找 —— `compile_real.dll` 的 libgcc / libwinpthread 现在就
   靠这个机制从 `bin/` 里被找到，新壳的 LLVM 依赖同理。
@@ -71,7 +71,7 @@
 退化成「自己比自己」—— 别把 False 当成「参考不回归」的证据。
 
 ⚠ `baseline_differs` **不是**通过条件（一个 case 都不读它，只记进 facts 与 check.py 的
-摘要）：两份 dll 用**不同形状**的命令编（单文件 gcc vs gcc+g++ 链核心），`refcmp` 判的是
+摘要）：两份 dll 用**不同形状**的目标编（单文件 C vs C+C++ 链核心），`refcmp` 判的是
 两者在 reference 模式下转发给 `compile_real.dll` 的产物，与这个标志无关。
 
 ⚠ 不碰 `work/hook/` 与 `work/opt/`：路径宏全部 `-D` 到 `work/tmp/hook_offline/` 下。
@@ -117,11 +117,8 @@ HOOK_SRC = os.path.join(ROOT, "tools", "compile_hook.c")
 # 「改动前」—— 它单文件 gcc 编得动。取不到就报错、**不退回 HEAD**：HEAD 已是新壳，退回等于
 # 偷偷把 base 换成「链核心的壳」，「编不动」会被误读成「壳坏了」。
 BASELINE_COMMIT = "451e1e2"              # 把 ours 段改成进程内调编译核心的那一笔
-BASELINE_REF = f"{BASELINE_COMMIT}^"     # 它的父 = 单文件 gcc 编得动的「改动前」壳
+BASELINE_REF = f"{BASELINE_COMMIT}^"     # 它的父 = 单文件编得动的「改动前」壳
 BASELINE_SRC = f"{BASELINE_REF}:tools/compile_hook.c"
-# 新壳的 C 壳目标文件：**不能**写成 build/objs/compile_hook_shell.o —— 那边的 -D 是产线的值，
-# 覆盖掉它等于把交付物的中间物换成测试构建的。
-SHELL_OBJ = os.path.join(WORK, "compile_hook_shell.o")
 SRC = os.path.join(SIMPLEXC, "corpus", "src", "176.si")
 
 # 用户源码错的最小 `.si`（**内联**，不进 `corpus/src/`：语料目录有 manifest，多一个文件会打破
@@ -143,7 +140,6 @@ USER_SYNTAX_ERR_SRC = b'main: while true {\n    let x = (1 + \n}\n'
 # 为什么是 176.si（这里的 ours 系 case 只要「一份能编过的真源码」）：它是当前 98 份里逐 tick 全等的
 # 三份之一。换掉旧值 058.si 是因为它现在编不过 —— 那是 lowering 的已知缺口（由 `tools/m5/coverage.py`
 # 的覆盖表跟踪），不是壳的回归；判据入口红着会淹没真信号。
-GEN_EMBEDDED = os.path.join(HERE, "gen_embedded_objs.py")
 GAME = r"F:\opt\SteamLibrary\steamapps\common\Turing Complete"
 
 MAX_PRODUCT_MB = 64               # 产物长度的合理上限（与壳的 dump() 上限一致）；超过就当没拿到产物
@@ -206,10 +202,10 @@ class BuildError(RuntimeError):
 
 
 def _load_build():
-    """加载同目录的 `build.py` —— 构建命令只从那里取一个来源。
+    """加载同目录的 `build.py` —— 它现在是唯一的构建入口（configure + `cmake --build --target`）。
 
-    `CORE_SOURCES` / `REL` / `tool` / LLVM 路径都在 `build.py` 里定义一次；判据再抄一份
-    必然会漂移（而判据编出来的 dll 必须是交付物的同一套核心）。
+    构建定义（flags、源文件表、测试壳的路径宏）全在 `CMakeLists.txt`；`build.py` 只提供
+    「configure 怎么发、target 怎么建」这两条命令，判据不再自己拼一份。
     按路径 importlib 加载而不是 `import build`：不依赖 sys.path 恰好有本目录
     （`check.py` 也是用同样的写法加载本文件），也不往 sys.path 里塞东西。
     """
@@ -229,21 +225,6 @@ def vdirs(v):
             "ini": os.path.join(root, "opt.ini")}
 
 
-def defs(v):
-    d = vdirs(v)
-    # 为什么没有再 -DOURS_BLOB：新版壳一个 blob 都不读（OURS_BLOB 宏已删）；
-    # base 那份只在 reference 模式下被驱动，也用不着。
-    return [
-        f'-DOUT_DIR="{d["out"].replace(chr(92), "/")}"',
-        f'-DOPT_DIR="{d["opt"].replace(chr(92), "/")}"',
-        # 工作区壳默认把 hook.log 写进 OUT_DIR；pin 到 opt/ 才与 snapshot() 读的位置一致
-        # （基线壳本来就写 OPT_DIR = opt/，多一个 -D 对它无害）。
-        f'-DHOOK_LOG_DIR="{d["opt"].replace(chr(92), "/")}"',
-        f'-DOPT_INI="{d["ini"].replace(chr(92), "/")}"',
-        f'-DOPT_SCRIPT="{STUB.replace(chr(92), "/")}"',
-    ]
-
-
 def baseline_source_bytes():
     """基线壳（`BASELINE_SRC`）的原字节。"""
     try:
@@ -258,7 +239,7 @@ def baseline_source_bytes():
 def baseline_source_text():
     """基线壳 + **纯机械**的路径宏 #ifndef 化（默认值逐字符不变）。"""
     text = baseline_source_bytes().decode("utf-8")
-    # 为什么是这 5 个：defs() 的 -D 里只要挡 OUT_DIR / OPT_DIR / OPT_INI / OPT_SCRIPT（HOOK_LOG_DIR
+    # 为什么是这 5 个：CMake 里那份路径宏只要挡 OUT_DIR / OPT_DIR / OPT_INI / OPT_SCRIPT（HOOK_LOG_DIR
     # 在基线源里本来就带 #ifndef），第 5 个 OURS_BLOB 是基线壳自己的路径宏（没有 -D）。挡不住的
     # 后果：那份 dll 按写死的默认值往 work/hook/ 的活数据里写（加载时还会清空它）。
     names = {"OUT_DIR", "OPT_DIR", "OPT_SCRIPT", "OPT_INI", "OURS_BLOB"}
@@ -296,29 +277,23 @@ def baseline_info():
 
 
 def build(verbose=True):
-    """准备目录、落替身改写器、生成 embedded_objs.cc、编两份 dll。
+    """准备目录、落替身改写器与基线壳源码，然后让 CMake 编出两份 dll。
 
-    返回结构化结果（ok / 命令 / rc / 基线信息）。`commands` 与 `rc` **每个 variant 一项**
-    （新壳那项包含生成 embedded_objs.cc 与 gcc -c 两步，两步都 0 才算 0）。
+    构建定义全在 `CMakeLists.txt`：目标 `hook_offline_new` / `hook_offline_base` 与产品 `hook`
+    共用同一套核心源文件表，差的是那五个路径宏；宏的值由 CMake 从 `SIMPLEXC_HOOK_OFFLINE_WORK`
+    算出来，所以这里只传「工作目录在哪」这一个值。
+    返回结构化结果（ok / 命令 / rc / 基线信息）。
     """
     t0 = time.perf_counter()
-    bm = _load_build()
-    cc = bm.tool("gcc.exe", "W64DEVKIT_CC")
-    cxx = bm.tool("g++.exe", "W64DEVKIT_CXX")
-    for path, what, env in ((cc, "gcc", "W64DEVKIT_CC"), (cxx, "g++", "W64DEVKIT_CXX")):
-        if not os.path.isfile(path):
-            raise BuildError(f"找不到 {what}：{path}（用 {env} 或 W64DEVKIT_BIN 覆盖）")
-    llvm_lib = os.path.join(bm.LLVM_LIB, "libLLVM-C.a")
+    bm = _load_build()              # build.py：唯一的构建入口（configure + `cmake --build --target`）
+    llvm_lib = os.path.join(ROOT, "build", "llvm", "lib", "libLLVM-C.a")
     if not os.path.isfile(llvm_lib):
         raise BuildError(f"找不到 {llvm_lib} —— 新壳要链 LLVM-C（build/llvm 不进 git）")
-    llvm_dll = next((p for p in (os.path.join(bm.LLVM_BIN, "LLVM-C.dll"),
-                                 os.path.join(bm.BUILD, "LLVM-C.dll"))
+    llvm_dll = next((p for p in (os.path.join(ROOT, "build", "llvm", "bin", "LLVM-C.dll"),
+                                 os.path.join(ROOT, "build", "LLVM-C.dll"))
                      if os.path.isfile(p)), None)
     if llvm_dll is None:
         raise BuildError("找不到 LLVM-C.dll（build/llvm/bin/ 或 build/）—— 新壳加载时会缺依赖")
-    for rel in bm.CORE_SOURCES:
-        if not os.path.isfile(os.path.join(ROOT, rel)):
-            raise BuildError(f"找不到 {rel} —— 先跑 python simplexc/tools/build.py objs")
     for v in VARIANTS:
         d = vdirs(v)
         for key in ("out", "opt"):
@@ -354,37 +329,25 @@ def build(verbose=True):
     except OSError as e:
         raise BuildError(f"写不了基线壳源码 {BASE_SRC}：{e}（基线 dll 编不出来，refcmp 判不了）") from e
 
-    # new 的命令行与 build.py: step_simplexc_dll **同形**（源文件表取 bm.CORE_SOURCES，
-    # 相对写法 + cwd=仓库根；`-o` 那个 dll 用绝对路径）；额外加测试用的路径宏。
-    new_cmds = [
-        [sys.executable, GEN_EMBEDDED],
-        [cc, "-c", "-O2", "tools/compile_hook.c", "-o", bm.REL(SHELL_OBJ)] + defs("new"),
-        [cxx, "-shared", "-O2", "-static", "-o", VARIANTS["new"]["dll"],
-         bm.REL(SHELL_OBJ),
-         "simplexc/shell/simplexc_core.cc",
-         "simplexc/shell/embedded_objs.cc",
-         *bm.CORE_SOURCES,
-         "-I", "simplexc", "-I", bm.REL(bm.LLVM_INC),
-         "-L", bm.REL(bm.LLVM_LIB), "-lLLVM-C"],
+    # configure 每次都跑：工作目录是 cache 变量，换了值必须让它追上（跑一次约 1 s）。
+    cmds = [
+        bm.configure_command([f"-DSIMPLEXC_HOOK_OFFLINE_WORK={WORK.replace(chr(92), '/')}"]),
+        bm.build_command(["hook_offline_new", "hook_offline_base"]),
     ]
-    # base（`BASELINE_REF` 的壳）不引用核心：仍是 gcc 单文件编，不需要 C++ 运行库。
-    base_cmds = [[cc, "-shared", "-O2", "-static", "-o", VARIANTS["base"]["dll"]]
-                 + defs("base") + [BASE_SRC]]
-
-    commands, rcs = [], []
-    for group in (new_cmds, base_cmds):
-        group_rcs = []
-        for cmd in group:
-            if verbose:
-                print("$ " + " ".join(cmd), flush=True)
-            rc = subprocess.call(cmd, cwd=ROOT)
-            if verbose:
-                print(f"  rc={rc}", flush=True)
-            group_rcs.append(rc)
-        commands.append(group)
-        rcs.append(next((rc for rc in group_rcs if rc != 0), 0))
-    res = {"ok": all(rc == 0 for rc in rcs), "seconds": round(time.perf_counter() - t0, 3),
-           "commands": commands, "rc": rcs,
+    rcs = []
+    for cmd in cmds:
+        if verbose:
+            print("$ " + " ".join(cmd), flush=True)
+        rc = subprocess.call(cmd, cwd=ROOT)
+        if verbose:
+            print(f"  rc={rc}", flush=True)
+        rcs.append(rc)
+    missing = [v for v in VARIANTS if not os.path.isfile(VARIANTS[v]["dll"])]
+    if missing and verbose:
+        print("构建报成功但没有产物：" + "、".join(VARIANTS[v]["dll"] for v in missing), flush=True)
+    res = {"ok": all(rc == 0 for rc in rcs) and not missing,
+           "seconds": round(time.perf_counter() - t0, 3),
+           "commands": cmds, "rc": rcs,
            "dll": {v: VARIANTS[v]["dll"] for v in VARIANTS},
            "llvm_dll": llvm_dll,
            "workdir": WORK}

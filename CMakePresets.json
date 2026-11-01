@@ -14,7 +14,7 @@
     {
       "name": "mingw",
       "configurePreset": "mingw",
-      "targets": ["simplexc_cli", "hook"]
+      "description": "不指定 targets = CMake 的 ALL 组（= 旧 build.py 的 all，8 个目标）"
     }
   ]
 }

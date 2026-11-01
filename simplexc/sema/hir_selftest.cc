@@ -146,8 +146,8 @@ sema::Hir sample() {
  * 抄错一个空格之后判据判的是手抄的水平。它就是 `--dump-only` 的输出，重新生成一行命令
  * （`testdata/README.md`）。
  *
- * 路径从 `__FILE__` 推：build.py 在仓库根用相对路径编这个文件，所以 `__FILE__` =
- * `simplexc/sema/hir_selftest.cc`，拼出来就是仓库根下的 golden，不需要传参、也不怕 cwd。 */
+ * 路径从 `__FILE__` 推：拼出来就是仓库根下的 golden，不需要传参、也不怕 cwd（`__FILE__`
+ * 是相对还是绝对由构建决定，CMake 传绝对路径）。 */
 std::string golden_path() {
     std::string self = __FILE__;
     const std::size_t slash = self.find_last_of("/\\");

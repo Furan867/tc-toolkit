@@ -1,25 +1,44 @@
-# simplexc 的 CMake 构建（阶段 1：只做 `simplexc_cli` 与 `hook` 两个目标）。
+# simplexc 的构建**唯一定义**：目标、源文件表、flags 全在这里。
+# `simplexc/tools/build.py` 只是本文件的一层薄壳（无 cache 时 configure，再 `cmake --build --target ...`），
+# 它不再持有任何编译命令行 —— 改 flags 只改这里，别处没有第二份。
 #
-# flags 的权威来源仍是 `simplexc/tools/build.py`（每条 g++ 命令都是从既有产物反推确认过的，
-# 见 docs/notes/2026-10-17-build-script.md），这里逐条搬；阶段 1 不动那支脚本，阶段 2 再让它转调。
+# flags 的来历：每条都是从既有产物**反推确认**过的（见 docs/notes/2026-10-17-build-script.md），
+# 逐条搬进来时一个字符都不改。build/objs/*.o 与旧构建逐字节相同（会被原样嵌进 DLL），
+# 但 exe/dll **不是**：CMake 每次都会额外传 `-Wl,--out-implib` 与一票默认 Windows 库，ld 因此
+# 把 .rdata 挪了几十字节；llvm_prog / codegen_selftest 的 LLVM-C 导入库也是按绝对路径给的，
+# 不是旧命令的 `-L` + `-l`。判据不靠字节比（check.py 6 步 / blob_baseline 98 份 / hook_offline 11 case）。
 #
 # 用法
 # ----
 #   cmake --preset mingw                             # = Ninja + cmake/toolchain-mingw-w64devkit.cmake + -B build/cmake
-#   cmake --build build/cmake --target hook           # 等价于 build.py hook
-#   cmake --build build/cmake --target simplexc_cli hook
+#   cmake --build build/cmake                        # = 旧 build.py 的 `all`（8 个目标）
+#   cmake --build build/cmake --target hook           # = 旧 build.py hook（`simplexc_dll` 是同一个目标的别名）
+#   cmake --build build/cmake --target spike          # 空程序 blob（依赖 objs + tcblob，自动补做）
 #
 # 二进制目录必须在外部指定（约定 `-B build/cmake`）：`build/` 里放着 LLVM 资产（build/llvm）与
 # 产物基线，中间文件不能落在那儿 —— 本文件末尾会拒绝 `-B build`。
+#
+# 哪些目标在默认构建里（= 旧 build.py 的 `all`）
+# ------------------------------------------------
+# 在：`objs` / `tcblob` / `llvm_prog` / `hook` / `ast_dump` / `hir_selftest` /
+#     `analyze_selftest` / `codegen_selftest`。
+# 不在（`EXCLUDE_FROM_ALL`，要显式 `--target`）：`simplexc_cli`、`core_selftest`、`spike`、
+#     `difftrace`、`difftrace_selftest`、`asm_x64_selftest`。理由见各自小节。
 cmake_minimum_required(VERSION 3.20)
 
 # ASM：`simplexc/shell/entry_shim.S` 走预处理汇编（.S 要过 cpp，所以是 ASM 而不是 ASM_NASM）。
 project(simplexc LANGUAGES C CXX ASM)
 
+# 全部 C++ 目标都是 C++17 且不放开扩展（= 命令行上的 -std=c++17）。写在全局而不是逐个目标上：
+# 这里没有任何一个目标要别样标准，逐个写只是多几处会漂的重复。
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 set(SIMPLEXC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(SIMPLEXC_DIR "${SIMPLEXC_ROOT}/simplexc")
 # 产物目录 = 外部契约：check.py / m5/batch.py / blob_baseline.py / gen_embedded_objs.py 都按
-# `build/<名字>` 找东西（build.py 的产物也在这里），所以路径不能改。
+# `build/<名字>` 找东西，所以路径不能改。
 set(SIMPLEXC_BUILD "${SIMPLEXC_ROOT}/build")
 set(SIMPLEXC_OBJ "${SIMPLEXC_BUILD}/objs")
 
@@ -33,14 +52,14 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_BUILD}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${SIMPLEXC_BUILD}")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)   # gen_embedded_objs.py
-list(APPEND CMAKE_MODULE_PATH "${SIMPLEXC_ROOT}/cmake")  # FindLLVMC.cmake
+list(APPEND CMAKE_MODULE_PATH "${SIMPLEXC_ROOT}/cmake")  # FindLLVMC / FindUnicorn / FindCapstone
 find_package(LLVMC REQUIRED)
 
 # ---------------------------------------------------------------- 产品核心的源文件表
 #
-# 与 build.py 的 CORE_SOURCES **逐项对应、顺序相同**（`build/objs/assemble.o` 那一项不在表里：
-# 它由下面的 `objs` 目标出，见 OBJ_RULES）。DLL 与将来的 `core_selftest` 必须共用这一处 ——
-# 表不一样时，判据判的可能是别的东西（build.py 里那段注释强调的就是这件事）。
+# DLL 与 `core_selftest` / `simplexc_cli` 共用这一处（`build/objs/assemble.o` 不在表里：
+# 它由下面的 `objs` 目标出，见 OBJ_RULES）。共用不是风格问题：表不一样时，判据判的可能是
+# 别的东西 —— 判据要判的就是交付物。
 set(SIMPLEXC_CORE_SOURCES
   simplexc/frontend/decls.cc
   simplexc/frontend/lexer.cc
@@ -60,12 +79,12 @@ set(SIMPLEXC_CORE_SOURCES
 # ---------------------------------------------------------------- build/objs（四个 COFF）
 #
 # 为什么用 add_custom_command 而不是 add_library(OBJECT)：这四条产物路径是外部契约
-# （`entry_shim.o` / `rt_min.o` 会被 gen_embedded_objs.py 原样嵌进 DLL，其余两个是 build.py
-# 的同名产物），而 CMake 的 OBJECT 库只能把 .o 放在自己的中间目录里。
+# （`entry_shim.o` / `rt_min.o` 会被 gen_embedded_objs.py 原样嵌进 DLL，其余两个是 CLI / spike
+# 的输入），而 CMake 的 OBJECT 库只能把 .o 放在自己的中间目录里。
 #
-# 命令与 build.py 的 step_objs 逐字符相同（同样的 -std/-O2、同样的相对写法），所以这四个 .o
-# 与 build.py 编出来的逐字节相同 —— 嵌进 DLL 的字节一致，产物才有可比性。
-# `-o` 必须是绝对路径（CMake 的 OUTPUT 是绝对的），这不影响 .o 的字节：COFF 不记输出路径。
+# 四个 .o 与旧构建编出来的逐字节相同（同样的 -std/-O2）：嵌进 DLL 的字节一致，
+# 产物才有可比性。`-o` 必须是绝对路径（CMake 的 OUTPUT 是绝对的），这不影响 .o 的字节：
+# COFF 不记输出路径。
 function(simplexc_add_object name source)
   add_custom_command(
     OUTPUT "${SIMPLEXC_OBJ}/${name}.o"
@@ -84,30 +103,31 @@ simplexc_add_object(entry_shim simplexc/shell/entry_shim.S)          # .S 不加
 simplexc_add_object(rt_min     simplexc/runtime/rt_min.cc   -std=c++17 -O2)
 simplexc_add_object(prog_empty simplexc/cli/prog_empty.cc   -std=c++17 -O2)
 
-add_custom_target(objs DEPENDS ${SIMPLEXC_OBJ_OUTPUTS})
+# ALL：默认构建要的正是这四个 .o（`prog_empty.o` 只有 spike 用，旧 build.py 的 `all` 里也在）。
+add_custom_target(objs ALL DEPENDS ${SIMPLEXC_OBJ_OUTPUTS})
 
 set_source_files_properties("${SIMPLEXC_OBJ}/assemble.o"
   PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
 
 # ---------------------------------------------------------------- simplexc_cli
 #
-# build.py step_simplexc_cli：`g++ -std=c++17 -O2 -I simplexc -I <llvm>/include
-#   simplexc/cli/simplexc_cli.cc *CORE_SOURCES -L <llvm>/lib -lLLVM-C -o build/simplexc_cli.exe`
-# 没有 -static（与 hook 不同），-lLLVM-C 压在源文件之后 —— CMake 自己就按这个顺序排。
+# flags 逐条照搬旧构建（`-std=c++17 -O2 -I simplexc -I <llvm>/include`、链 LLVM-C、无 -static），
+# 来历见 docs/notes/2026-10-17-build-script.md —— 产物已与那个基线比过。
+# 没有 -static（与 hook 不同）；LLVM-C 的导入库压在源文件之后（CMake 自己就按这个顺序排）。
+#
+# EXCLUDE_FROM_ALL：旧 build.py 的 `all` 里没有它（见 docs/status.md「环境」一节），
+# 默认构建不该为它变慢。
 add_executable(simplexc_cli
   simplexc/cli/simplexc_cli.cc
   ${SIMPLEXC_CORE_SOURCES}
   "${SIMPLEXC_OBJ}/assemble.o")
-set_target_properties(simplexc_cli PROPERTIES
-  CXX_STANDARD 17
-  CXX_STANDARD_REQUIRED ON
-  CXX_EXTENSIONS OFF)                       # → -std=c++17，与 build.py 这条命令一致
+set_target_properties(simplexc_cli PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(simplexc_cli PRIVATE "${SIMPLEXC_DIR}")
 target_compile_options(simplexc_cli PRIVATE -O2)
 target_link_libraries(simplexc_cli PRIVATE LLVMC::LLVMC)
 
 # Windows 先从 exe 所在目录找依赖 DLL（再看 PATH）→ 把 LLVM-C.dll 放到 build/ 旁边，
-# 判据（check.py 等）就不用为这一步改 PATH。build.py 的同名步骤做的是同一件事。
+# 判据（check.py 等）就不用为这一步改 PATH。
 if(LLVMC_RUNTIME_DLL)
   add_custom_command(TARGET simplexc_cli POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LLVMC_RUNTIME_DLL}"
@@ -116,11 +136,31 @@ if(LLVMC_RUNTIME_DLL)
     VERBATIM)
 endif()
 
+# ---------------------------------------------------------------- tcblob（装配器 CLI）
+# 源文件顺序 = 旧命令的链接顺序（tcblob.cc 在前、assemble.o 在后）：.o 的拼接顺序会改变
+# 段布局，换了顺序产物就不再与基线逐字节相同。
+add_executable(tcblob
+  simplexc/cli/tcblob.cc
+  "${SIMPLEXC_OBJ}/assemble.o")
+# -static：w64devkit 默认就是静态链 libstdc++/libgcc（实测加不加产物逐字节相同），
+# 显式写上是为了换工具链时不悄悄多出 DLL 依赖。
+target_compile_options(tcblob PRIVATE -O2)
+target_link_options(tcblob PRIVATE -static)
+
+# ---------------------------------------------------------------- llvm_prog（LLVM-C 生成程序根）
+#
+# flags 同旧构建：`-O2` + `-static`，链 LLVM-C。运行期要 PATH 里有 build/llvm/bin 才找得到
+# LLVM-C.dll（本目标不拷那份 DLL：拷了也只对 simplexc_cli 那条判据有用）。
+add_executable(llvm_prog simplexc/cli/llvm_prog.cc)
+target_compile_options(llvm_prog PRIVATE -O2)
+target_link_options(llvm_prog PRIVATE -static)
+target_link_libraries(llvm_prog PRIVATE LLVMC::LLVMC)
+
 # ---------------------------------------------------------------- hook（= build/compile_hook.dll）
 #
 # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
-# 壳必须是 C（交给 g++ 会把 .c 当 C++ 编），核心与链接要用 g++（要 C++ 运行库）—— CMake 按扩展名分。
-# 目标名与 build.py 一致：`cmake --build build/cmake --target hook` ≡ `build.py hook`。
+# 壳必须是 C（交给 C++ 编译器会把 .c 当 C++ 编），核心与链接要用 C++ 编译器（要 C++ 运行库）——
+# CMake 按扩展名分。
 set(SIMPLEXC_EMBEDDED_OBJS "${SIMPLEXC_DIR}/shell/embedded_objs.cc")
 
 # 构建期把两个装配用的 COFF（entry_shim.o / rt_min.o）变成字节数组：游戏进程里没有
@@ -142,13 +182,235 @@ add_library(hook SHARED
 # 产物名是 compile_hook.dll（不是 libhook.dll）：部署入口与游戏按这个名字找它。
 set_target_properties(hook PROPERTIES
   PREFIX ""
-  OUTPUT_NAME "compile_hook"
-  CXX_STANDARD 17
-  CXX_STANDARD_REQUIRED ON
-  CXX_EXTENSIONS OFF)
+  OUTPUT_NAME "compile_hook")
 target_include_directories(hook PRIVATE "${SIMPLEXC_DIR}")
 target_compile_options(hook PRIVATE -O2)
 # -static：把 libstdc++/libgcc/libwinpthread 一起包进来，否则游戏目录还要多拷三个 DLL
-# （build.py 同一条命令上的 -O2 也照搬：无 LTO 时它不起作用，留着只是免得两条路径的 flags 分叉）。
+# （旧命令行上的 -O2 链接选项也照搬：无 LTO 时它不起作用，留着只是免得与旧产物分叉）。
 target_link_options(hook PRIVATE -O2 -static)
 target_link_libraries(hook PRIVATE LLVMC::LLVMC)
+
+# `simplexc_dll` 是**同一个**目标的另一个名字（与其它 simplexc 目标对齐；部署入口转调它）。
+# 别名不做成第二个库：两份产物只会漂。
+add_custom_target(simplexc_dll DEPENDS hook)
+
+# ---------------------------------------------------------------- core_selftest（判据入口）
+#
+# 判据入口（不进 DLL）：直接把源码字节喂给 `simplexc_compile` 并落盘，供宿主跑。
+# 与 DLL 同一套核心、同一套源文件表 —— 否则判据判的不是交付物。
+# 没有 -static（与 hook 的差别保持原样）。EXCLUDE_FROM_ALL：不在 `all` 里。
+add_executable(core_selftest
+  simplexc/shell/core_selftest.cc
+  simplexc/shell/simplexc_core.cc
+  "${SIMPLEXC_EMBEDDED_OBJS}"
+  ${SIMPLEXC_CORE_SOURCES}
+  "${SIMPLEXC_OBJ}/assemble.o")
+set_target_properties(core_selftest PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_include_directories(core_selftest PRIVATE "${SIMPLEXC_DIR}")
+target_compile_options(core_selftest PRIVATE -O2)
+target_link_libraries(core_selftest PRIVATE LLVMC::LLVMC)
+
+# ---------------------------------------------------------------- hir_selftest
+#
+# sema 的自检入口（不进产品路径）：只要 sema 自己的文件，不链前端、不链 LLVM ——
+# 它的 golden 是 `simplexc/sema/testdata/hir_sample.dump.txt`，路径由 `__FILE__` 推出，
+# 所以 `-I simplexc/sema` 与源文件路径都不能省（见 sema/hir_selftest.cc 的 golden_path）。
+add_executable(hir_selftest
+  simplexc/sema/hir_selftest.cc
+  simplexc/sema/hir_dump.cc
+  simplexc/sema/types.cc)
+target_include_directories(hir_selftest PRIVATE "${SIMPLEXC_DIR}/sema")
+target_compile_options(hir_selftest PRIVATE -O2)
+target_link_options(hir_selftest PRIVATE -static)
+
+# ---------------------------------------------------------------- analyze_selftest
+#
+# sema 的第二个判据入口：`.si` → 前端 AST → `sema::analyze` → dump，与 `sema/testdata/cases/*.dump`
+# 逐字比 + 六条不变量。**不链 LLVM**：sema 里本来就没有 LLVM，判据要把这件事当场证明。
+# 链前端是因为输入是源码；`.si` → AST 那一段粘合属于判据侧（见 analyze_selftest.cc 头注释）。
+add_executable(analyze_selftest
+  simplexc/sema/analyze_selftest.cc
+  simplexc/sema/analyze.cc
+  simplexc/sema/layout.cc
+  simplexc/sema/hir_dump.cc
+  simplexc/sema/types.cc
+  simplexc/frontend/decls.cc
+  simplexc/frontend/lexer.cc
+  simplexc/frontend/parser.cc
+  simplexc/frontend/frontend.cc)
+target_include_directories(analyze_selftest PRIVATE "${SIMPLEXC_DIR}/sema")
+target_compile_options(analyze_selftest PRIVATE -O2)
+target_link_options(analyze_selftest PRIVATE -static)
+
+# ---------------------------------------------------------------- ast_dump（前端的判据入口）
+#
+# 前端（simplexc/frontend/*.cc）的 C++17 实现 + 它自己的调试 main：不依赖 LLVM，
+# 也不链进产品 DLL（判据入口，不是产线）。
+add_executable(ast_dump
+  simplexc/frontend/ast_dump_main.cc
+  simplexc/frontend/decls.cc
+  simplexc/frontend/lexer.cc
+  simplexc/frontend/parser.cc
+  simplexc/frontend/frontend.cc
+  simplexc/frontend/ast_dump.cc
+  simplexc/frontend/json.cc)
+target_compile_options(ast_dump PRIVATE -O2)
+target_link_options(ast_dump PRIVATE -static)
+
+# ---------------------------------------------------------------- codegen_selftest
+#
+# codegen 的 L4 判据入口：`.si` 走产品链（Frontend → build_module → analyze → `codegen::Program`）
+# 出 IR，再逐条查 `codegen/testdata/cases/*.irkeys`。要链 LLVM 是因为被测对象
+# （codegen.cc + llvm_ffi.cc）本来就在 LLVM 上；不用 assemble.o —— 它只出 IR，不出产物
+# （产物那一路由 blob_baseline 判）。
+add_executable(codegen_selftest
+  simplexc/codegen/codegen_selftest.cc
+  simplexc/frontend/decls.cc
+  simplexc/frontend/lexer.cc
+  simplexc/frontend/parser.cc
+  simplexc/frontend/frontend.cc
+  simplexc/codegen/module_build.cc
+  simplexc/codegen/codegen.cc
+  simplexc/codegen/asm_x64.cc
+  simplexc/codegen/llvm_ffi.cc
+  simplexc/sema/analyze.cc
+  simplexc/sema/layout.cc
+  simplexc/sema/types.cc)
+target_include_directories(codegen_selftest PRIVATE "${SIMPLEXC_DIR}")
+target_compile_options(codegen_selftest PRIVATE -O2)
+target_link_options(codegen_selftest PRIVATE -static)
+target_link_libraries(codegen_selftest PRIVATE LLVMC::LLVMC)
+
+# ---------------------------------------------------------------- spike（空程序 blob）
+#
+# 「空程序」blob —— 只证明链路通，**不能拿进游戏**（会让游戏在下一次编译请求时 abort，见
+# docs/pitfalls.md）。现在没有判据读它：新版壳在进程内编源码，基线壳只在 reference 模式下被驱动。
+# --obj 顺序 = 链接顺序；entry 是 shim 的符号。cwd = 仓库根、输出路径写相对 —— 与旧命令一致，
+# blob 的 sha256 才是可比的。
+add_custom_target(spike
+  COMMAND "$<TARGET_FILE:tcblob>"
+          --obj build/objs/rt_min.o --obj build/objs/entry_shim.o
+          --obj build/objs/prog_empty.o
+          --entry __tc_entry --out build/blob_empty.bin
+  DEPENDS tcblob objs
+  WORKING_DIRECTORY "${SIMPLEXC_ROOT}"
+  COMMENT "tcblob 装出 build/blob_empty.bin（空程序，只证明链路通）"
+  VERBATIM)
+
+# ---------------------------------------------------------------- difftrace（判据工具，不在默认构建里）
+#
+# 要 Unicorn / Capstone 的 C SDK（work/tools/difftrace-deps/，不进 git，由 fetch_deps.py 备齐）。
+# 缺 SDK 只让这一个目标不可用 —— 默认构建的成功不能依赖它。
+set(SIMPLEXC_DIFFTRACE_DEPS_HINT
+  "difftrace 的 C SDK（Unicorn / Capstone）不进 git，先跑 python simplexc/tools/difftrace/fetch_deps.py 备齐头文件与导入库。")
+find_package(Unicorn QUIET)
+find_package(Capstone QUIET)
+
+if(Unicorn_FOUND AND Capstone_FOUND)
+  # 源文件表按目录列而不是写死清单：唯一规则是「`*_selftest.cc` 自带 main，不能进 exe」。
+  file(GLOB SIMPLEXC_DIFFTRACE_SOURCES CONFIGURE_DEPENDS "${SIMPLEXC_DIR}/tools/difftrace/*.cc")
+  list(FILTER SIMPLEXC_DIFFTRACE_SOURCES EXCLUDE REGEX "_selftest\\.cc$")
+  add_executable(difftrace ${SIMPLEXC_DIFFTRACE_SOURCES})
+  set_target_properties(difftrace PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  target_compile_options(difftrace PRIVATE -O2 -Wall -Wextra -Wpedantic)
+  target_link_libraries(difftrace PRIVATE Unicorn::Unicorn Capstone::Capstone)
+  # Windows 先从 exe 所在目录找依赖 DLL → 两个 dll 放 build/ 旁边，跑判据不用改 PATH。
+  add_custom_command(TARGET difftrace POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${UNICORN_RUNTIME_DLL}"
+            "${SIMPLEXC_BUILD}/unicorn.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CAPSTONE_RUNTIME_DLL}"
+            "${SIMPLEXC_BUILD}/capstone.dll"
+    COMMENT "拷贝 unicorn.dll / capstone.dll → build/"
+    VERBATIM)
+else()
+  # 目标名照样占住：缺 SDK 时 `--target difftrace` 要给出那句 hint 原文并以非 0 退出，
+  # 而不是让 ninja 报一句 unknown target 把原因吞掉。
+  add_custom_target(difftrace
+    COMMAND ${CMAKE_COMMAND} -E echo "${SIMPLEXC_DIFFTRACE_DEPS_HINT}"
+    COMMAND ${CMAKE_COMMAND} -E false
+    COMMENT "difftrace 不可用（缺 C SDK）"
+    VERBATIM)
+endif()
+
+# ---------------------------------------------------------------- difftrace_selftest
+#
+# 判据核心（diff.*）不碰 Unicorn/Capstone —— 这个目标因此不需要 SDK，能单独编、单独跑。
+# 编完当场跑：用例 FAIL 是判据的结论（不是构建出错），退出码原样透传。
+add_executable(difftrace_selftest
+  simplexc/tools/difftrace/diff.cc
+  simplexc/tools/difftrace/diff_selftest.cc)
+set_target_properties(difftrace_selftest PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_compile_options(difftrace_selftest PRIVATE -O2 -Wall -Wextra -Wpedantic)
+add_custom_command(TARGET difftrace_selftest POST_BUILD
+  COMMAND "$<TARGET_FILE:difftrace_selftest>"
+  WORKING_DIRECTORY "${SIMPLEXC_ROOT}"
+  COMMENT "跑 difftrace_selftest"
+  VERBATIM)
+
+# ---------------------------------------------------------------- asm_x64_selftest
+#
+# stdlib `asm x86_64` 块编码器的判据：白名单助记符 → 写死的字节（标 `ref` 的取自参考产物）。
+# 只编这两个 .cc，不链前端、不链 LLVM、不链 assemble.o —— 被测对象是纯函数。
+# 不在默认构建里：它还没接进编译流水线。
+add_executable(asm_x64_selftest
+  simplexc/codegen/asm_x64.cc
+  simplexc/codegen/asm_x64_selftest.cc)
+set_target_properties(asm_x64_selftest PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_compile_options(asm_x64_selftest PRIVATE -O2 -Wall -Wextra -Wpedantic)
+target_link_options(asm_x64_selftest PRIVATE -static)
+add_custom_command(TARGET asm_x64_selftest POST_BUILD
+  COMMAND "$<TARGET_FILE:asm_x64_selftest>"
+  WORKING_DIRECTORY "${SIMPLEXC_ROOT}"
+  COMMENT "跑 asm_x64_selftest"
+  VERBATIM)
+
+# ---------------------------------------------------------------- 离线判据的两份壳（hook_offline.py）
+#
+# 判据要编**测试用**的壳：核心与产品 `hook` 相同，但路径宏（OUT_DIR / OPT_DIR / OPT_INI /
+# OPT_SCRIPT）指向 work/tmp/hook_offline/ —— 判据不能往 work/hook/ 的活数据里掺行，所以不能
+# 直接用 `hook`。这些宏是构建定义的一部分，因此写在这里；判据只传「工作目录在哪」这一个值，
+# 它不再自带一份编译命令行。
+set(SIMPLEXC_HOOK_OFFLINE_WORK "${SIMPLEXC_ROOT}/work/tmp/hook_offline" CACHE PATH
+  "hook_offline 的工作目录（目录布局由 hook_offline.py 决定，它每次 configure 都会传进来）")
+set(SIMPLEXC_HOOK_OFFLINE_BIN "${SIMPLEXC_HOOK_OFFLINE_WORK}/bin")
+# 基线壳源码：hook_offline.py 从 git 历史里取出那份「改动前」的壳并落盘，不在工作区里。
+set(SIMPLEXC_HOOK_BASE_SRC "${SIMPLEXC_HOOK_OFFLINE_WORK}/compile_hook_base.c")
+set_source_files_properties("${SIMPLEXC_HOOK_BASE_SRC}" PROPERTIES GENERATED TRUE)
+
+# 路径宏的值：`work/<variant>/{out,opt,ini,opt.ini}` 与替身改写器，逐条与 hook_offline.py 的
+# vdirs()/STUB 对应。
+function(simplexc_hook_offline_defs variant target)
+  set(_v "${SIMPLEXC_HOOK_OFFLINE_WORK}/${variant}")
+  target_compile_definitions(${target} PRIVATE
+    "OUT_DIR=\"${_v}/out\""
+    "OPT_DIR=\"${_v}/opt\""
+    # 工作区壳默认把 hook.log 写进 OUT_DIR；pin 到 opt/ 才与 case 的 snapshot() 读的位置一致
+    # （基线壳本来就写 OPT_DIR = opt/，多一个宏对它无害）。
+    "HOOK_LOG_DIR=\"${_v}/opt\""
+    "OPT_INI=\"${_v}/opt.ini\""
+    "OPT_SCRIPT=\"${SIMPLEXC_HOOK_OFFLINE_WORK}/tools/rewrite_stub.py\"")
+endfunction()
+
+add_library(hook_offline_new SHARED
+  tools/compile_hook.c
+  simplexc/shell/simplexc_core.cc
+  "${SIMPLEXC_EMBEDDED_OBJS}"
+  ${SIMPLEXC_CORE_SOURCES}
+  "${SIMPLEXC_OBJ}/assemble.o")
+set_target_properties(hook_offline_new PROPERTIES
+  PREFIX "" OUTPUT_NAME "compile_hook_new" EXCLUDE_FROM_ALL TRUE
+  RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_HOOK_OFFLINE_BIN}")
+target_include_directories(hook_offline_new PRIVATE "${SIMPLEXC_DIR}")
+target_compile_options(hook_offline_new PRIVATE -O2)
+target_link_options(hook_offline_new PRIVATE -static)
+target_link_libraries(hook_offline_new PRIVATE LLVMC::LLVMC)
+simplexc_hook_offline_defs(new hook_offline_new)
+
+# 基线壳（`BASELINE_REF` 的壳）不引用核心：单文件 C，不需要 C++ 运行库。
+add_library(hook_offline_base SHARED "${SIMPLEXC_HOOK_BASE_SRC}")
+set_target_properties(hook_offline_base PROPERTIES
+  PREFIX "" OUTPUT_NAME "compile_hook_base" EXCLUDE_FROM_ALL TRUE
+  RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_HOOK_OFFLINE_BIN}")
+target_compile_options(hook_offline_base PRIVATE -O2)
+target_link_options(hook_offline_base PRIVATE -static)
+simplexc_hook_offline_defs(base hook_offline_base)

@@ -30,10 +30,13 @@
 
 需要 w64devkit（默认 `D:/bin/w64devkit/bin`，可用 `W64DEVKIT_BIN` 覆盖）与 `build/llvm/`
 （头 + 自造 MinGW 导入库，不进 git；没有就先 `python simplexc/tools/fetch_llvm.py --dest D:/downloads`）。
-产物全部落在 `reversing/build/`，两条路径写法上的硬要求见 `simplexc/tools/build.py` 头部。
+产物全部落在 `reversing/build/`，两条路径写法上的硬要求（为什么产物得与基线逐字节相同）
+见 `simplexc/tools/build.py` 头部与 `CMakeLists.txt` 里对应小节的注释。
 
-CMake 骨架（阶段 1：只有 `simplexc_cli` 与 `hook` 两个目标，flags 从 `build.py` 逐条搬）：
+CMake 是构建定义的**唯一**出处（目标 / 源文件表 / flags 都在 `CMakeLists.txt`），`build.py` 只是它的一层薄壳：
+无 `build/cmake/CMakeCache.txt` 时 configure，再 `cmake --build --target <目标>`。两条等价：
 
+    python simplexc/tools/build.py [目标 …]        # 默认 all（= CMake 的 ALL 组）
     cmake --preset mingw && cmake --build --preset mingw    # 中间文件在 build/cmake，产物仍在 build/
 
 ## 判据

@@ -598,7 +598,7 @@ def resolve_mode(cli: str | None) -> str:
 
 def rewrite_mode() -> str:
     """四态：'on'（等长）/ 'short'（缩短+重定位）/ 'short_cse'（缩短 + 删重复装载）
-    / 'off'。读不到配置默认 'on'。
+    / 'off'。读不到配置默认 'off' —— 改写器是自写编译器之前的性能产物，默认不启用。
 
     环境变量 `OPT_REWRITE` 优先于 opt.ini —— 离线验证用（opt.ini 归游戏内实验用，
     验证时不应该去动它）：`OPT_REWRITE=short py tools/optimize_image.py --in ...  `
@@ -628,13 +628,13 @@ def rewrite_mode() -> str:
                     continue
                 val = val.strip().lower()          # 第一个匹配行即生效（与转发层一致）
                 if val not in VALID_MODES:
-                    print(f"⚠ opt.ini 的 rewrite 值非法（{val!r}）→ 按 on 处理",
+                    print(f"⚠ opt.ini 的 rewrite 值非法（{val!r}）→ 按 off 处理",
                           file=sys.stderr)
-                    return "on"
+                    return "off"
                 return val
     except OSError as exc:
-        print(f"读配置失败，按 on 处理：{exc}", file=sys.stderr)
-    return "on"                                  # 没有配置文件 / 没这行：默认等长改写
+        print(f"读配置失败，按 off 处理：{exc}", file=sys.stderr)
+    return "off"                                 # 没有配置文件 / 没这行：默认不改写
 
 
 def run(src: str, dst: str, entry: int | None = None,

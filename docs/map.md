@@ -40,7 +40,7 @@ recovered/    反编译产物（不进 git，可由 tools/ 重新生成）
 按依赖顺序排列（左边是下层，给右边供货）：
 
 ```
-sim_ctl ──→ 机器码改写 ──→ 主频监听 ──→ 旧热点分析 ──→ compile.dll 转发 ──→ 游戏反编译
+sim_ctl ──→ 机器码改写 ──→ 主频监听 ──→ 热点分析 ──→ compile.dll 转发 ──→ 游戏反编译
 （让上面能自动跑）  （改产物）    （测效果）    （用产物做组件级分析）（供源码+产物）（已降级）
 ```
 
@@ -49,10 +49,10 @@ sim_ctl ──→ 机器码改写 ──→ 主频监听 ──→ 旧热点分�
 | **sim_ctl** | 脚本化「重编译 / 运行 / 停止」，供实验脚本 import | 已建成 | `facts/corpus-host.md` §simctl |
 | **机器码改写** | `optimize_image.py` 改写产物：四态、两条规则、锚点协议 | 已建成（默认 `rewrite = off`） | `facts/perf-tooling.md` §机器码改写 |
 | **主频监听** | `read_freq` / `watch_freq` 被动记录实测主频 | 已建成 | `facts/perf-tooling.md` §主频读数 |
-| **热点分析**（旧管道，已弃用） | 五层管道：抓源码 → 识别 → 建映射 → 采样 → 出组件报告 | **已弃用**，新设计见 `docs/specs/2026-11-01-hotspot-profiler-design.md` | `facts/perf-tooling.md` §组件映射、§采样 |
+| **热点分析** | 五层管道：抓源码 → 识别 → 建映射 → 采样 → 出组件报告 | 已建成；新工具（组件级时间归因）设计中，见 `docs/specs/2026-11-01-hotspot-profiler-design.md` | `facts/perf-tooling.md` §组件映射、§采样 |
 | **compile.dll 转发** | 转发层劫持 `compile()`，拿源码与产物 | 已建成 | `facts/forwarding.md` §compile.dll 转发层 |
 | **游戏反编译** | 反编译 exe/dll、符号表、字符串 | **已降级，非主线** | `facts/perf-tooling.md` §静态逆向 |
-| **simplexc** | 自研编译器：Simplex → LLVM IR → x64 装配，替代 `compile.dll` | **主线**，进行中 | `docs/status.md`、`facts/ref-compiler.md` |
+| **simplexc** | 自研编译器：Simplex → LLVM IR → x64 装配，替代 `compile.dll` | **暂停** | `docs/notes/2026-11-02-simplexc-progress.md`、`facts/ref-compiler.md` |
 
 ## 判据入口
 

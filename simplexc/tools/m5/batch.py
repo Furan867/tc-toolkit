@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -59,6 +60,20 @@ CLI = os.path.join(SIMPLEXC, "build", "simplexc_cli.exe")
 DIFFTRACE = os.path.join(SIMPLEXC, "build", "difftrace.exe")
 MANIFEST = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
 REF_DIR = os.path.join(SIMPLEXC, "corpus", "ref")
+
+
+def _load_by_path(path, name):
+    """按文件路径加载模块（`tools/` 不是包，静态 import 解析不到）。"""
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"加载不了 {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# 游戏目录的定义只在 `tools/tc_common.py` 的 `game_dir()` 一处（环境变量 → Steam 库 → 安装目录）。
+TC = _load_by_path(os.path.join(ROOT, "tools", "tc_common.py"), "tc_common")
 
 DEFAULT_OUT_DIR = os.path.join(ROOT, "work", "tmp", "m5batch")
 MAX_JOBS = 12                     # difftrace README 的实测：16 路只比 12 路快 7%，多占 1.75 GB
@@ -163,10 +178,14 @@ def run_cli(src, blob, timeout):
             proc.stderr, False)
 
 
-def run_diff(bin_path, src, ticks, seed, save):
-    """`difftrace run --save`。返回 (payload, error_line)。payload 是这份的 JSON 结果。"""
+def run_diff(bin_path, src, ticks, seed, save, dll_dir):
+    """`difftrace run --save`。返回 (payload, error_line)。payload 是这份的 JSON 结果。
+
+    `--dll-dir` 显式传：不传时 difftrace 用编进二进制的 `TC_GAME_DIR`，而旧二进制里那个值
+    可能退化成 `.`（= 进程当前目录），于是`.\\compile_real.dll` 读不到。
+    """
     cmd = [DIFFTRACE, "run", "--src", src, "--bin", bin_path, "--target", str(ticks),
-           "--seed", seed, "--save", save, "--json"]
+           "--seed", seed, "--save", save, "--dll-dir", dll_dir, "--json"]
     payload, error = call_json(cmd, RUN_TIMEOUT)
     return payload, error
 
@@ -325,7 +344,7 @@ def run_one(task):
             return done(STATUS_HOST_FAIL, err_kind="ref_missing",
                         err_first_line=one_line(f"参考产物不在：{rel(bin_path)}"))
         t_run = time.perf_counter()
-        payload, error = run_diff(bin_path, src, task["ticks"], task["seed"], seq)
+        payload, error = run_diff(bin_path, src, task["ticks"], task["seed"], seq, task["dll_dir"])
         run_ms += ms_since(t_run)
         if payload is None or error:
             return done(STATUS_HOST_FAIL, err_kind=side,
@@ -549,9 +568,11 @@ def write_report(rows, summary, path, args, total, order):
     w("```\n"
       "simplexc/build/simplexc_cli.exe --src simplexc/corpus/src/<id>.si --out work/tmp/m5batch/blobs/<id>.bin\n"
       "simplexc/build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin simplexc/corpus/ref/<id>.bin "
-      f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ref.seq --json\n"
+      f"--target {args.ticks} --seed {args.seed} --dll-dir <游戏目录> "
+      "--save work/tmp/m5batch/seq/<id>.ref.seq --json\n"
       "simplexc/build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin work/tmp/m5batch/blobs/<id>.bin "
-      f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ours.seq --json\n"
+      f"--target {args.ticks} --seed {args.seed} --dll-dir <游戏目录> "
+      "--save work/tmp/m5batch/seq/<id>.ours.seq --json\n"
       "simplexc/build/difftrace.exe diff --state work/tmp/m5batch/seq/<id>.ref.seq "
       "work/tmp/m5batch/seq/<id>.ours.seq --src simplexc/corpus/src/<id>.si --classify --json\n"
       "```\n")
@@ -594,6 +615,10 @@ def main(argv=None):
             hint = "python simplexc/tools/build.py simplexc_cli" if exe == CLI else \
                    "python simplexc/tools/build.py difftrace"
             fail(f"缺 {rel(exe)}：先跑 {hint}", 2)
+    try:
+        dll_dir = str(TC.game_dir())
+    except RuntimeError as e:
+        fail(f"找不到游戏目录（difftrace 要从那儿读 {TC.GAME_REAL_DLL_NAME}）：{e}", 2)
 
     blob_dir = os.path.join(args.out_dir, "blobs")
     seq_dir = os.path.join(args.out_dir, "seq")
@@ -625,7 +650,7 @@ def main(argv=None):
     tasks = [{"id": t["id"], "src": t["src"], "ref": t["ref"],
               "blob": os.path.join(blob_dir, t["id"] + ".bin"), "seq_dir": seq_dir,
               "ticks": args.ticks, "seed": args.seed, "cli_timeout": args.cli_timeout,
-              "with_prefix": args.with_prefix}
+              "with_prefix": args.with_prefix, "dll_dir": dll_dir}
              for t in todo]
 
     wall0 = time.perf_counter()

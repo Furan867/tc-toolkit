@@ -361,8 +361,35 @@ find_package(Capstone QUIET)
 if(Unicorn_FOUND AND Capstone_FOUND)
   # difftrace 默认读的 `compile_real.dll` 所在目录（`image.hh` 的 `kDllReal`）。
   # 空 = 用 image.hh 的占位默认值；运行期还能用 `--dll-dir` / `DIFFTRACE_DLL_DIR` 覆盖。
+  #
+  # 不能只取 `$ENV{TC_GAME_DIR}`：这个环境变量大多数机器上没设，展开成空串后 `kDllReal` 就退化成
+  # `".\\compile_real.dll"`（= 进程当前目录），difftrace 一律读不到（实测 m5/batch.py 全量 host_fail）。
+  # 游戏目录一台机器一个值，它的定义只在 `tools/tc_common.py` 的 `game_dir()`（环境变量 → Steam 库 →
+  # `<库>/steamapps/common/Turing Complete`）里，configure 期问它。问不到**不**让 configure 失败：
+  # 留空、退回 image.hh 的 `"."`，并打一条 message。
   set(SIMPLEXC_GAME_DIR "$ENV{TC_GAME_DIR}" CACHE PATH
     "游戏目录（difftrace 默认从这里读 compile_real.dll）")
+  if(NOT SIMPLEXC_GAME_DIR)
+    execute_process(
+      COMMAND ${Python3_EXECUTABLE} -c
+              "import sys;sys.path.insert(0,'tools');import tc_common;print(tc_common.game_dir())"
+      WORKING_DIRECTORY "${SIMPLEXC_ROOT}"   # `'tools'` 是相对仓库根的
+      RESULT_VARIABLE _game_dir_rc
+      OUTPUT_VARIABLE _game_dir_out
+      ERROR_VARIABLE _game_dir_err
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    # `RESULT_VARIABLE` 在「进程起不来」时是错误字符串（不是数字），所以按字符串比。
+    if(_game_dir_rc STREQUAL "0" AND _game_dir_out)
+      # Windows 的路径是反斜杠：它要进 `TC_GAME_DIR="…"` 这个字符串字面量，先归一化。
+      file(TO_CMAKE_PATH "${_game_dir_out}" _game_dir_out)
+      set(SIMPLEXC_GAME_DIR "${_game_dir_out}" CACHE PATH
+        "游戏目录（difftrace 默认从这里读 compile_real.dll）" FORCE)
+    else()
+      message(STATUS
+        "difftrace: 取不到游戏目录（tools/tc_common.py 的 game_dir()）：${_game_dir_err}"
+        " —— TC_GAME_DIR 留空 = image.hh 的 \".\"，运行期用 --dll-dir / DIFFTRACE_DLL_DIR 指定")
+    endif()
+  endif()
   # 源文件表按目录列而不是写死清单：唯一规则是「`*_selftest.cc` 自带 main，不能进 exe」。
   file(GLOB SIMPLEXC_DIFFTRACE_SOURCES CONFIGURE_DEPENDS "${SIMPLEXC_DIR}/tools/difftrace/*.cc")
   list(FILTER SIMPLEXC_DIFFTRACE_SOURCES EXCLUDE REGEX "_selftest\\.cc$")

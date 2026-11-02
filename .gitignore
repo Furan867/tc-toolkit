@@ -1,40 +1,20 @@
-# 反编译产物（可由 tools/ 从游戏目录重新生成，见 README）：整目录不入库，不只是 res/
-recovered/
+# 白名单模式：根级默认全忽略，只放行下面显式列出的条目。
+# 被 /* 顺带挡住的（无需规则，列此备查）：recovered/、work/、build/、.cache/、
+# .ruff_cache/、.vscode/、opt.ini、compile_commands.json
+/*
+!/.gitignore
+!/.gitattributes
+!/LICENSE
+!/*.md
+!/opt.ini.example
+!/cmake/
+!/docs/
+!/simplexc/
+!/tools/
 
-# 反编译工具（可下载）
-tools/gdre/
-tools/gdsdecomp/
-
-# 中间产物（可由 tools/*.py 重新生成）
-work/
-
-# Python
-__pycache__/
-*.pyc
-# ruff 会在缓存目录里自己生成 .gitignore（内容 `*`），但那份是 ruff 写的、可能不生成或被清掉
-.ruff_cache/
-
-# 构建产物（由 tools/compile_hook.c 编译而来）
-build/
-
-# 构建期生成：装配用的 entry_shim.o / rt_min.o 嵌成的 C++ 源（gen_embedded_objs.py → 见 build.py 的
-# simplexc_dll 目标）。它是派生物，入库就要跟 build/objs/*.o 的每次重编同步。
-simplexc/shell/embedded_objs.cc
-
-# 会话相关生成物：地址按游戏进程实例变（simplexc/tools/gen_addrs.py 产出，别手改）
-simplexc/probe/addrs.h
-
-# 构建期生成：CMake 拷到 simplexc/ 给 clangd（含本机绝对路径，换机器就重建）
-simplexc/compile_commands.json
-
-# 运行时开关：每次「开 / 关」对照实验都要改，不进 git（模板见 opt.ini.example）
-opt.ini
-
-# LLVM 解包与下载缓存的落点（fetch_llvm.py 用，见 THIRD_PARTY_NOTICES.md）
-simplexc/.deps/
-
-# M1.5 一次性探针输出：已停止使用，留着只作本地查证
-simplexc/probe/results/
-
-# 编辑器本机配置（含绝对路径）
-.vscode/
+# 各层通用的系统 / Python 垃圾
+**/__pycache__/
+**/*.pyc
+**/Thumbs.db
+**/desktop.ini
+**/.DS_Store

@@ -1,2 +1,26 @@
-# 本次离线重编译的产物（几 MB 的机器码，能由 tools/recompile_corpus.py 重新生成）
-corpus/ref/
+# 按类型放行：这个子树里进来的只能是源码、构建定义与测试数据。
+# 生成物一律落在 build/（构建时生成）与 .deps/（fetch_llvm.py 下载），各自挡掉。
+*
+!*/
+!/.gitignore
+!*.cc
+!*.hh
+!*.c
+!*.h
+!*.S
+!*.py
+!*.md
+!*.si
+!*.tsv
+!*.txt
+!*.irkeys
+!*.dump
+!*.err
+!CMakeLists.txt
+!CMakePresets.json
+
+# 生成物 / 外部资产 / 本机中间产物（后匹配优先）
+/build/
+/.deps/
+/corpus/ref/
+/work/

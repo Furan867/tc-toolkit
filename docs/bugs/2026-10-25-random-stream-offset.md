@@ -49,9 +49,22 @@
 
 ## 复现
 
+四段增量，每段都用 `simplexc/build/simplexc_cli.exe` 与参考各编一次，再用
+
 ```bash
-./work/tmp/rc096/repro.sh          # 输出 work/tmp/rc096/repro.out
-./work/tmp/rc096/ladder.sh <name>  # 单个阶梯用例的两侧对照；二分表见 work/tmp/rc096/bisect.out
+simplexc/build/difftrace.exe run --src <si> --bin <bin> --target 50 --seed seq --save <seq>
 ```
 
-（`work/tmp/` 是临时目录，会被清；要重跑就按上面的脚本重建。）
+存两侧 `.seq`，最后逐地址比对 `#SIMULATION_STATE + 0`：
+
+| 段 | 源码 | 结果 |
+|---|---|---|
+| ① | `min.si` + `instructions[]` 表 + 32 次 `random(64)` 预抽 | 两侧逐位相同 |
+| ② | ① + `get_input` 改用 `instructions[cycle]` + `U8` 局部 + switch | 仍逐位相同 |
+| ③ | 完整 098 + 一行只读观察者（`input_replay[1023] = level_input.input`） | **第 0 个写（tick 1）就分道**：ref=`0xb7` vs ours=`0x6b` |
+| ④ | ③ + 每 tick 读一次 `global_seed`（`input_replay[1022]`） | 证明参考全程没从全局取种子 |
+
+判据值：正确的 `xorshift(1)` 从下标 32 起是 `6b c7 05 d9 06 56 …`；参考的退化链是
+`b7 67 17 c7 77 27 d7 87 …`（纯乘链、周期 16）。
+
+数据与探针 `.si` 都是现场生成的，不进仓库。

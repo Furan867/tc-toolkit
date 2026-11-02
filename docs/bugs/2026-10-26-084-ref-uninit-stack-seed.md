@@ -41,7 +41,18 @@
 ## 复现
 
 ```bash
-build/difftrace.exe diff --state work/tmp/rc084/seq/084.ref.seq work/tmp/rc084/seq/084.ours.seq \
-    --src simplexc/corpus/src/084.si --tick-mark 0x232A7010000
+# ① 两侧各编一次，存下逐 tick 的 seq
+python simplexc/tools/m5/batch.py --with-prefix --ids 084 --ticks 100 \
+    --out-dir work/tmp/rc084 --tsv work/tmp/rc084/batch.tsv --report work/tmp/rc084/batch.md
+# → 首址 0x100018E0，diff_game=2334 字节
+
+# ② 只比游戏状态区（[game_lo, game_hi)）
+simplexc/build/difftrace.exe diff --state work/tmp/rc084/seq/084.ref.seq \
+    work/tmp/rc084/seq/084.ours.seq --src simplexc/corpus/src/084.si --tick-mark 0x232A7010000
 ```
-两侧 `.seq` 的生成命令、探针 `084probe*.si` 与完整命令清单见 `work/tmp/rc084/report.md`（临时目录，会被清）。
+
+判据值：终态 12 字节不同，全在 `#SIMULATION_STATE + 334..345`（`Reg0..Reg5` 与它们的 cache 副本），
+首个不同在 tick 16（0 基 15）、1 字节。`ours` 的 6 字节 `4a c7 c9 3e 91 b7` 唯一命中 `xorshift(seed=1)`；
+`ref` 的 `73 88 d4 24 19 5e` 唯一命中 `xorshift(seed=7)`。两侧抽取序号相同（第 15/23/31/39/47/55 次写进寄存器）。
+
+数据（`.seq` / `.bin` / 探针 `.si`）是现场生成的，不进仓库；上面的命令能重建。

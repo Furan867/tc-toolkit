@@ -11,6 +11,8 @@ work/
 # Python
 __pycache__/
 *.pyc
+# ruff 会在缓存目录里自己生成 .gitignore（内容 `*`），但那份是 ruff 写的、可能不生成或被清掉
+.ruff_cache/
 
 # 构建产物（由 tools/compile_hook.c 编译而来）
 build/

@@ -5,7 +5,7 @@
 ----------------
     1. `gen_addrs.py`：从 `--src` 抽出本会话的 11 个绝对地址 → `<workdir>/addrs.h`
     2. `simplexc/.deps/llvm/bin/clang.exe -O2` 编 `simplexc/probe/equiv_cc_and.c`（**不许 g++ 顶替**）
-    3. `build/tcblob.exe` 装配 → `<workdir>/ours.bin`（+ `.entry` + `.stubs`）
+    3. `simplexc/build/tcblob.exe` 装配 → `<workdir>/ours.bin`（+ `.entry` + `.stubs`）
     4. host 跑参考产物（`--bin`）与我们的产物 → 逐 tick 比 pages / sim_cycle / extern
     5. 静态：两边机器码的指令条数与字节数
     结论打印出来，明细 JSON 落 `<workdir>/equiv_result.json`，两份快照 JSONL 也留在那儿。
@@ -58,7 +58,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 from tools.tc_common import llvm_root, tool  # noqa: E402
 
-BUILD = os.path.join(REPO, "build")
+BUILD = os.path.join(SIMPLEXC, "build")
 # 必须是 LLVM 资产里的 clang（**不许 g++ / 系统 clang 顶替**）：产物要与前面记的
 # 代码生成质量对得上，换编译器就不是同一件事了。
 CLANG = str(llvm_root() / "bin" / "clang.exe")

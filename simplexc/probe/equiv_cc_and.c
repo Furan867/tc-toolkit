@@ -24,8 +24,8 @@
  * --------------------------------------------------------------
  *   simplexc/.deps/llvm/bin/clang.exe --target=x86_64-pc-windows-gnu -O2 -ffreestanding \
  *       -fno-stack-protector -c -I <workdir> -o equiv_cc_and.o equiv_cc_and.c
- *   build/tcblob.exe --obj equiv_cc_and.o --obj build/objs/entry_shim.o \
- *       --obj build/objs/rt_min.o --entry __tc_entry --out ours.bin
+ *   simplexc/build/tcblob.exe --obj equiv_cc_and.o --obj simplexc/build/objs/entry_shim.o \
+ *       --obj simplexc/build/objs/rt_min.o --entry __tc_entry --out ours.bin
  *
  * `-DTC_MARK`：进入 `tc_main` 时往固定路径追加一行（游戏内验证「我们的产物真的跑到了」）。
  * **默认不编进去** —— 标记会进 extern 序列，破坏与参考产物的「逐 tick 全等」。

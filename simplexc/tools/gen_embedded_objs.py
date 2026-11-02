@@ -4,7 +4,7 @@
 为什么要嵌进 DLL
 ----------------
 装配要有**三个**目标文件（模块 COFF + `entry_shim.o` + `rt_min.o`，接口 §4），
-而壳在**游戏进程里**编译：那里没有 `build/objs/`，也没有安全的临时目录。
+而壳在**游戏进程里**编译：那里没有 `simplexc/build/objs/`，也没有安全的临时目录。
 所以后两个在**构建期**变成字节数组链进 DLL —— 壳只管内存里的字节。
 
 用法
@@ -12,8 +12,8 @@
     python simplexc/tools/gen_embedded_objs.py                      # 默认路径
     python simplexc/tools/gen_embedded_objs.py --objs-dir <dir> --out <file>
 
-产物 `simplexc/shell/embedded_objs.cc` **不入库**（由 build.py 的 `simplexc_dll`
-目标每次构建时重新生成）—— 它是派生物，入库就要跟 `build/objs/*.o` 的每次重编同步。
+产物 `simplexc/build/shell/embedded_objs.cc` **不入库**（由 build.py 的 `simplexc_dll`
+目标每次构建时重新生成）—— 它是派生物，入库就要跟 `simplexc/build/objs/*.o` 的每次重编同步。
 声明在同目录手写的 `embedded_objs.hh` 里（生成物与声明分开，两者对不上时是链接错误，不会静默）。
 """
 from __future__ import annotations
@@ -36,10 +36,10 @@ PER_LINE = 12
 HEADER = """\
 /* embedded_objs.cc —— 装配用的两个目标文件（**生成物，别手改**）。
  *
- * 由 `simplexc/tools/gen_embedded_objs.py` 从 `build/objs/{entry_shim,rt_min}.o` 生成；
- * 为什么必须嵌进 DLL 见那个脚本的 docstring。声明在同目录的 `embedded_objs.hh` 里。
+ * 由 `simplexc/tools/gen_embedded_objs.py` 从 `simplexc/build/objs/{entry_shim,rt_min}.o` 生成；
+ * 为什么必须嵌进 DLL 见那个脚本的 docstring。声明在 `simplexc/shell/embedded_objs.hh` 里。
  */
-#include "embedded_objs.hh"
+#include "shell/embedded_objs.hh"
 
 namespace simplexc::shell {
 """
@@ -79,15 +79,17 @@ def generate(objs_dir: str) -> str:
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description="build/objs/{entry_shim,rt_min}.o → shell/embedded_objs.cc")
-    ap.add_argument("--objs-dir", default=os.path.join(REPO, "build", "objs"),
-                    help="目标文件目录（默认 build/objs）")
-    ap.add_argument("--out", default=os.path.join(SIMPLEXC, "shell", "embedded_objs.cc"),
-                    help="生成物路径（默认 simplexc/shell/embedded_objs.cc）")
+    ap = argparse.ArgumentParser(description="simplexc/build/objs/{entry_shim,rt_min}.o → simplexc/build/shell/embedded_objs.cc")
+    ap.add_argument("--objs-dir", default=os.path.join(SIMPLEXC, "build", "objs"),
+                    help="目标文件目录（默认 simplexc/build/objs）")
+    ap.add_argument("--out", default=os.path.join(SIMPLEXC, "build", "shell", "embedded_objs.cc"),
+                    help="生成物路径（默认 simplexc/build/shell/embedded_objs.cc）")
     args = ap.parse_args(argv)
 
     text = generate(args.objs_dir)
+    out_dir = os.path.dirname(os.path.abspath(args.out))
     try:
+        os.makedirs(out_dir, exist_ok=True)
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
     except OSError as e:

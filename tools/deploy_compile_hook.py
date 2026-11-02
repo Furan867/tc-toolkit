@@ -11,7 +11,7 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
 部署做的事
 ----------
     compile.dll        → 改名成 compile_real.dll   （原文件完整保留，随时可还原）
-    build/compile_hook.dll → 复制为 compile.dll
+    simplexc/build/compile_hook.dll → 复制为 compile.dll
 
 恢复做的事
 ----------
@@ -22,14 +22,14 @@ compile() 的输入（电路源码）与产物 —— 不需要调试器、不�
     转调 `python simplexc/tools/build.py simplexc_dll` —— 转发层现在是「C 壳 + C++ 编译器核心」，
     构建命令只有 `CMakeLists.txt` 一处定义，本脚本只负责「部署前先把 DLL 重编一份」。
 
-    ⚠️ 因为链了 `LLVM-C.dll`，**部署必须把它（build/LLVM-C.dll）一起拷进游戏目录**
+    ⚠️ 因为链了 `LLVM-C.dll`，**部署必须把它（simplexc/build/LLVM-C.dll）一起拷进游戏目录**
     （否则游戏加载时解析依赖失败，接口 §7）。本脚本不替你做这一步。
 
 命令
 ----
     status        看当前状态（是否已部署、游戏是否在跑）
     build         只编译转发层
-    deploy        只部署（把 build/ 的 dll 盖上去；游戏在跑会拒绝）
+    deploy        只部署（把 simplexc/build/ 的 dll 盖上去；游戏在跑会拒绝）
     build-deploy  编译后立刻部署 —— 改完 compile_hook.c 的常规流程
     restore       还原为原始 compile.dll
 
@@ -61,7 +61,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 from tc_common import game_dir, game_dll  # noqa: E402
 
-HOOK = os.path.join(ROOT, "build", "compile_hook.dll")
+HOOK = os.path.join(ROOT, "simplexc", "build", "compile_hook.dll")
 
 
 def game_paths():
@@ -88,7 +88,7 @@ def status():
     print("compile.dll      : " + (f"存在（{target.stat().st_size} B）"
                                   if target.exists() else "不存在"))
     print("compile_real.dll : " + ("存在" if real.exists() else "不存在"))
-    print("转发层 (build/)  : " + ("存在" if os.path.exists(HOOK) else "不存在"))
+    print("转发层 (simplexc/build/) : " + ("存在" if os.path.exists(HOOK) else "不存在"))
     print("当前状态         : " + ("**已部署**（原 DLL 在 compile_real.dll）"
                                   if real.exists() else "**未部署**（原始状态）"))
     return 0
@@ -104,7 +104,7 @@ def guard():
 
 
 def build():
-    """编译转发层到 build/compile_hook.dll —— 转调 build.py 的 `simplexc_dll` 目标。
+    """编译转发层到 simplexc/build/compile_hook.dll —— 转调 build.py 的 `simplexc_dll` 目标。
 
     为什么不再自己拼命令：转发层是「C 壳 + C++ 核心 + LLVM-C」，构建定义（flags、源文件表、
     objs 依赖）只有 CMakeLists.txt 一处；本脚本只保留部署相关的动作。
@@ -123,7 +123,7 @@ def build():
         print(f"❌ 构建脚本报成功，但 {HOOK} 不存在", file=sys.stderr)
         return 1
     print(f"✅ 已编译 {HOOK}（{os.path.getsize(HOOK)} B）")
-    print("⚠️ 部署时必须把 build/LLVM-C.dll 一起拷进游戏目录（否则游戏解析依赖失败）")
+    print("⚠️ 部署时必须把 simplexc/build/LLVM-C.dll 一起拷进游戏目录（否则游戏解析依赖失败）")
     return 0
 
 
@@ -208,7 +208,7 @@ def main():
     ap = argparse.ArgumentParser(description="部署/恢复 compile.dll 转发层")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="查看当前状态")
-    sub.add_parser("build", help="编译 tools/compile_hook.c → build/compile_hook.dll")
+    sub.add_parser("build", help="编译 tools/compile_hook.c → simplexc/build/compile_hook.dll")
     sub.add_parser("deploy", help="部署转发层（游戏在跑则拒绝）")
     sub.add_parser("build-deploy", help="编译后立刻部署（改完 compile_hook.c 的常规流程）")
     sub.add_parser("restore", help="还原为原始 compile.dll")

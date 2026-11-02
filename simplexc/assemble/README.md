@@ -17,7 +17,7 @@ COFF 目标文件 → 游戏能 JIT 的 **blob**：重定位、extern 桩、8 �
 怎么用：
 
     python simplexc/tools/build.py objs tcblob
-    build/tcblob.exe --obj a.obj --obj b.obj --entry __tc_entry --out blob.bin [--run] [--verbose]
+    simplexc/build/tcblob.exe --obj a.obj --obj b.obj --entry __tc_entry --out blob.bin [--run] [--verbose]
 
 `--run` 按游戏的方式（VirtualAlloc RWX → memcpy(blob+8) → jmp base+entry）在进程内跑一遍，
 不用进游戏就能自测。产物旁另写 `<blob>.entry`（十六进制），壳的自研路径靠它取入口偏移。

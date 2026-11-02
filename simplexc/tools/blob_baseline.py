@@ -44,7 +44,7 @@ SIMPLEXC = os.path.dirname(HERE)
 ROOT = os.path.dirname(SIMPLEXC)                        # tc-toolkit/
 CORPUS = os.path.join(SIMPLEXC, "corpus")
 MANIFEST = os.path.join(CORPUS, "manifest.tsv")           # 名字会撞上面的 --manifest 参数，故全大写
-CLI = os.path.join(ROOT, "build", "simplexc_cli.exe")
+CLI = os.path.join(SIMPLEXC, "build", "simplexc_cli.exe")
 
 BASELINE_GLOB = "corpus-baseline_*.tsv"
 DEFAULT_BLOBS = os.path.join(ROOT, "work", "tmp", "baseline-blobs")
@@ -220,7 +220,7 @@ def read_corpus_manifest():
 def run_cli(src, out_path):
     """跑一次 CLI（一个进程 = 游戏里一次编译请求同形）。
 
-    `cwd=ROOT`：CLI 默认 `--objs-dir build/objs` 是相对路径，换了 cwd 就找不到入口垫片。
+    `cwd=ROOT`：CLI 默认 `--objs-dir simplexc/build/objs` 是相对路径，换了 cwd 就找不到入口垫片。
     """
     if not os.path.exists(CLI):
         raise BaselineError(f"缺 CLI {rel(CLI)}：先跑 python simplexc/tools/build.py")

@@ -19,8 +19,8 @@
  * --------------------------------------------------------------
  *   simplexc/.deps/llvm/bin/clang.exe --target=x86_64-pc-windows-gnu -O2 -ffreestanding \
  *       -fno-stack-protector -c -o 006_equiv.o 006_equiv.c
- *   build/tcblob.exe --obj 006_equiv.o --obj build/objs/entry_shim.o \
- *       --obj build/objs/rt_min.o --entry __tc_entry --out 006_ours.bin
+ *   simplexc/build/tcblob.exe --obj 006_equiv.o --obj simplexc/build/objs/entry_shim.o \
+ *       --obj simplexc/build/objs/rt_min.o --entry __tc_entry --out 006_ours.bin
  *
  * `-DTC_006_NO_FOLD`：把电路的状态变量标成 `volatile`，禁止 clang 常量折叠
  * （探针用它量「同样的每周期工作量、不同代码生成质量」那一档，见 tools/probe_006.py）。

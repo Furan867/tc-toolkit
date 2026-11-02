@@ -8,7 +8,7 @@
  *   · 调用一个**只声明不定义**的 `tc_probe_ok(i64)` → 逼出 extern 桩 + REL32；
  *   · 写一个内部全局 → 逼出 .bss / 内部引用。
  *
- * 用法：`llvm_prog <输出.obj>`（PATH 里要有 build/llvm/bin 才能找到 LLVM-C.dll）
+ * 用法：`llvm_prog <输出.obj>`（PATH 里要有 simplexc/.deps/llvm/bin 才能找到 LLVM-C.dll）
  */
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>

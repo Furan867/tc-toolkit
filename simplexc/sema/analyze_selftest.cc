@@ -6,7 +6,7 @@
  *
  * golden 一律**重定向生成**，不许手抄：
  *   python simplexc/tools/build.py analyze_selftest
- *   build/analyze_selftest.exe --dump-only simplexc/sema/testdata/cases/<case>.si \
+ *   simplexc/build/analyze_selftest.exe --dump-only simplexc/sema/testdata/cases/<case>.si \
  *       > simplexc/sema/testdata/cases/<case>.dump
  * 生成之后要对着规格（方案 §2b）与 `lower.cc` 逐行核：值、类型、节点顺序、span。
  *
@@ -277,12 +277,12 @@ bool read_golden(const std::string& path, std::string* out) {
 }
 
 std::string regen_cmd(const std::filesystem::path& src) {
-    return "build/analyze_selftest.exe --dump-only " + src.generic_string() +
+    return "simplexc/build/analyze_selftest.exe --dump-only " + src.generic_string() +
            " > " + (src.parent_path() / (src.stem().string() + ".dump")).generic_string();
 }
 
 std::string regen_err_cmd(const std::filesystem::path& src) {
-    return "build/analyze_selftest.exe --err-only " + src.generic_string() +
+    return "simplexc/build/analyze_selftest.exe --err-only " + src.generic_string() +
            " > " + (src.parent_path() / (src.stem().string() + ".err")).generic_string();
 }
 

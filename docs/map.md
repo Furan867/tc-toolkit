@@ -21,13 +21,13 @@ simplexc/     自研编译器（**接口权威 = docs/specs/2026-10-15-simplexc-
   tools/     语料重编译、地址分类、判据入口、差分宿主等脚本    corpus/ 98 份语料 + manifest（ref/ 不进 git）
              M3 的靶子固定为 corpus/rv32im/（RV32IM 电路的源码 + 参考产物快照，见该目录 README）
   dossier/   语义档案（已有访存宽度实测 `ul_access_width.md`；其余未开始）
-  probe/     M1.5 收益探针（**已终止**，2026-10-17）：006 的 C 等价物 + results/ 留存
+  probe/     M1.5 收益探针（**已终止**，2026-10-17）：006 的 C 等价物（results/ 已停用，移到 work/tmp/）
+  build/     编译产物：compile_hook.dll / simplexc_cli.exe / objs/ / shell/ / cmake/（不进 git）
 work/hook/    转发层捕获：hook_src_NNN.si ↔ hook_out_NNN.bin（同号即一对）
 work/opt/     转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log / opt_stderr.log
 work/freq/    主频采样输出：freq_log.tsv（事件）与 freq_summary.txt（给人读）
 work/symbols/ 符号表        work/maps/   组件映射表与建映射中间产物
 work/reports/ 分析报告      work/tmp/    一次性中间产物
-build/        compile_hook.dll（构建产物）
 ```
 
 `work/hook/` 与 `work/opt/` 每次游戏启动一起清空（见 `facts/forwarding.md` 的「清空语义」）；

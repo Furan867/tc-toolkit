@@ -7,7 +7,7 @@ r"""stdlib 全量编译的尺子：现在能编到第几行、卡在哪类构造
 
 局限（必读）
 ------------
-`build/simplexc_cli.exe` 是 **fail-fast** 的：sema 遇到第一个不支持的构造就抛错，一次只报一处
+`simplexc/build/simplexc_cli.exe` 是 **fail-fast** 的：sema 遇到第一个不支持的构造就抛错，一次只报一处
 （`--list-unsupported` 已不能收清单，见 `cli/simplexc_cli.cc`）。所以：
 
 - 「编译到的行」= 第一处错误的行号 − 1，本工具只能报这一处，后面的区段是否还有问题它不知道；
@@ -60,7 +60,7 @@ from typing import NoReturn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_SRC = os.path.join("simplexc", "corpus", "stdlib_prefix.si")
-DEFAULT_CLI = os.path.join("build", "simplexc_cli.exe")
+DEFAULT_CLI = os.path.join("simplexc", "build", "simplexc_cli.exe")
 EXPECTED_LINES = 1503                    # M5 的验收边界：整份 stdlib 前缀
 CLI_TIMEOUT_S = 900
 ERROR_CLIP = 56                          # 「首个错误」列的显示宽度上限

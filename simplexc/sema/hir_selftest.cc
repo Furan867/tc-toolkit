@@ -9,8 +9,8 @@
  *      那一条（规格 §2b 要求每条能单独报出是第几条）。
  *
  * 用法（golden 怎么来、`sample()` 对应哪段源码：`testdata/README.md`）：
- *   python simplexc/tools/build.py hir_selftest && build/hir_selftest.exe
- *   build/hir_selftest.exe --dump-only > simplexc/sema/testdata/hir_sample.dump.txt
+ *   python simplexc/tools/build.py hir_selftest && simplexc/build/hir_selftest.exe
+ *   simplexc/build/hir_selftest.exe --dump-only > simplexc/sema/testdata/hir_sample.dump.txt
  * 退出码：0 = 全过；1 = 有失败；2 = 命令行参数不认识。
  */
 #include "hir.hh"
@@ -156,7 +156,7 @@ std::string golden_path() {
 }
 
 const char* GOLDEN_REGEN =
-    "build/hir_selftest.exe --dump-only > simplexc/sema/testdata/hir_sample.dump.txt";
+    "simplexc/build/hir_selftest.exe --dump-only > simplexc/sema/testdata/hir_sample.dump.txt";
 
 /* 读成字节串，读的时候把 CRLF 折成 LF：本仓库 `core.autocrlf=true`，`.gitattributes` 只对
  * `simplexc/corpus` 那一棵树关掉了行尾归一化，所以检出后的 `.txt` 可能是 CRLF，而 dump 只出 LF。

@@ -4,9 +4,9 @@
     {
       "name": "mingw",
       "displayName": "w64devkit (MinGW-w64 GCC) + Ninja",
-      "description": "工具链从 PATH 找（MinGW-w64 GCC，见 ../cmake/toolchain-mingw-w64devkit.cmake），产物落 build/",
+      "description": "工具链从 PATH 找（MinGW-w64 GCC，见 ../cmake/toolchain-mingw-w64devkit.cmake），产物落 simplexc/build/",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/../build/cmake",
+      "binaryDir": "${sourceDir}/build/cmake",
       "toolchainFile": "${sourceDir}/../cmake/toolchain-mingw-w64devkit.cmake"
     }
   ],

@@ -3,7 +3,7 @@
 
 一份语料做两件事，第二件只在第一件成功后才做：
 
-  1. **装配**：`build/simplexc_cli.exe --src <si> --out <blob>`（+ 同目录的 `.entry` / `.stubs`）。
+  1. **装配**：`simplexc/build/simplexc_cli.exe --src <si> --out <blob>`（+ 同目录的 `.entry` / `.stubs`）。
      记 rc / 墙上耗时 / blob 大小 / entry；失败记错误类别与**原始错误首行**。
   2. **逐 tick 差分**：参考产物（`simplexc/corpus/ref/<id>.bin`）与我们自己的产物各跑一遍宿主，
      10 tick，两边都灌 `--seed-reset-data seq`，逐 tick 比段哈希 / 页 / extern / sim_cycle。
@@ -63,7 +63,7 @@ ROOT = os.path.dirname(SIMPLEXC)                              # tc-toolkit/
 SELFTEST = os.path.join(TOOLS, "host", "selftest.py")
 MANIFEST = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
 REF_DIR = os.path.join(SIMPLEXC, "corpus", "ref")
-CLI = os.path.join(ROOT, "build", "simplexc_cli.exe")
+CLI = os.path.join(SIMPLEXC, "build", "simplexc_cli.exe")
 
 RV32IM_SRC = os.path.join("simplexc", "corpus", "rv32im", "rv32im.si")
 RV32IM_BIN = os.path.join("simplexc", "corpus", "rv32im", "rv32im.bin")
@@ -632,7 +632,7 @@ def repro_commands(row, args):
     """失败最小复现：装配失败给 CLI 一条；差分失败给两条宿主 + 一条比对（日志留在 --out-dir/logs/）。"""
     lines = []
     if row["status"] in (STATUS_CLI_FAIL, STATUS_CLI_TIMEOUT):
-        lines.append(f"build/simplexc_cli.exe --src {row['src']} --out work/tmp/m5/out/{row['id']}.bin")
+        lines.append(f"simplexc/build/simplexc_cli.exe --src {row['src']} --out work/tmp/m5/out/{row['id']}.bin")
     elif row["status"] in (STATUS_DIFF, STATUS_EXTERN_ONLY, STATUS_HOST_FAIL, STATUS_HOST_TIMEOUT):
         src = row["src"]
         lines.append(f"python simplexc/tools/host/host.py --src {src} --bin {row['ref_path']} "
@@ -659,7 +659,7 @@ def write_report(rows, summary, path, args, targets):
     w("# M5 覆盖表：98 份语料的装配与逐 tick 等价\n")
     w(f"生成 {summary['generated']} · 已完成 {work_done}/{corpus_total} 份 · "
       f"{'**中途快照（还没跑完）**' if work_done < corpus_total else '跑完'}\n")
-    w("判据口径：每份语料 ①`build/simplexc_cli.exe --src <si> --out <blob>` 装配；"
+    w("判据口径：每份语料 ①`simplexc/build/simplexc_cli.exe --src <si> --out <blob>` 装配；"
       f"②装配成功后，参考产物（`corpus/ref/<id>.bin`）与我们的产物各跑一遍宿主，"
       f"**{args.ticks} tick**，两边都灌 `--seed-reset-data {args.seed}`，逐 tick 比段哈希/页/extern"
       "（宿主与比对逻辑复用 `simplexc/tools/host/selftest.py`）。\n")
@@ -905,7 +905,7 @@ def write_survey_report(rows, summary, path, args, targets):
     w(f"# 目录摸底：`{rel(root)}` 的 {total} 份能不能装出来（只装配、不差分）\n")
     w(f"生成 {summary['generated']} · 已完成 {len(corpus)}/{total} 份 · "
       f"{'**中途快照（还没跑完）**' if len(corpus) < total else '跑完'}\n")
-    w("判据口径：每份语料只做第 ①步 `build/simplexc_cli.exe --src <子目录>/test.si --out <blob>`；"
+    w("判据口径：每份语料只做第 ①步 `simplexc/build/simplexc_cli.exe --src <子目录>/test.si --out <blob>`；"
       "这个目录没有 manifest、也没有参考产物，所以**不做差分、不生成参考产物**。"
       "错误类别按 CLI 的 catch 分支前缀归类，细节里行号/列号/数字已抹掉（同一类缺口合并计数）。"
       f"注意：没参考产物就分不清「我们缺功能」与「文件本身不是完整程序」—— {total} 份里的失败，"
@@ -956,7 +956,7 @@ def write_survey_report(rows, summary, path, args, targets):
             w(f"**{c['kind']}：{md_cell(c['detail'], 80)}**（{c['count']} 份，例 {rep['id']}）\n")
             w("```")
             w(f"# 原始错误首行：{rep['err_first_line'] or '—'}")
-            w(f"build/simplexc_cli.exe --src {src_of[rep['id']]['src']} --out {blob}")
+            w(f"simplexc/build/simplexc_cli.exe --src {src_of[rep['id']]['src']} --out {blob}")
             w("```\n")
 
     w("## 与 98 份（hook 抓的生成代码）失败分类的对照\n")

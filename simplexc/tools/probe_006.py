@@ -4,7 +4,7 @@
 跑什么
 ------
     1. `simplexc/.deps/llvm/bin/clang.exe -O2` 编 `simplexc/probe/006_equiv.c` → COFF（**不许 g++ 顶替**）
-    2. `build/tcblob.exe` 装配（→ `<blob>` / `<blob>.entry` / `<blob>.stubs`）
+    2. `simplexc/build/tcblob.exe` 装配（→ `<blob>` / `<blob>.entry` / `<blob>.stubs`）
     3. host 跑参考产物 `simplexc/corpus/ref/006.bin`
     4. host 跑我们的产物，逐 tick 比 pages / 状态字段 / extern 序列
     5. 吞吐：宿主正常驱动（每 tick 墙钟）+ 每 cycle 成本（fresh host 单次 `tick(N)` 差分）
@@ -57,7 +57,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 from tools.tc_common import llvm_root, tool  # noqa: E402
 
-BUILD = os.path.join(REPO, "build")
+BUILD = os.path.join(SIMPLEXC, "build")
 HOST_PY = os.path.join(SIMPLEXC, "tools", "host", "host.py")
 SRC_SI = os.path.join(SIMPLEXC, "corpus", "src", "006.si")
 REF_BIN = os.path.join(SIMPLEXC, "corpus", "ref", "006.bin")

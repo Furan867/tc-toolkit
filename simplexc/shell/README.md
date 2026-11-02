@@ -16,7 +16,7 @@
 
 怎么用：
 
-    python simplexc/tools/build.py objs                  # → build/objs/entry_shim.o（随 blob 装配）
+    python simplexc/tools/build.py objs                  # → simplexc/build/objs/entry_shim.o（随 blob 装配）
     python tools/deploy_compile_hook.py build-deploy     # 编译转发层并部署（游戏必须先关）
 
 ⚠️ 动 `tools/compile_hook.c` 前先持 `work/tmp/locks/compile-hook.lock`（另一个 agent 可能正在改它）。

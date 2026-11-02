@@ -16,4 +16,4 @@
 - 只用 kernel32 + 纯算数 —— 任何 CRT 符号（`sprintf` 之类）都是 `ExternResolver` 解析不了的
   未定义符号，装配会失败（`rt_min.cc` 里手写十进制转换就是这个原因）。
 
-怎么用：`python simplexc/tools/build.py objs` 编成 `build/objs/rt_min.o`，再由 `tcblob` 装进 blob。
+怎么用：`python simplexc/tools/build.py objs` 编成 `simplexc/build/objs/rt_min.o`，再由 `tcblob` 装进 blob。

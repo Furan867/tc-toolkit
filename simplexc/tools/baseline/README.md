@@ -31,7 +31,7 @@
 ```bash
 cd tc-toolkit/
 
-# 1. 先有产物（build/ 不进 git）
+# 1. 先有产物（simplexc/build/ 不进 git）
 python simplexc/tools/build.py
 
 # 2. 落基线：清单进 simplexc/tools/baseline/，blob 与 sidecar 落 work/tmp/baseline-blobs/
@@ -92,7 +92,7 @@ sidecar 的 `offset` 坐标系是**机器码起点**（`blob + 8`，`assemble.hh
 ## 什么时候该重建基线，而不是判据失败
 
 - 语料本身变了（`simplexc/corpus/manifest.tsv` 的 `src_sha256` 变）→ 先更新语料，再 record；
-- `build/objs/{entry_shim,rt_min}.o` 变了（或换 LLVM / 工具链）→ 产物整体变，record 重建；
+- `simplexc/build/objs/{entry_shim,rt_min}.o` 变了（或换 LLVM / 工具链）→ 产物整体变，record 重建；
 - 语料里有 23 份**本来就报错**（未实现 / 外部符号解析器缺符号），它们的 `status` 也在基线里：
   重构后如果它们变成出产物，判据会报差异 —— 那是**有意变更**，人判后重建基线。
 

@@ -116,7 +116,7 @@ class Win32Resolver : public tc::ExternResolver {
 };
 
 /* 装配的三个输入，顺序与 CLI 一致（模块 COFF + shim + runtime）。
-   后两个是构建期嵌进 DLL 的字节 —— 游戏进程里没有 build/objs/。 */
+   后两个是构建期嵌进 DLL 的字节 —— 游戏进程里没有 simplexc/build/objs/。 */
 std::vector<tc::ObjectFile> assemble_inputs(std::vector<uint8_t> module_obj) {
   std::vector<tc::ObjectFile> objs;
   objs.push_back({"module", std::move(module_obj)});

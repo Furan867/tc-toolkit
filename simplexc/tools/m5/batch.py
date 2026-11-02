@@ -3,7 +3,7 @@
 
 每份做四步（后三步只在装配成功后才做）：
 
-  1. **装配**：`build/simplexc_cli.exe --src <si> --out <blob>`（产物旁会有 `.entry` / `.stubs`）。
+  1. **装配**：`simplexc/build/simplexc_cli.exe --src <si> --out <blob>`（产物旁会有 `.entry` / `.stubs`）。
      失败记 `cli_fail` + 原始错误首行；超过 `--cli-timeout` 记 `cli_fail(timeout)`，不重试。
   2. **参考侧跑**：`difftrace run --bin corpus/ref/<id>.bin --save <ref.seq>`。
   3. **我们侧跑**：`difftrace run --bin <blob> --save <ours.seq>`（entry 由 `<blob>.entry` 自动定）。
@@ -55,8 +55,8 @@ TOOLS = os.path.dirname(HERE)                                 # simplexc/tools/
 SIMPLEXC = os.path.dirname(TOOLS)                             # simplexc/
 ROOT = os.path.dirname(SIMPLEXC)                              # tc-toolkit/
 
-CLI = os.path.join(ROOT, "build", "simplexc_cli.exe")
-DIFFTRACE = os.path.join(ROOT, "build", "difftrace.exe")
+CLI = os.path.join(SIMPLEXC, "build", "simplexc_cli.exe")
+DIFFTRACE = os.path.join(SIMPLEXC, "build", "difftrace.exe")
 MANIFEST = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
 REF_DIR = os.path.join(SIMPLEXC, "corpus", "ref")
 
@@ -450,7 +450,7 @@ def write_report(rows, summary, path, args, total, order):
     w(f"生成 {summary['generated']} · 已完成 {summary['done']}/{total} 份"
       f"{'' if summary['done'] == total else ' · **中途快照（还没跑完）**'}"
       f" · `--jobs {args.jobs}` · {args.ticks} tick · seed `{args.seed}`\n")
-    w("判据口径：装配 `build/simplexc_cli.exe`；两侧各 `difftrace run --save` 跑同样 tick 数；"
+    w("判据口径：装配 `simplexc/build/simplexc_cli.exe`；两侧各 `difftrace run --save` 跑同样 tick 数；"
       "`difftrace diff --state --src <si> --classify` 比折叠后的内存终态。"
       "**verdict 取带 `--src` 的那次**（只比 `[game_lo, game_hi)`，见模块 docstring 里 2026-10-25 的修订）；"
       "`diff_bytes_raw` 是不带 `--src` 的整份差异，只是参考列。"
@@ -547,12 +547,12 @@ def write_report(rows, summary, path, args, total, order):
     w("")
     w("## 复现一份\n")
     w("```\n"
-      "build/simplexc_cli.exe --src simplexc/corpus/src/<id>.si --out work/tmp/m5batch/blobs/<id>.bin\n"
-      "build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin simplexc/corpus/ref/<id>.bin "
+      "simplexc/build/simplexc_cli.exe --src simplexc/corpus/src/<id>.si --out work/tmp/m5batch/blobs/<id>.bin\n"
+      "simplexc/build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin simplexc/corpus/ref/<id>.bin "
       f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ref.seq --json\n"
-      "build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin work/tmp/m5batch/blobs/<id>.bin "
+      "simplexc/build/difftrace.exe run --src simplexc/corpus/src/<id>.si --bin work/tmp/m5batch/blobs/<id>.bin "
       f"--target {args.ticks} --seed {args.seed} --save work/tmp/m5batch/seq/<id>.ours.seq --json\n"
-      "build/difftrace.exe diff --state work/tmp/m5batch/seq/<id>.ref.seq "
+      "simplexc/build/difftrace.exe diff --state work/tmp/m5batch/seq/<id>.ref.seq "
       "work/tmp/m5batch/seq/<id>.ours.seq --src simplexc/corpus/src/<id>.si --classify --json\n"
       "```\n")
     try:

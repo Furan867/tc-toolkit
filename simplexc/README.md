@@ -31,7 +31,7 @@
 需要 GCC 14+ 的 `g++` / `cmake` / `ninja` 在 PATH 上，以及 `simplexc/.deps/llvm/`
 （头 + 自造 MinGW 导入库，不进 git；没有就先 `python simplexc/tools/fetch_llvm.py`，
 落点可用 `TC_LLVM_DIR` 覆盖）。
-产物全部落在 `build/`，两条路径写法上的硬要求（为什么产物得与基线逐字节相同）
+产物全部落在 `simplexc/build/`，两条路径写法上的硬要求（为什么产物得与基线逐字节相同）
 见 `simplexc/tools/build.py` 头部与 `simplexc/CMakeLists.txt` 里对应小节的注释。
 
 CMake 是构建定义的**唯一**出处（目标 / 源文件表 / flags 都在 `simplexc/CMakeLists.txt`，
@@ -47,7 +47,7 @@ presets 与它同目录；`cmake/` 下的共享模块与 toolchain 留在仓库�
 |---|---|
 | M0 语料/manifest 一致 | `python simplexc/tools/recompile_corpus.py --check` |
 | M2 差分宿主自比对 | `python simplexc/tools/host/selftest.py --src simplexc/corpus/src/006.si --bin simplexc/corpus/ref/006.bin --ticks 3` |
-| 产物能在进程内跑一遍 | `build/tcblob.exe --obj … --entry __tc_entry --out x.bin --run` |
+| 产物能在进程内跑一遍 | `simplexc/build/tcblob.exe --obj … --entry __tc_entry --out x.bin --run` |
 
 主设计 §7.5 那条「一条命令跑完全语料差分」还没实现；游戏内部分一律 manual/slow。
 

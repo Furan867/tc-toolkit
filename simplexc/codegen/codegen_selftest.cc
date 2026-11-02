@@ -128,7 +128,7 @@ std::vector<std::string> load_keys(const std::string& path) {
 }
 
 std::string regen_cmd(const std::filesystem::path& src) {
-    return "build/codegen_selftest.exe --dump-only " + src.generic_string();
+    return "simplexc/build/codegen_selftest.exe --dump-only " + src.generic_string();
 }
 
 /* 一个用例：生成 IR，逐条查 `.irkeys` 的每一行是否出现在某一行 IR 里（去前导空白后包含）。

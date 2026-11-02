@@ -5,20 +5,21 @@
 # flags 的来历：优化等级与链接开关都是从既有产物**反推确认**过的（见
 # docs/notes/2026-10-17-build-script.md），但它们的布局是收成一处而不是逐目标重抄（见下面的
 # `simplexc_flags`），语言标准也已从 C++17 升到 C++23。
-# 产物因此**不**与那一版逐字节相同：升标准本身就会改 build/objs/*.o（它们会被原样嵌进 DLL），
+# 产物因此**不**与那一版逐字节相同：升标准本身就会改 simplexc/build/objs/*.o（它们会被原样嵌进 DLL），
 # exe/dll 更早就不同 —— CMake 每次都会额外传 `-Wl,--out-implib` 与一票默认 Windows 库，ld 因此
 # 把 .rdata 挪了几十字节；llvm_prog / codegen_selftest 的 LLVM-C 导入库也是按绝对路径给的，
 # 不是旧命令的 `-L` + `-l`。判据不靠字节比（check.py 6 步 / blob_baseline 98 份 / hook_offline 11 case）。
 #
 # 用法
 # ----
-#   cmake --preset mingw                             # 在 simplexc/ 里跑 · = Ninja + ../cmake/toolchain-mingw-w64devkit.cmake + -B ../build/cmake
+#   cmake --preset mingw                             # 在 simplexc/ 里跑 · = Ninja + ../cmake/toolchain-mingw-w64devkit.cmake + -B build/cmake
 #   cmake --build build/cmake                        # = 旧 build.py 的 `all`（8 个目标）
 #   cmake --build build/cmake --target hook           # = 旧 build.py hook（`simplexc_dll` 是同一个目标的别名）
 #   cmake --build build/cmake --target spike          # 空程序 blob（依赖 objs + tcblob，自动补做）
 #
-# 二进制目录必须在外部指定（约定 `-B build/cmake`）：`build/` 里放着产物与产物基线（LLVM 资产在
-# `simplexc/.deps/llvm`，只有 `LLVM-C.dll` 被拷进 `build/`），中间文件不能落在那儿 —— 本文件末尾会拒绝 `-B build`。
+# 二进制目录必须在外部指定（约定 `-B build/cmake`，相对 `simplexc/`）：`simplexc/build/` 里放着产物与
+# 产物基线（LLVM 资产在 `simplexc/.deps/llvm`，只有 `LLVM-C.dll` 被拷进 `simplexc/build/`），中间文件
+# 不能落在那儿 —— 本文件会拒绝 `-B simplexc/build`。
 #
 # 哪些目标在默认构建里（= 旧 build.py 的 `all`）
 # ------------------------------------------------
@@ -78,16 +79,16 @@ target_link_libraries(simplexc_strict_flags INTERFACE simplexc_flags)
 get_filename_component(SIMPLEXC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(SIMPLEXC_DIR "${SIMPLEXC_ROOT}/simplexc")
 # 产物目录 = 外部契约：check.py / m5/batch.py / blob_baseline.py / gen_embedded_objs.py 都按
-# `build/<名字>` 找东西，所以路径不能改。
-set(SIMPLEXC_BUILD "${SIMPLEXC_ROOT}/build")
+# `simplexc/build/<名字>` 找东西，所以路径不能改。
+set(SIMPLEXC_BUILD "${SIMPLEXC_DIR}/build")
 set(SIMPLEXC_OBJ "${SIMPLEXC_BUILD}/objs")
 
 if(CMAKE_BINARY_DIR STREQUAL "${SIMPLEXC_BUILD}")
-  message(FATAL_ERROR "二进制目录不能是 ${SIMPLEXC_BUILD}：那里放着 LLVM 资产与产物基线。\n"
+  message(FATAL_ERROR "二进制目录不能是 ${SIMPLEXC_BUILD}：那里放着产物与产物基线。\n"
     "  用 -B build/cmake（或 `cmake --preset mingw`，在 simplexc/ 里跑）。")
 endif()
 
-# exe 与 DLL 都落在 build/：Windows 上 DLL 算 RUNTIME 产物（LIBRARY 那条为跨平台对称留着）。
+# exe 与 DLL 都落在 simplexc/build/：Windows 上 DLL 算 RUNTIME 产物（LIBRARY 那条为跨平台对称留着）。
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_BUILD}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${SIMPLEXC_BUILD}")
 
@@ -97,7 +98,7 @@ find_package(LLVMC REQUIRED)
 
 # ---------------------------------------------------------------- 产品核心的源文件表
 #
-# DLL 与 `core_selftest` / `simplexc_cli` 共用这一处（`build/objs/assemble.o` 不在表里：
+# DLL 与 `core_selftest` / `simplexc_cli` 共用这一处（`simplexc/build/objs/assemble.o` 不在表里：
 # 它由下面的 `objs` 目标出，见 OBJ_RULES）。共用不是风格问题：表不一样时，判据判的可能是
 # 别的东西 —— 判据要判的就是交付物。
 set(SIMPLEXC_CORE_SOURCES
@@ -116,7 +117,7 @@ set(SIMPLEXC_CORE_SOURCES
   "${SIMPLEXC_ROOT}/simplexc/sema/types.cc"
 )
 
-# ---------------------------------------------------------------- build/objs（四个 COFF）
+# ---------------------------------------------------------------- simplexc/build/objs（四个 COFF）
 #
 # 为什么用 add_custom_command 而不是 add_library(OBJECT)：这四条产物路径是外部契约
 # （`entry_shim.o` / `rt_min.o` 会被 gen_embedded_objs.py 原样嵌进 DLL，其余两个是 CLI / spike
@@ -142,7 +143,7 @@ function(simplexc_add_object name source)
     COMMAND ${CMAKE_CXX_COMPILER} ${_flags} -c "${SIMPLEXC_ROOT}/${source}"
             -o "${SIMPLEXC_OBJ}/${name}.o"
     DEPENDS "${SIMPLEXC_ROOT}/${source}"
-    COMMENT "编译 ${source} → build/objs/${name}.o"
+    COMMENT "编译 ${source} → simplexc/build/objs/${name}.o"
     VERBATIM)
   set(SIMPLEXC_OBJ_OUTPUTS "${SIMPLEXC_OBJ_OUTPUTS}" "${SIMPLEXC_OBJ}/${name}.o" PARENT_SCOPE)
 endfunction()
@@ -175,13 +176,13 @@ set_target_properties(simplexc_cli PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(simplexc_cli PRIVATE "${SIMPLEXC_DIR}")
 target_link_libraries(simplexc_cli PRIVATE simplexc_flags LLVMC::LLVMC)
 
-# Windows 先从 exe 所在目录找依赖 DLL（再看 PATH）→ 把 LLVM-C.dll 放到 build/ 旁边，
+# Windows 先从 exe 所在目录找依赖 DLL（再看 PATH）→ 把 LLVM-C.dll 放到 simplexc/build/ 旁边，
 # 判据（check.py 等）就不用为这一步改 PATH。
 if(LLVMC_RUNTIME_DLL)
   add_custom_command(TARGET simplexc_cli POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LLVMC_RUNTIME_DLL}"
             "${SIMPLEXC_BUILD}/LLVM-C.dll"
-    COMMENT "拷贝 LLVM-C.dll → build/"
+    COMMENT "拷贝 LLVM-C.dll → simplexc/build/"
     VERBATIM)
 endif()
 
@@ -205,21 +206,23 @@ add_executable(llvm_prog "${SIMPLEXC_ROOT}/simplexc/cli/llvm_prog.cc")
 target_link_options(llvm_prog PRIVATE -static)
 target_link_libraries(llvm_prog PRIVATE simplexc_flags LLVMC::LLVMC)
 
-# ---------------------------------------------------------------- hook（= build/compile_hook.dll）
+# ---------------------------------------------------------------- hook（= simplexc/build/compile_hook.dll）
 #
 # 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
 # 壳必须是 C（交给 C++ 编译器会把 .c 当 C++ 编），核心与链接要用 C++ 编译器（要 C++ 运行库）——
 # CMake 按扩展名分。
-set(SIMPLEXC_EMBEDDED_OBJS "${SIMPLEXC_DIR}/shell/embedded_objs.cc")
+# 生成物落在产物目录里（`simplexc/build/shell/`）而不是源码树：它和 objs/ 一样是派生物，
+# 放源码树就会在 `simplexc/shell/` 里多出一份与本文件声明的源文件表无关的文件。
+set(SIMPLEXC_EMBEDDED_OBJS "${SIMPLEXC_BUILD}/shell/embedded_objs.cc")
 
 # 构建期把两个装配用的 COFF（entry_shim.o / rt_min.o）变成字节数组：游戏进程里没有
-# build/objs/（为什么必须嵌进 DLL 见 gen_embedded_objs.py 的 docstring）。
+# simplexc/build/objs/（为什么必须嵌进 DLL 见 gen_embedded_objs.py 的 docstring）。
 add_custom_command(
   OUTPUT "${SIMPLEXC_EMBEDDED_OBJS}"
   COMMAND ${Python3_EXECUTABLE} "${SIMPLEXC_DIR}/tools/gen_embedded_objs.py"
   DEPENDS "${SIMPLEXC_OBJ}/entry_shim.o" "${SIMPLEXC_OBJ}/rt_min.o"
           "${SIMPLEXC_DIR}/tools/gen_embedded_objs.py"
-  COMMENT "生成 simplexc/shell/embedded_objs.cc"
+  COMMENT "生成 simplexc/build/shell/embedded_objs.cc"
   VERBATIM)
 
 add_library(hook SHARED
@@ -334,16 +337,16 @@ target_link_libraries(codegen_selftest PRIVATE simplexc_flags LLVMC::LLVMC)
 #
 # 「空程序」blob —— 只证明链路通，**不能拿进游戏**（会让游戏在下一次编译请求时 abort，见
 # docs/pitfalls.md）。现在没有判据读它：新版壳在进程内编源码，基线壳只在 reference 模式下被驱动。
-# --obj 顺序 = 链接顺序；entry 是 shim 的符号。cwd = 仓库根、输出路径写相对 —— 与旧命令一致，
-# blob 的 sha256 才是可比的。
+# --obj 顺序 = 链接顺序；entry 是 shim 的符号。cwd = `simplexc/`、输出路径写相对的 `build/…` ——
+# argv 里的字符串与旧命令逐字相同，blob 的 sha256 才是可比的。
 add_custom_target(spike
   COMMAND "$<TARGET_FILE:tcblob>"
           --obj build/objs/rt_min.o --obj build/objs/entry_shim.o
           --obj build/objs/prog_empty.o
           --entry __tc_entry --out build/blob_empty.bin
   DEPENDS tcblob objs
-  WORKING_DIRECTORY "${SIMPLEXC_ROOT}"
-  COMMENT "tcblob 装出 build/blob_empty.bin（空程序，只证明链路通）"
+  WORKING_DIRECTORY "${SIMPLEXC_DIR}"
+  COMMENT "tcblob 装出 simplexc/build/blob_empty.bin（空程序，只证明链路通）"
   VERBATIM)
 
 # ---------------------------------------------------------------- difftrace（判据工具，不在默认构建里）
@@ -370,13 +373,13 @@ if(Unicorn_FOUND AND Capstone_FOUND)
     file(TO_CMAKE_PATH "${SIMPLEXC_GAME_DIR}" _game_dir)
     target_compile_definitions(difftrace PRIVATE "TC_GAME_DIR=\"${_game_dir}\"")
   endif()
-  # Windows 先从 exe 所在目录找依赖 DLL → 两个 dll 放 build/ 旁边，跑判据不用改 PATH。
+  # Windows 先从 exe 所在目录找依赖 DLL → 两个 dll 放 simplexc/build/ 旁边，跑判据不用改 PATH。
   add_custom_command(TARGET difftrace POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${UNICORN_RUNTIME_DLL}"
             "${SIMPLEXC_BUILD}/unicorn.dll"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CAPSTONE_RUNTIME_DLL}"
             "${SIMPLEXC_BUILD}/capstone.dll"
-    COMMENT "拷贝 unicorn.dll / capstone.dll → build/"
+    COMMENT "拷贝 unicorn.dll / capstone.dll → simplexc/build/"
     VERBATIM)
 else()
   # 目标名照样占住：缺 SDK 时 `--target difftrace` 要给出那句 hint 原文并以非 0 退出，

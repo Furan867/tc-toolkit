@@ -19,7 +19,7 @@
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `compile_hook.c` → `build/compile_hook.dll` | **转发层**：劫持 `compile()`，拿源码与产物，并记 `work/hook/manifest.tsv`（flags / Result 5 字段 / sha256） | ✅ |
+| `compile_hook.c` → `simplexc/build/compile_hook.dll` | **转发层**：劫持 `compile()`，拿源码与产物，并记 `work/hook/manifest.tsv`（flags / Result 5 字段 / sha256） | ✅ |
 | `optimize_image.py` | 机器码改写器：四态 + 两条规则 + 锚点协议 | ✅ |
 | `check_shift_equiv.py` | 把改写前后的字节真跑一遍，验证语义等价 | ✅ |
 | `try_compile_dll.py` | 离线加载 `compile.dll` 调 `compile()` | ✅ ⚠️ 须从游戏目录运行 |
@@ -62,7 +62,7 @@ work/opt/      转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log（唯�
 work/freq/     主频采样：freq_log.tsv（事件）与 freq_summary.txt（给人读）
 work/symbols/  符号表        work/maps/  组件映射表与建映射中间产物
 work/reports/  分析报告      work/tmp/   一次性中间产物
-build/         compile_hook.dll（构建产物）
+simplexc/build/   编译产物：compile_hook.dll / simplexc_cli.exe / objs/ / shell/ / cmake/
 ```
 
 清空语义见 [`facts/forwarding.md`](facts/forwarding.md)。**取主频数只读 `work/freq/freq_summary.txt`**。

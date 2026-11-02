@@ -365,7 +365,7 @@ def print_compile_recipe(layout: Layout) -> None:
     say("  python simplexc/tools/build.py difftrace")
     say("  # 等价：cmake --build build/cmake --target difftrace（无 cache 先 cd simplexc && cmake --preset mingw）")
     say("")
-    say("运行前 difftrace.exe 旁边要有这两个 dll（构建时已拷到 build/；或用 PATH）:")
+    say("运行前 difftrace.exe 旁边要有这两个 dll（构建时已拷到 simplexc/build/；或用 PATH）:")
     say(f"  {shown_path(layout.unicorn_lib / 'unicorn.dll')}")
     say(f"  {shown_path(layout.capstone_lib / 'capstone.dll')}")
 

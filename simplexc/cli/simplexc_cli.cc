@@ -9,7 +9,7 @@
  *
  * 用法：
  *   simplexc-cli --src <file.si> [--out <blob>] [--ir-out <ll>] [--obj-out <coff>]
- *                [--objs-dir build/objs] [--entry 0xXXXX] [--list-unsupported] [--verbose]
+ *                [--objs-dir simplexc/build/objs] [--entry 0xXXXX] [--list-unsupported] [--verbose]
  * 退出码：0 成功；1 编译/装配失败（含 unsupported）；2 读不了文件或参数问题。
  */
 #include <windows.h>
@@ -82,13 +82,13 @@ bool write_file(const std::string& path, const void* data, size_t n) {
 void usage() {
   std::fprintf(stderr,
                "用法：simplexc-cli --src <file.si> [--out <blob>] [--ir-out <ll>] [--obj-out <coff>]\n"
-               "                    [--objs-dir build/objs] [--entry 0xXXXX] [--list-unsupported] [--verbose]\n");
+               "                    [--objs-dir simplexc/build/objs] [--entry 0xXXXX] [--list-unsupported] [--verbose]\n");
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  std::string src, out_path, ir_path, obj_path, objs_dir = "build/objs";
+  std::string src, out_path, ir_path, obj_path, objs_dir = "simplexc/build/objs";
   bool list_unsupported = false, verbose = false, timing = false;
   uint64_t entry_override = 0;
   bool has_entry_override = false;

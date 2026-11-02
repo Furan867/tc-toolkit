@@ -70,7 +70,7 @@ python simplexc/tools/check.py
 ## 开发
 
 - 代码：`simplexc/`（编译器与转发层）、`tools/`（逆向分析工具）。构建脚本在 `simplexc/CMakeLists.txt`，
-  产物落仓库根的 `build/`。
+  产物落 `simplexc/build/`。
 - 文档索引：[docs/map.md](docs/map.md)。
 - Simplex 的运行期语义：[docs/facts/semantics.md](docs/facts/semantics.md)。
 - 官方编译器的行为（重载择优、`asm` 重新汇编、`def` 非重入……）：[docs/facts/ref-compiler.md](docs/facts/ref-compiler.md)。

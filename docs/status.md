@@ -54,7 +54,7 @@ M5 功能线暂停（见末节），不再往新功能推进。
 
 ## 环境
 
-- `build/` 是共享的：多写者按目录切分，同一时刻只让一个写者跑判据入口。
+- `simplexc/build/` 是共享的：多写者按目录切分，同一时刻只让一个写者跑判据入口。
 - `python simplexc/tools/build.py` 默认目标**不含** `simplexc_cli` / `difftrace`；改了编译器要另跑。
 - 判据入口：`check.py`（6 步约 40 s，需部署状态）· `m5/batch.py`（`--with-prefix` 跑 stdlib 全量）· `difftrace`（run / diff / where）。
 - clangd：`simplexc/**/compile_flags.txt` 只给 LLVM 头与 `-std`，不写 `--gcc-toolchain`（clangd 自己从 PATH 推）。

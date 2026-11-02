@@ -6,7 +6,7 @@
 用法
     build.py               默认构建（= all 那 8 个目标）
     build.py <目标>...     只建这几个
-    build.py clean         清掉构建产物（保留 build/cmake 的缓存）
+    build.py clean         清掉构建产物（保留 simplexc/build/cmake 的缓存）
     build.py -l, --list    列出全部目标
 
 前置：g++ / cmake / ninja 从 PATH 找（需要 GCC 14+）· 两份资产都不进 git：
@@ -14,7 +14,7 @@ LLVM 要 `simplexc/.deps/llvm/{include,lib}`（`simplexc/tools/fetch_llvm.py` �
 difftrace 的 C SDK 要 `work/tools/difftrace-deps/`（`simplexc/tools/difftrace/fetch_deps.py`；
 缺它只有该目标不可用，hint 原文照印）。
 
-产物在 `build/<名字>`；`build/objs/*.o` 会被嵌进 DLL。判据走 `check.py`，不按字节比。
+产物在 `simplexc/build/<名字>`；`simplexc/build/objs/*.o` 会被嵌进 DLL。判据走 `check.py`，不按字节比。
 并行由 Ninja 自己决定（环境变量 `CMAKE_BUILD_PARALLEL_LEVEL` 可覆盖）。
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)                        # simplexc/（= CMakePresets.json 所在目录）
 REPO = os.path.dirname(SIMPLEXC)                        # tc-toolkit/
-CMAKE_BUILD = os.path.join(REPO, "build", "cmake")     # = CMakePresets.json 的 binaryDir（${sourceDir}/../build/cmake）
+CMAKE_BUILD = os.path.join(SIMPLEXC, "build", "cmake")     # = CMakePresets.json 的 binaryDir（${sourceDir}/build/cmake）
 
 # 与 simplexc/CMakeLists.txt 头部的清单一一对应；其余目标在 CMake 里是 EXCLUDE_FROM_ALL（要显式 --target）。
 ALL = ("objs", "tcblob", "llvm_prog", "hook", "ast_dump", "hir_selftest",
@@ -65,15 +65,15 @@ def run(cmd: list[str]) -> int:
 
 
 def clean() -> int:
-    """删掉 CMake 知道的构建产物；`build/cmake` 的缓存留着（下次增量快）。"""
+    """删掉 CMake 知道的构建产物；`simplexc/build/cmake` 的缓存留着（下次增量快）。"""
     if not os.path.exists(os.path.join(CMAKE_BUILD, "CMakeCache.txt")):
-        print("没有构建树（build/cmake 未 configure），无需清理。")
+        print("没有构建树（simplexc/build/cmake 未 configure），无需清理。")
         return 0
     return run([cmake(), "--build", CMAKE_BUILD, "--target", "clean"])
 
 
 def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description="simplexc 的一键构建（转调 CMake，产物在 build/）："
+    ap = argparse.ArgumentParser(description="simplexc 的一键构建（转调 CMake，产物在 simplexc/build/）："
                                  "all = " + "+".join(ALL))
     ap.add_argument("targets", nargs="*", default=[],
                     help="all | clean | " + " | ".join(TARGETS) + "（默认 all）")

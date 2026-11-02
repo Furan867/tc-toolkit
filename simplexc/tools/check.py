@@ -7,7 +7,7 @@
 |---|---|
 | `corpus`        | `python simplexc/tools/recompile_corpus.py --check`（M0：语料/manifest 一致 + 同源三条断言）|
 | `host_selftest` | `python simplexc/tools/host/selftest.py --src …006.si --bin …006.bin --ticks 3`（M2 宿主自比对）|
-| `lower_equiv`   | `build/simplexc_cli.exe`（**C++ 产品路径**）出 rv32im 产物 → 宿主与参考逐 tick 比对（10 tick，灌 RESET_DATA）|
+| `lower_equiv`   | `simplexc/build/simplexc_cli.exe`（**C++ 产品路径**）出 rv32im 产物 → 宿主与参考逐 tick 比对（10 tick，灌 RESET_DATA）|
 | `blob_baseline` | `simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline`（98 份语料的装配产物逐字段比，重构前后必须等价）|
 | `hook_offline`  | `hook_offline.run_all()`：壳的四种情形 + refcmp + 超时（case 数见摘要 cases=N/M）|
 | `probe_006`     | `simplexc/tools/probe_006.py`（M1.5 探针，**可选**：缺依赖/脚本在改 → SKIP）|
@@ -64,7 +64,7 @@ BASELINE_BLOBS = os.path.join(ROOT, "work", "tmp", "baseline-blobs")
 
 CORPUS_SRC = os.path.join("simplexc", "corpus", "src", "006.si")
 CORPUS_BIN = os.path.join("simplexc", "corpus", "ref", "006.bin")
-BUILD = os.path.join(ROOT, "build")
+BUILD = os.path.join(SIMPLEXC, "build")
 SIMPLEXC_CLI = os.path.join(BUILD, "simplexc_cli.exe")
 HOST = os.path.join(HERE, "host", "host.py")
 RV32IM_SRC = os.path.join("simplexc", "corpus", "rv32im", "rv32im.si")
@@ -202,7 +202,7 @@ def step_host_selftest(ctx):
 
 @step("lower_equiv", "M4.5：C++ 产物 vs 参考产物逐 tick 等价（rv32im，10 tick，灌 RESET_DATA）")
 def step_lower_equiv(ctx):
-    """生产者是**我们自己的**编译器（`build/simplexc_cli.exe`，C++17），不是原版编译器 ——
+    """生产者是**我们自己的**编译器（`simplexc/build/simplexc_cli.exe`，C++17），不是原版编译器 ——
     这一步才是「C++ 前端 + lowering 能独立产出等价产物」的判据。
 
     没有 CLI 就是 SKIP（不是 FAIL）：它要先 `python simplexc/tools/build.py simplexc_cli`。

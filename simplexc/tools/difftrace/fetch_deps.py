@@ -6,7 +6,7 @@ README 那段手工流程是七条命令加写死的解释器绝对路径，换�
 这里把「下载/解包/gendef/dlltool/打印编译命令」固定下来，并把版本与 dll 的 sha256 记进
 `deps.json`，下次跑就能判断「已存在且校验通过」而不是盲目重建。
 
-产物（默认 `<repo>/work/tools/difftrace-deps/`，`work/` 已被 gitignore）::
+产物（默认 `<repo>/simplexc/.deps/difftrace-deps/`，`.deps/` 已被 simplexc/.gitignore 挡掉）::
 
     unicorn/include/unicorn/*.h     wheel 里的 unicorn/include
     unicorn/lib/unicorn.dll         wheel 里的 unicorn/lib/*.dll（wheel 里的 unicorn.lib 不要）
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import NoReturn
 
 REPO = Path(__file__).resolve().parents[3]
-DEFAULT_DEST = REPO / "work" / "tools" / "difftrace-deps"
+DEFAULT_DEST = REPO / "simplexc" / ".deps" / "difftrace-deps"
 UNICORN_WHEEL_INSTRUCTIONS = (
     "  有网时先下载（或在浏览器里打开 https://pypi.org/simple/unicorn/ 取 win_amd64 的 wheel）:\n"
     "    python -m pip download unicorn --no-deps -d {wheel_dir}\n"
@@ -377,7 +377,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--dest",
         default=str(DEFAULT_DEST),
-        help="依赖装到这里（默认 <repo>/work/tools/difftrace-deps）",
+        help="依赖装到这里（默认 <repo>/simplexc/.deps/difftrace-deps）",
     )
     parser.add_argument(
         "--force", action="store_true", help="已存在的产物全部重建（在线时重新下载 wheel）"

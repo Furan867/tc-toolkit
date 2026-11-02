@@ -28,7 +28,7 @@ python simplexc/tools/build.py difftrace          # → build/difftrace.exe（�
 python simplexc/tools/build.py difftrace_selftest # 编并跑 16 条边界用例
 ```
 
-SDK 不进 git，落在 `work/tools/difftrace-deps/`。`build.py` 的默认目标 `all` **不含** difftrace，
+SDK 不进 git，落在 `simplexc/.deps/difftrace-deps/`。`build.py` 的默认目标 `all` **不含** difftrace，
 所以没装 SDK 的机器上 `build.py` 照样成功。
 
 ## 用法

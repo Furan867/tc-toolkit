@@ -1,13 +1,13 @@
-# Capstone::Capstone —— difftrace 用的 Capstone 5.0.7（`work/tools/difftrace-deps/capstone`）。
+# Capstone::Capstone —— difftrace 用的 Capstone 5.0.7（`simplexc/.deps/difftrace-deps/capstone`）。
 #
 # 与 FindUnicorn.cmake 同一套约定（那份说明在这里不重复）：SDK 不进 git、找不到不算错误，
 # 缺它只让 difftrace 目标不可用。
 #
-# 输入：CAPSTONE_ROOT（默认 <repo>/work/tools/difftrace-deps/capstone，可 -D 覆盖）
+# 输入：CAPSTONE_ROOT（默认 <repo>/simplexc/.deps/difftrace-deps/capstone，可 -D 覆盖）
 # 产出：target Capstone::Capstone（UNKNOWN IMPORTED）；变量 CAPSTONE_RUNTIME_DLL（lib/capstone.dll）
 
 if(NOT CAPSTONE_ROOT)
-  set(CAPSTONE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../work/tools/difftrace-deps/capstone")
+  set(CAPSTONE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../simplexc/.deps/difftrace-deps/capstone")
 endif()
 
 find_path(CAPSTONE_INCLUDE_DIR

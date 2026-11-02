@@ -351,7 +351,7 @@ add_custom_target(spike
 
 # ---------------------------------------------------------------- difftrace（判据工具，不在默认构建里）
 #
-# 要 Unicorn / Capstone 的 C SDK（work/tools/difftrace-deps/，不进 git，由 fetch_deps.py 备齐）。
+# 要 Unicorn / Capstone 的 C SDK（simplexc/.deps/difftrace-deps/，不进 git，由 fetch_deps.py 备齐）。
 # 缺 SDK 只让这一个目标不可用 —— 默认构建的成功不能依赖它。
 set(SIMPLEXC_DIFFTRACE_DEPS_HINT
   "difftrace 的 C SDK（Unicorn / Capstone）不进 git，先跑 python simplexc/tools/difftrace/fetch_deps.py 备齐头文件与导入库。")

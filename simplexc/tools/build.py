@@ -11,7 +11,7 @@
 
 前置：g++ / cmake / ninja 从 PATH 找（需要 GCC 14+）· 两份资产都不进 git：
 LLVM 要 `simplexc/.deps/llvm/{include,lib}`（`simplexc/tools/fetch_llvm.py` 默认解到这里，缺它 configure 直接失败）·
-difftrace 的 C SDK 要 `work/tools/difftrace-deps/`（`simplexc/tools/difftrace/fetch_deps.py`；
+difftrace 的 C SDK 要 `simplexc/.deps/difftrace-deps/`（`simplexc/tools/difftrace/fetch_deps.py`；
 缺它只有该目标不可用，hint 原文照印）。
 
 产物在 `simplexc/build/<名字>`；`simplexc/build/objs/*.o` 会被嵌进 DLL。判据走 `check.py`，不按字节比。

@@ -8,6 +8,9 @@ bucket=0 未归属的二分按 `docs/specs/2026-11-01-hotspot-profiler-design.md
 （「有 stubs 切桩 / 剩余为公共根」）。§6 的查询顺序写的是 segments → lines → stubs，
 但 `lines` 只提供行号明细、不参与这里的两分：若先判 `lines`，落进桩里又有行号信息
 的样本会被算成公共根，表 4 的两个子桶就失真。
+
+公共根再按侧车的 `functions` 归到函数（新 sidecar 才有），且**只在这时才看函数**：
+函数区间是嵌套 DIE 切出来的最内层区间，先按元件切才能不把元件机器码重复算进函数热度。
 """
 from __future__ import annotations
 
@@ -21,6 +24,8 @@ from typing import Callable, Generic, TypeVar
 SAMPLE_HEADER = "# samples.tsv v1"
 SAMPLE_COLUMNS = ("bucket", "blob_offset", "thread_id", "count")
 BUCKETS = (0, 1, 2)
+# sidecar `functions[]` 的 schema 版本（`meta.functions_version`）；只认这一版
+FUNCTIONS_VERSION = 1
 
 
 class AnalysisError(Exception):
@@ -145,6 +150,9 @@ class Sidecar:
     lines: IntervalTable[LineRef]
     stubs: IntervalTable[tuple[str, str]]
     source_file: str | None = None      # meta.sources 里 role=="source" 的文件（旧 sidecar → None）
+    stdlib_file: str | None = None      # meta.sources 里 role=="stdlib" 的文件（无 --stdlib → None）
+    functions: IntervalTable[int] | None = None   # blob 偏移 → func_id（旧 sidecar → None）
+    function_info: dict[int, FunctionInfo] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,18 @@ class LineRef:
 
     def __str__(self) -> str:
         return f"{self.file}:{self.line}" if self.file else f"{self.line}"
+
+
+@dataclass(frozen=True)
+class FunctionInfo:
+    """一个函数的身份（sidecar `functions[]` 的一条）；`name`/`line` 可能缺失。"""
+    func_id: int
+    name: str | None
+    file: str | None
+    line: int | None
+    tag: str
+    depth: int
+    origin: int | None
 
 
 def load_sidecar(path: str, code_len: int | None = None) -> Sidecar:
@@ -198,11 +218,87 @@ def load_sidecar(path: str, code_len: int | None = None) -> Sidecar:
     segments = _load_table(path, code_len, "segments", doc.get("segments"), segment_payload)
     lines = _load_table(path, code_len, "lines", doc.get("lines"), _line_payload(path))
     stubs = _load_table(path, code_len, "stubs", doc.get("stubs"), _stub_payload(path))
+    functions = None
+    function_info: dict[int, FunctionInfo] = {}
+    if doc.get("functions") is not None:
+        _check_functions_version(path, doc.get("meta"))
+        functions, function_info = _load_functions(path, doc["functions"], code_len)
 
     return Sidecar(
         path=str(path), compiler=compiler, artifact_len=art_len, artifact_sha256=art_sha,
         elements=elements, segments=segments, lines=lines, stubs=stubs,
-        source_file=_source_file(path, doc.get("meta")))
+        source_file=_source_file(path, doc.get("meta"), "source"),
+        stdlib_file=_source_file(path, doc.get("meta"), "stdlib"),
+        functions=functions, function_info=function_info)
+
+
+def _check_functions_version(path: str, meta) -> None:
+    """有 `functions` 就必须自带版本号：只认一种口径，遇到就报，不猜。"""
+    version = meta.get("functions_version") if isinstance(meta, dict) else None
+    if version != FUNCTIONS_VERSION:
+        raise AnalysisError(
+            path, f"有 functions 但 meta.functions_version={version!r}，本工具只认 {FUNCTIONS_VERSION}")
+
+
+def _load_functions(path: str, raw, code_len: int | None):
+    """sidecar `functions[]` → （区间表，func_id → 身份）。空 ranges 的抽象实例只进身份表。"""
+    if not isinstance(raw, list) or not raw:
+        raise AnalysisError(path, "functions 必须是非空数组（不写这个键表示没有函数信息）")
+    info: dict[int, FunctionInfo] = {}
+    spans: list[tuple[int, int, int]] = []
+    for index, item in enumerate(raw):
+        where = f"functions[{index}]"
+        if not isinstance(item, dict):
+            raise AnalysisError(path, f"{where} 必须是对象")
+        func_id = _int_field(path, item, "func_id", where)
+        if func_id in info:
+            raise AnalysisError(path, f"{where}: func_id {func_id} 重复")
+        tag = item.get("tag")
+        if tag not in ("subprogram", "inline"):
+            raise AnalysisError(path, f"{where}: tag 必须是 subprogram/inline（实测 {tag!r}）")
+        name = item.get("name")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise AnalysisError(path, f"{where}: name 必须是非空字符串或 null（实测 {name!r}）")
+        file = item.get("file")
+        if file is not None and (not isinstance(file, str) or not file):
+            raise AnalysisError(path, f"{where}: file 必须是非空字符串或 null（实测 {file!r}）")
+        line = item.get("decl_line")
+        if line is not None and (not isinstance(line, int) or isinstance(line, bool) or line < 1):
+            raise AnalysisError(path, f"{where}: decl_line 必须是正整数或 null（实测 {line!r}）")
+        depth = _int_field(path, item, "depth", where)
+        origin = item.get("origin")
+        if origin is not None and not isinstance(origin, int):
+            raise AnalysisError(path, f"{where}: origin 必须是整数或 null（实测 {origin!r}）")
+        ranges = item.get("ranges")
+        if not isinstance(ranges, list):
+            raise AnalysisError(path, f"{where}: ranges 必须是数组")
+        info[func_id] = FunctionInfo(func_id=func_id, name=name, file=file, line=line,
+                                     tag=tag, depth=depth, origin=origin)
+        for j, pair in enumerate(ranges):
+            if not (isinstance(pair, list) and len(pair) == 2
+                    and all(isinstance(v, int) and not isinstance(v, bool) for v in pair)):
+                raise AnalysisError(path, f"{where}.ranges[{j}] 必须是 [start, end] 两个整数")
+            start, end = pair
+            if start < 0:
+                raise AnalysisError(path, f"{where}.ranges[{j}]: start={start} 为负")
+            if end <= start:
+                raise AnalysisError(path, f"{where}.ranges[{j}]: end 必须大于 start（区间 half-open）")
+            if code_len is not None and end > code_len:
+                raise AnalysisError(path, f"{where}.ranges[{j}]: 结束偏移 {end} 超出产物代码长度 "
+                                         f"{code_len}（坐标越界）")
+            spans.append((start, end, func_id))
+
+    for func_id, entry in info.items():
+        if entry.origin is not None and entry.origin not in info:
+            raise AnalysisError(path, f"functions: 函数 {func_id} 的 origin={entry.origin} "
+                                     "不在 functions 里")
+    spans.sort()
+    for prev, cur in zip(spans, spans[1:], strict=False):
+        if cur[0] < prev[1]:
+            raise AnalysisError(
+                path, f"functions: 区间必须互不重叠（{cur[2]} 的 {cur[0]} 落在 "
+                      f"{prev[2]} 的 [{prev[0]},{prev[1]}) 里）— 没切成最内层？")
+    return IntervalTable("functions", spans), info
 
 
 def _load_elements(path: str, raw) -> dict[int, Element]:
@@ -277,14 +373,14 @@ def _line_payload(path: str):
     return extract
 
 
-def _source_file(path: str, meta) -> str | None:
-    """`meta.sources` 里 role=="source" 的文件名；旧 sidecar 没有这份台账 → None。"""
+def _source_file(path: str, meta, role: str) -> str | None:
+    """`meta.sources` 里 role 对应的文件名；旧 sidecar 没有这份台账 → None。"""
     if meta is None:
         return None
     if not isinstance(meta, dict):
         raise AnalysisError(path, f"meta 必须是对象或 null（实测 {type(meta).__name__}）")
     for item in meta.get("sources") or []:
-        if isinstance(item, dict) and item.get("role") == "source":
+        if isinstance(item, dict) and item.get("role") == role:
             name = item.get("file")
             return name if isinstance(name, str) and name else None
     return None
@@ -325,6 +421,8 @@ class Attribution:
     root_samples: int = 0
     root_with_line: int = 0                                         # 公共根里带行号信息的样本
     root_line_files: Counter = field(default_factory=Counter)       # 公共根里带行号的样本按文件分
+    root_function_samples: Counter = field(default_factory=Counter)  # 公共根按 func_id 分（新 sidecar）
+    root_no_function: int = 0                                       # 公共根里没函数信息的样本
 
 
 def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -> Attribution:
@@ -361,4 +459,10 @@ def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -
             result.root_with_line += row.count
             if ref.file:
                 result.root_line_files[ref.file] += row.count
+        if sidecar.functions is not None:
+            func_id = sidecar.functions.find(row.offset)
+            if func_id is None:
+                result.root_no_function += row.count
+            else:
+                result.root_function_samples[func_id] += row.count
     return result

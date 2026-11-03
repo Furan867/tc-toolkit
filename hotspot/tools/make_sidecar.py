@@ -4,12 +4,14 @@
 输入：LLVM 对象（`.debug_line` 行表，W1 产）+ `el.tsv`（元件表，W1 产）+
 `<blob>.offsets`（偏移基准，W1 产）+ 产物本身 + 现成的 `<blob>.stubs`。
 输出：`segments`（blob 偏移区间 → 元件）、`lines`（全部有行号信息的机器段，含未归属段；
-行号已按 offsets 的 `sources` 绑回 (file, 文件内行)）、`stubs`、`elements`（按 (type,id)
+行号已按 offsets 的 `sources` 绑回 (file, 文件内行)）、`functions`（函数体区间 → 函数，
+`lines`/`segments` 各带一列 `func_id`）、`stubs`、`elements`（按 (type,id)
 合并的台账）、`meta`（可选 `--timing-log` + 原样抄过来的 `sources`）。
 
 为什么行号要绑定来源文件：`--stdlib` 把前缀拼在源码前，`.debug_line` 里源码的行全部
 `+ 前缀行数`；而 `el.tsv` 记的是源文件内行号 —— 不拆回 (file, 行)，两边的行号就会
-差一个前缀（源码行被标成 stdlib、stdlib 行去查源文件的元件表）。
+差一个前缀（源码行被标成 stdlib、stdlib 行去查源文件的元件表）。函数的 `decl_line`
+同一个口径（它也是拼接后行号），所以用的也是同一份 `sources`。
 
 为什么不能只靠对象文件：`.debug_line` 的地址是对象 `.text` 节内偏移（对象节 VMA=0），
 装配器又把 `.debug*` 全丢了（`simplexc/assemble/assemble.cc:163-172`），所以「对象地址
@@ -27,6 +29,7 @@ import json
 import subprocess
 import sys
 
+import functions
 import sidecar as sc
 
 
@@ -57,10 +60,16 @@ def build_sidecar(args):
     cus = sc.parse_decodedline(run_objdump_decodedline(args.objdump, args.obj))
     lines = bind_files(sc.build_lines(cus, anchors, offsets["body_end"]),
                        line_offset, stdlib_file, source_file)
+    funcs = bind_files(build_function_records(
+        functions.build_functions(args.objdump, args.obj), anchors, offsets["body_end"]),
+        line_offset, stdlib_file, source_file, key="decl_line")
     # elements 的行区间是**源文件内**行号，所以只有源文件的行能 join 出 segments：stdlib 前缀的
     # 行没有元件注释，拿它去查源文件的元件表会命中值域相同的行（两边的行号都从 1 数起）。
     own = [span for span in lines if source_file is None or span["file"] == source_file]
     segments = sc.join_segments(own, elements)
+    index = sc.FunctionIndex(funcs)
+    for span in lines + segments:
+        span["func_id"] = index.span_func(span["start"], span["end"])
 
     stubs_path = args.stubs or (args.blob + ".stubs")
     try:
@@ -78,6 +87,8 @@ def build_sidecar(args):
         meta["sources"] = sources
         for element in elements:
             element["source"] = source_file
+    meta = dict(meta or {})
+    meta["functions_version"] = sc.FUNCTIONS_VERSION
 
     sidecar = {
         "version": sc.SCHEMA_VERSION,
@@ -87,10 +98,32 @@ def build_sidecar(args):
         "elements": elements,
         "segments": segments,
         "lines": lines,
+        "functions": funcs,
         "stubs": stubs,
     }
     sc.check_invariants(sidecar, offsets["code_size"])
     return sidecar
+
+
+def build_function_records(funcs, anchors, body_end):
+    """函数表（对象坐标）→ sidecar `functions`（blob 坐标），与行表用同一套 anchors。"""
+    records = []
+    for fn in funcs:
+        ranges = []
+        for start, end in fn.ranges:
+            blob_start = sc.obj_to_blob(anchors, start)
+            blob_end = sc.obj_to_blob(anchors, end, allow_end=True)
+            if blob_end - blob_start != end - start:
+                raise sc.SidecarError(f"函数 {fn.name!r} 的区间 0x{start:x}-0x{end:x} "
+                                      "跳过了 .text 节边界")
+            if blob_end > body_end:
+                raise sc.SidecarError(f"函数 {fn.name!r} 的区间 [{blob_start},{blob_end}) "
+                                      f"越过 body_end {body_end}")
+            ranges.append([blob_start, blob_end])
+        records.append({"func_id": fn.func_id, "ranges": ranges, "name": fn.name,
+                        "decl_line": fn.decl_line, "file": None, "tag": fn.tag,
+                        "depth": fn.depth, "origin": fn.origin})
+    return records
 
 
 def load_sources(offsets):
@@ -130,16 +163,24 @@ def load_sources(offsets):
     return line_offset, (stdlib["file"] if stdlib else None), source["file"], sources
 
 
-def bind_files(lines, line_offset, stdlib_file, source_file):
-    """拼接后行号 → (file, 文件内行)：`line <= line_offset` 属 stdlib 前缀，行号不变。"""
+def bind_files(lines, line_offset, stdlib_file, source_file, key="line"):
+    """拼接后行号 → (file, 文件内行)：`line <= line_offset` 属 stdlib 前缀，行号不变。
+
+    `key` 是行号所在的字段名：`lines` 用 `line`，`functions` 用 `decl_line` —— 两边必须
+    同一套口径，否则同一个函数的行会与它自己的机器段归到不同的文件上。
+    """
     if source_file is None:
         return lines
     for span in lines:
-        if span["line"] <= line_offset:
+        line = span.get(key)
+        if line is None:
+            span["file"] = None
+            continue
+        if line <= line_offset:
             span["file"] = stdlib_file
         else:
             span["file"] = source_file
-            span["line"] -= line_offset
+            span[key] = line - line_offset
     return lines
 
 
@@ -165,9 +206,11 @@ def main(argv=None):
         f.write("\n")
 
     covered = sum(s["end"] - s["start"] for s in sidecar["segments"])
+    func_covered = sum(end - start for fn in sidecar["functions"] for start, end in fn["ranges"])
     print(f"sidecar → {args.out}：{len(sidecar['elements'])} 元件 / "
           f"{len(sidecar['segments'])} 段（覆盖 {covered} B）/ "
-          f"{len(sidecar['lines'])} 行区间 / {len(sidecar['stubs'])} 跳板")
+          f"{len(sidecar['lines'])} 行区间 / {len(sidecar['stubs'])} 跳板 / "
+          f"{len(sidecar['functions'])} 函数（覆盖 {func_covered} B）")
     return 0
 
 

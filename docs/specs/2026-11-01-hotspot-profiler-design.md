@@ -276,23 +276,32 @@ rnglists 支持参差）届时实测。侧车 schema 不变。
      "stages": { "frontend": …, "sema": null, "lowering": …, "llvm": …, "assemble": … },
      "sources": [                  // 原样拄自 offsets：行号的来源文件表（参与拼接的文件）
        { "file": "stdlib_prefix.si", "lines": 1503, "role": "stdlib", "path": "…" },
-       { "file": "hook_src_009.si",  "lines": 9053, "role": "source", "path": "…" } ]
+       { "file": "hook_src_009.si",  "lines": 9053, "role": "source", "path": "…" } ],
+     "functions_version": 1        // `functions[]` 与 `func_id` 的 schema 版本；无函数表的旧侧车没有这个键
   },                              // 用途：主设计 §7.6「LLVM 化了没变快」可归因
   "elements": [                        // 元件台账：按 (type,id) 去重（Provider 合并 el.tsv）；行区间数组（§2 规则）
      { "id": 9, "type": "com_register_word", "width": 8,
        "lines": [[355,361], [802,809]], "tail": 1985710402811285152,
        "source": "hook_src_009.si" },  // 行区间属于哪份文件（= sources 里 role=source 的 file）
   ],
-  "segments": [ { "start": 0, "end": 122, "id": 9 } ],    // 主查询表：blob 偏移区间 → 元件
-  "lines":    [ { "start": 0, "end": 44, "line": 1234,
-                 "file": "hook_src_009.si" } ],  // 全部有行号信息的机器段（含元件段与未归属段）；
-                                                 // `line` 是**文件内**行号，`file` 说它是哪份文件；
-                                                 // 表 3（行级明细）与「未归属段」都从它查
+  "segments": [ { "start": 0, "end": 122, "id": 9, "func_id": 17 } ],    // 主查询表：blob 偏移区间 → 元件
+  "lines":    [ { "start": 0, "end": 44, "line": 1234, "file": "hook_src_009.si",
+                 "func_id": 17 } ],  // 全部有行号信息的机器段（含元件段与未归属段）；
+                                      // `line` 是**文件内**行号，`file` 说它是哪份文件；
+                                      // 表 3（行级明细）与「未归属段」都从它查
+  "functions": [                  // 函数体台账（.debug_info 的 DW_TAG_subprogram / inlined_subroutine）
+     { "func_id": 17,             // ranges 与其他函数互不重叠（已按「最内层 DIE」切过）
+       "ranges": [[0, 122], [900, 940]],   // 抽象实例没有函数体 → 空数组
+       "name": "mode_run", "decl_line": 7049, "file": "hook_src_009.si",
+       "tag": "subprogram",       // subprogram | inline
+       "depth": 1,                // DIE 嵌套深度（最内层判定用的就是它）
+       "origin": null } ],        // 内联实例指向抽象实例的 func_id；没有 abstract_origin 则 null
   "stubs":    [ { "start": 412, "end": 440, "kind": "stub", "name": "kernel32.VirtualAlloc" } ]
 }
 ```
 
-旧 sidecar（没有 `file`/`meta.sources`）按拼接后行号显示、不做文件分类：分析层不因缺字段报错。
+旧 sidecar（没有 `file`/`meta.sources`/`functions`）按拼接后行号显示、不做文件分类，也没有
+函数归因：分析层不因缺字段报错，输出保持旧样子。
 
 - 表不变式与排序约束：`segments.id ⊆ elements.id`；**同一 sidecar 内 id 唯一**（§2）；
   `segments`/`lines`/`stubs` 均按 start 升序；**区间 half-open `[start,end)`**，且
@@ -300,7 +309,11 @@ rnglists 支持参差）届时实测。侧车 schema 不变。
   是元件段又有行号），查询顺序 **segments → lines → stubs**，`segments` 优先；
 - `segments`/`stubs` 的 `end` 换算：`stubs.end = start + (kind=="stub" ? 12 : 8)`
  （`assemble.hh:80-83` stub=12 B / slot=8 B；`simplexc_cli.cc:246` 的 `.stubs` 只有
-  offset/kind/symbol 三列，end 是 Provider 的 8 行换算，非「现成」）；
+ offset/kind/symbol 三列，end 是 Provider 的 8 行换算，非「现成」）；
+- `functions[]` 的 `ranges` **全局**互不重叠（已按 depth 最大者切成最内层区间）：一个 blob
+ 偏移必须只能对应一个函数，否则「哪个函数在跑」取决于实现。`lines`/`segments` 的
+  `func_id` 是同一结论的冗余列：只有整段落在**同一个**函数里才填 id，跨函数边界与「没有
+  函数信息」都写 null —— 分析层的函数归因不查这一列，直接查 `functions[].ranges`；
 - `elements.width` = 注释第三段=位宽（负责人确证），供展示；`tail` = 注释第四段
  （首个 ≥2^32 整数），语义未证，原样存。
 

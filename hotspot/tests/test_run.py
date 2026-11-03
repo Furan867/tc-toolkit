@@ -358,7 +358,7 @@ class SidecarCacheTest(unittest.TestCase):
         )
 
     def test_cache_hit_skips_make_sidecar(self):
-        self._write_sidecar(self.cache / f"{self.key}.lo0" / "sidecar.json")
+        self._write_sidecar(self.cache / f"{self.key}.lo0.fv1" / "sidecar.json")
 
         with mock.patch.object(run, "_run") as run_mock:
             sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
@@ -372,14 +372,14 @@ class SidecarCacheTest(unittest.TestCase):
 
     def test_cache_key_follows_line_offset(self):
         # 只按 blob sha 命中会把旧口径（拼接后行号）的 sidecar 当成新的
-        self._write_sidecar(self.cache / f"{self.key}.lo0" / "sidecar.json")
+        self._write_sidecar(self.cache / f"{self.key}.lo0.fv1" / "sidecar.json")
         self._write_offsets(1503)
 
         with mock.patch.object(run, "_run", side_effect=self._fake_make_sidecar) as run_mock:
             sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
 
         run_mock.assert_called_once()
-        self.assertTrue((self.cache / f"{self.key}.lo1503" / "sidecar.json").is_file())
+        self.assertTrue((self.cache / f"{self.key}.lo1503.fv1" / "sidecar.json").is_file())
         self.assertTrue(sidecar.is_file())
 
     def _fake_make_sidecar(self, command, *, stage, input_text=None, timeout=120):
@@ -392,7 +392,7 @@ class SidecarCacheTest(unittest.TestCase):
 
         self.assertEqual(run_mock.call_args.kwargs["stage"], "sidecar")
         self.assertTrue(sidecar.is_file())
-        self.assertTrue((self.cache / f"{self.key}.lo0" / "sidecar.json").is_file())
+        self.assertTrue((self.cache / f"{self.key}.lo0.fv1" / "sidecar.json").is_file())
 
 
 if __name__ == "__main__":

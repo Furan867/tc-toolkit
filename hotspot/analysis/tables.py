@@ -1,6 +1,7 @@
-"""四张热度表的数据结构（数字口径只在这里算，渲染层只管排版）。
+"""热度表的数据结构（数字口径只在这里算，渲染层只管排版）。
 
-分母：表 1–3 = bucket0 已归属样本；表 4 = 全样本（`docs/specs/2026-11-01-hotspot-profiler-design.md` §7.2）。
+分母：表 1–3 = bucket0 已归属样本；表 4 = 全样本；表 5 = bucket0 未归属样本（公共/根代码），
+只在侧车带 `functions` 时才有（`docs/specs/2026-11-01-hotspot-profiler-design.md` §7.2）。
 表 1 按侧车台账列**全部**类型（含零值），旧工具只列采到的类型，导致零采样类型整行消失
 （`tools/analyze_sim_hotspot.py:205` 的教训）。
 """
@@ -68,6 +69,16 @@ class BucketRow:
 
 
 @dataclass(frozen=True)
+class FuncRow:
+    """一个源码函数的未归属样本热度（同一个函数的内联实例按 name/file/line 合并）。"""
+    name: str
+    file: str | None
+    line: int | None
+    samples: int
+    share: float
+
+
+@dataclass(frozen=True)
 class Tables:
     meta: RunMeta
     total_samples: int
@@ -75,6 +86,7 @@ class Tables:
     types: tuple[TypeRow, ...]
     instances: tuple[InstRow, ...]
     buckets: tuple[BucketRow, ...]
+    functions: tuple[FuncRow, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
     watermark: str | None = None
 
@@ -116,20 +128,11 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
     stub_detail = tuple(
         (name, n, _share(n, attribution.stub_samples))
         for name, n in sorted(attribution.stub_totals.items(), key=lambda kv: (-kv[1], kv[0])))
-    root_detail = [
-        ("有行号信息", attribution.root_with_line,
-         _share(attribution.root_with_line, attribution.root_samples)),
-    ]
-    # 带行号信息但没有元件的机器段（公共/根代码）按**文件**拆开：stdlib 前缀本来就没有元件注释，
-    # 它的行落在这一桁是预期内的；混在一起看不出到底是哪份代码在跑。
-    root_detail += [
-        (f"有行号信息 · {name}", n, _share(n, attribution.root_samples))
-        for name, n in sorted(attribution.root_line_files.items(), key=lambda kv: (-kv[1], kv[0]))]
-    root_detail += [
-        ("无行号信息", attribution.root_samples - attribution.root_with_line,
-         _share(attribution.root_samples - attribution.root_with_line, attribution.root_samples)),
-    ]
-    root_detail = tuple(root_detail)
+    if sidecar.functions is None:
+        root_detail = _root_by_lines(attribution)
+        function_rows: tuple[FuncRow, ...] = ()
+    else:
+        root_detail, function_rows = _root_by_function(attribution, sidecar, top_n)
     buckets = (
         BucketRow(key="bucket0_attributed", label="bucket0 已归属（落在元件机器段里）",
                   samples=attributed, share=_share(attributed, total)),
@@ -150,7 +153,52 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
     return Tables(
         meta=meta, total_samples=total, attributed_samples=attributed,
         types=type_rows, instances=tuple(inst_rows), buckets=buckets,
-        notes=_notes(meta, attribution), watermark=watermark)
+        functions=function_rows, notes=_notes(meta, attribution), watermark=watermark)
+
+
+def _root_by_lines(attribution: Attribution) -> tuple[tuple[str, int, float], ...]:
+    """旧 sidecar（无 functions）的公共根拆法：按有没有行号信息、有的话属哪份文件。"""
+    root = attribution.root_samples
+    detail = [("有行号信息", attribution.root_with_line,
+               _share(attribution.root_with_line, root))]
+    # 带行号信息但没有元件的机器段（公共/根代码）按**文件**拆开：stdlib 前缀本来就没有元件注释，
+    # 它的行落在这一桁是预期内的；混在一起看不出到底是哪份代码在跑。
+    detail += [
+        (f"有行号信息 · {name}", n, _share(n, root))
+        for name, n in sorted(attribution.root_line_files.items(), key=lambda kv: (-kv[1], kv[0]))]
+    detail.append(
+        ("无行号信息", root - attribution.root_with_line,
+         _share(root - attribution.root_with_line, root)))
+    return tuple(detail)
+
+
+def _root_by_function(attribution: Attribution, sidecar: Sidecar,
+                      top_n: int) -> tuple[tuple[tuple[str, int, float], ...], tuple[FuncRow, ...]]:
+    """公共根 → stdlib 函数 / 源文件函数 / 无函数信息；顺手算表 5 的函数热度。
+
+    角色看函数的**声明文件**（`meta.sources` 划出的 stdlib 与源文件），不看行号：行号属哪段
+    是行表的结论，而函数本身可能跨段；先按行号划会把跨段函数的样本标错。
+    """
+    stdlib = sidecar.stdlib_file
+    by_role: Counter = Counter()
+    by_function: Counter = Counter()
+    for func_id, samples in attribution.root_function_samples.items():
+        info = sidecar.function_info[func_id]
+        by_role["stdlib" if stdlib is not None and info.file == stdlib else "source"] += samples
+        by_function[(info.name, info.file, info.line)] += samples
+
+    root = attribution.root_samples
+    detail = tuple(
+        (label, samples, _share(samples, root))
+        for label, samples in (("stdlib 函数", by_role["stdlib"]),
+                               ("source 函数", by_role["source"]),
+                               ("无函数信息", attribution.root_no_function)))
+    ranked = sorted(by_function.items(),
+                    key=lambda kv: (-kv[1], kv[0][0] or "", kv[0][1] or "", kv[0][2] or 0))
+    rows = tuple(
+        FuncRow(name=name or "（无名）", file=file, line=line, samples=n, share=_share(n, root))
+        for (name, file, line), n in ranked[:max(1, top_n)])
+    return detail, rows
 
 
 def confidence_note(samples: int) -> str:

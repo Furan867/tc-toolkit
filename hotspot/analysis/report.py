@@ -333,6 +333,8 @@ def run_report(args: argparse.Namespace) -> int:
           f"（已归属 {att.attributed}，占全样本 {attributed_share:.1f}%）")
     print(f"  类型 {len(table_set.types)} 种（含零值）/ 最热实例 {len(table_set.instances)} 个"
           f" / 未归属分桶 {len(table_set.buckets)} 行")
+    if table_set.functions:
+        print(f"  函数热度 {len(table_set.functions)} 行（公共/根代码按最内层函数归因）")
     print(f"  buckets 已回写 {run_dir / 'run.toml'}")
     print(f"  报告 {run_dir / 'report.md'} + {run_dir / 'report.html'}")
     print(f"  index {index_path}（{run_count} 个 run）")

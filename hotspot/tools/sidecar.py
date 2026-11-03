@@ -20,6 +20,9 @@ import os
 import re
 
 SCHEMA_VERSION = 1
+# functions[]/lines[].func_id 的 schema 版本（写进 meta.functions_version）：缓存键要带它，
+# 没有函数表的旧缓存才不会命中。
+FUNCTIONS_VERSION = 1
 HEADER_LEN = 8
 # 跳板长度：代码桩 12 B / `__imp_` 数据槽 8 B（simplexc/assemble/assemble.hh:80-83）
 STUB_LEN = {"stub": 12, "slot": 8}
@@ -361,6 +364,29 @@ def check_element_line_intervals(elements):
         prev = (lo, hi, eid)
 
 
+class FunctionIndex:
+    """blob 偏移 → func_id 的二分索引（functions 的区间已验过全局互不重叠）。"""
+
+    def __init__(self, functions):
+        self._spans = sorted((start, end, fn["func_id"])
+                             for fn in functions for start, end in fn["ranges"])
+        self._starts = [start for start, _, _ in self._spans]
+
+    def find(self, offset):
+        i = bisect.bisect_right(self._starts, offset) - 1
+        if i < 0:
+            return None
+        start, end, func_id = self._spans[i]
+        return func_id if offset < end else None
+
+    def span_func(self, start, end):
+        """整段落在一个函数里才算命中；跨函数边界与「没有函数信息」都返回 None。"""
+        func_id = self.find(start)
+        if func_id is None or self.find(end - 1) != func_id:
+            return None
+        return func_id
+
+
 class ElementIndex:
     """「源码行 → 元件 id」的二分索引（行区间已验过互不重叠，空区间已排除）。"""
 
@@ -485,14 +511,91 @@ def _check_sorted_non_overlapping(spans, what, limit, allow_empty=False):
 
 def _source_file(sidecar):
     """`meta.sources` 里 role=="source" 的文件名（旧 sidecar 没有 → None）。"""
+    return _source_role(sidecar, "source")
+
+
+def _source_role(sidecar, role):
     meta = sidecar.get("meta")
     if not isinstance(meta, dict):
         return None
     for item in meta.get("sources") or []:
-        if isinstance(item, dict) and item.get("role") == "source":
+        if isinstance(item, dict) and item.get("role") == role:
             name = item.get("file")
             return name if isinstance(name, str) and name else None
     return None
+
+
+def check_functions(sidecar, code_size):
+    """`functions[]` 与 `lines`/`segments` 的 `func_id` 的不变式；返回 FunctionIndex。
+
+    两条都是强制：函数区间**全局**互不重叠（否则一个 blob 偏移能落到两个函数，查询结果
+    取决于实现），`func_id` 与 `FunctionIndex` 的查询必须一致（两处口径分开算就会静默偏差）。
+    """
+    functions = sidecar["functions"]
+    if not isinstance(functions, list) or not functions:
+        raise SidecarError("functions 必须是非空数组（不写这个键表示没有函数信息）")
+    meta = sidecar.get("meta")
+    version = meta.get("functions_version") if isinstance(meta, dict) else None
+    if version != FUNCTIONS_VERSION:
+        raise SidecarError(f"有 functions 但 meta.functions_version={version!r}，"
+                           f"应为 {FUNCTIONS_VERSION}")
+
+    owners = {}
+    for fn in functions:
+        func_id = fn.get("func_id")
+        if not isinstance(func_id, int) or isinstance(func_id, bool):
+            raise SidecarError(f"functions 条目 func_id={func_id!r} 不是整数")
+        if func_id in owners:
+            raise SidecarError(f"functions 里 func_id {func_id} 重复")
+        owners[func_id] = fn
+        if fn.get("tag") not in ("subprogram", "inline"):
+            raise SidecarError(f"函数 {func_id} 的 tag={fn.get('tag')!r} 不认识")
+        depth = fn.get("depth")
+        if not isinstance(depth, int) or isinstance(depth, bool) or depth < 0:
+            raise SidecarError(f"函数 {func_id} 的 depth={depth!r} 不是非负整数")
+        for key in ("name", "file"):
+            value = fn.get(key)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise SidecarError(f"函数 {func_id} 的 {key}={value!r} 不是非空字符串")
+        line = fn.get("decl_line")
+        if line is not None and (not isinstance(line, int) or isinstance(line, bool) or line < 1):
+            raise SidecarError(f"函数 {func_id} 的 decl_line={line!r} 不是正整数")
+        origin = fn.get("origin")
+        if origin is not None and (not isinstance(origin, int) or isinstance(origin, bool)):
+            raise SidecarError(f"函数 {func_id} 的 origin={origin!r} 不是整数")
+        if not isinstance(fn.get("ranges"), list):
+            raise SidecarError(f"函数 {func_id} 的 ranges 不是数组")
+
+    # origin 可能指向后注册的条目（specification 可以往前指），所以引用要等全部登记完再查
+    for func_id, fn in owners.items():
+        origin = fn.get("origin")
+        if origin is not None and origin not in owners:
+            raise SidecarError(f"函数 {func_id} 的 origin={origin!r} 不在 functions 里")
+
+    # 空的 ranges（抽象实例：没有函数体）合法，但它不参与覆盖与查询
+    spans = [(start, end, fn["func_id"]) for fn in functions for start, end in fn["ranges"]]
+    for start, end, func_id in spans:
+        if not isinstance(start, int) or not isinstance(end, int) or isinstance(start, bool) \
+                or isinstance(end, bool):
+            raise SidecarError(f"函数 {func_id} 的区间 [{start!r},{end!r}) 不是两个整数")
+    spans.sort()
+    _check_sorted_non_overlapping([(start, end) for start, end, _ in spans], "functions", code_size)
+
+    index = FunctionIndex(functions)
+    for name in ("segments", "lines"):
+        for span in sidecar[name]:
+            if "func_id" not in span:
+                raise SidecarError(f"{name} 条目 [{span['start']},{span['end']}) 缺 func_id"
+                                   "（有 functions 就必须写：没有函数信息写 null）")
+            func_id = span["func_id"]
+            if func_id is not None and func_id not in owners:
+                raise SidecarError(f"{name} 条目 [{span['start']},{span['end']}) 的 "
+                                   f"func_id={func_id!r} 不在 functions 里")
+            want = index.span_func(span["start"], span["end"])
+            if func_id != want:
+                raise SidecarError(f"{name} 条目 [{span['start']},{span['end']}) 的 "
+                                   f"func_id={func_id!r}，按 functions 区间表应为 {want!r}")
+    return index
 
 
 def check_invariants(sidecar, code_size):
@@ -524,6 +627,16 @@ def check_invariants(sidecar, code_size):
         if seg["id"] not in ids:
             raise SidecarError(f"segment [{seg['start']},{seg['end']}) 的元件 id {seg['id']} "
                                "不在 elements 里")
+
+    if "functions" in sidecar:
+        check_functions(sidecar, code_size)
+    else:
+        # 旧 sidecar：没有函数表就不能有 func_id，否则那个 id 无处可查
+        for name in ("segments", "lines"):
+            for span in sidecar[name]:
+                if "func_id" in span:
+                    raise SidecarError(f"{name} 条目 [{span['start']},{span['end']}) 有 func_id "
+                                       "但 sidecar 没有 functions")
 
     seg_starts = [s["start"] for s in sidecar["segments"]]
     # elements 的行区间只在**源文件**行空间里：stdlib 前缀的行段没有元件注释，它们的行号与源文件

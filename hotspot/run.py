@@ -114,6 +114,28 @@ def _run(
     return result.stdout
 
 
+_SIDECAR_MODULE: ModuleType | None = None
+
+
+def _sidecar_module() -> ModuleType:
+    """按路径加载 `hotspot/tools/sidecar.py` —— 缓存键里的 functions_version 要跟着它走。
+
+    把这个数值抄一份进 run.py 就会静默漂移：schema 改了、键没改，旧缓存继续命中。
+    模块名不用 "sidecar"：那跟 `python hotspot/tools/make_sidecar.py` 的导入名撞车。
+    """
+    global _SIDECAR_MODULE
+    if _SIDECAR_MODULE is None:
+        path = ROOT / "hotspot/tools/sidecar.py"
+        spec = importlib.util.spec_from_file_location("hotspot_sidecar", path)
+        if spec is None or spec.loader is None:
+            raise StageError("sidecar", f"加载不了 {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _SIDECAR_MODULE = module
+    return _SIDECAR_MODULE
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -330,10 +352,13 @@ def sidecar_stage(paths: dict[str, Path], cache_dir: Path = SIDECAR_CACHE) -> Pa
 
     缓存键要带 offsets 的 `line_offset`：行号绑定来源文件之前产的 sidecar 里是拼接后行号，
     只按 blob sha 命中会把源码行标成 stdlib 的（产物字节没变，行号口径变了）。
+    键里还要带 `functions_version`：没有函数表的旧 sidecar 同样不能命中 —— 它看上去完整，
+    只是少了整张函数表与 func_id。
     """
     sidecar = paths["blob"].parent / "sidecar.json"
     blob_sha = _sha256_file(paths["blob"])
-    key = f"{blob_sha}.lo{_offsets_line_offset(paths['offsets'])}"
+    key = (f"{blob_sha}.lo{_offsets_line_offset(paths['offsets'])}"
+           f".fv{_sidecar_module().FUNCTIONS_VERSION}")
     cached = cache_dir / key / "sidecar.json"
     if cached.is_file() and _sidecar_artifact_sha256(cached) == blob_sha:
         shutil.copy2(cached, sidecar)

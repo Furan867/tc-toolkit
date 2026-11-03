@@ -18,10 +18,14 @@
 
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Core.h>
+#include <llvm-c/DebugInfo.h>
 #include <llvm-c/Error.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
+
+#include <map>
+#include <utility>
 
 namespace simplexc {
 
@@ -97,6 +101,45 @@ public:
 private:
     explicit TargetMachine(LLVMTargetMachineRef tm) : tm_(tm) {}
     LLVMTargetMachineRef tm_ = nullptr;
+};
+
+/* 调试信息：**只到「行号表」这一档**（DIBuilder + 一个 CU/DIFile + 一个基础类型 + 一个子程序
+ * 类型，每条指令只喂行号）。消费者是 `hotspot` 的归因链：后端据此产出 `.debug_line`，把机器码
+ * 区间映射回源码行（`docs/specs/2026-11-01-hotspot-profiler-design.md` §5）。
+ *
+ * 为什么这里没有 `dbg.value` / `dbg.declare`：那会把值摊成 SSA 名字、改写机器码 —— G1 判据
+ * （同源开/关调试信息，`objdump -d` 的 `.text` 必须逐字节相同）就是拦这个的。所以本类只有
+ * 「位置」这一种 API。
+ *
+ * 两个 module flag 是硬要求，缺了后端**静默丢弃**整份调试信息：
+ *   · `Debug Info Version=3`（版本不匹配时后端直接不生成）；
+ *   · `Dwarf Version=4` —— C API 没有形参可给，LLVM 23 默认 DWARF 5，不显式置位就会静默变 5。 */
+class DebugInfo {
+public:
+    /* 建 DIBuilder、CU、DIFile、基础类型与子程序类型，并置上两条 module flag。
+     * `file` 是源文件路径（进 `.debug_line` 的文件名）。 */
+    DebugInfo(LLVMContextRef ctx, LLVMModuleRef mod, const std::string& file);
+    ~DebugInfo();
+    DebugInfo(const DebugInfo&) = delete;
+    DebugInfo& operator=(const DebugInfo&) = delete;
+
+    /* 给一个函数挂 DISubprogram 并把位置设到它的声明行。返回的 scope 要喂回 `set_loc`。
+     * `decl_line < 1` 按 1 处理：verifier 拒绝行号 0 的子程序。 */
+    LLVMMetadataRef attach_subprogram(LLVMValueRef fn, const std::string& name, int decl_line);
+    /* 把 builder 的当前位置设成 `scope` 里的 `line`（按 (scope,line) 缓存 DebugLoc）。
+     * `line < 1` 或 `scope == nullptr` = 清掉位置（有些指令本来不属于任何源码行）。 */
+    void set_loc(LLVMBuilderRef bd, LLVMMetadataRef scope, int line);
+    /* `LLVMDIBuilderFinalize`：必须在 verify / 优化 / 落码**之前**（否则子程序与作用域的收尾
+     * 信息还没算出来）。幂等。 */
+    void finalize();
+
+private:
+    LLVMContextRef ctx_;
+    LLVMDIBuilderRef db_ = nullptr;
+    LLVMMetadataRef file_ = nullptr;
+    LLVMMetadataRef sub_ty_ = nullptr;
+    std::map<std::pair<LLVMMetadataRef, int>, LLVMMetadataRef> locs_;
+    bool finalized_ = false;
 };
 
 inline std::string error_message(LLVMErrorRef e) {

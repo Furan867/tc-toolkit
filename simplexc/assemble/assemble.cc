@@ -179,6 +179,19 @@ Cls classify(const std::string& n) {
  *        它**解引用**目标地址，拿代码桩去顶会被当成指针值，必崩。 */
 bool is_imp_slot(const std::string& name) { return name.rfind("__imp_", 0) == 0; }
 
+/* `Cls` → `AsmResult::SectionPlacement::cls` 的拼写（`--offsets-out` 的 JSON 直接用）。
+ * `Drop` 不会出现在布局表里（它没有 blob 偏移），所以这里不给它一个名字。 */
+const char* cls_name(Cls c) {
+    switch (c) {
+        case Cls::Text: return "text";
+        case Cls::RData: return "rdata";
+        case Cls::Data: return "data";
+        case Cls::Bss: return "bss";
+        case Cls::Drop: break;
+    }
+    return "";
+}
+
 /* 桩/槽的字节形态只有一处定义：造的时候按这里写，返回前的自校验按这里查。 */
 constexpr size_t kCodeStubLen = 12;    /* `48 B8 <imm64> FF E0` */
 constexpr size_t kImpSlotLen = 8;      /* 8 字节绝对地址 */
@@ -235,6 +248,34 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
         break;   /* 一轮就够：类内顺序 = 对象顺序 */
     }
     uint64_t body_end = off;
+    res.body_end = body_end;
+    res.stubs_base = body_end; /* 代码桩块就排在各节之后：两者按定义相等 */
+
+    /* 布局表（`--offsets-out` 的数据源）与「哪些对象带 `.debug_line`」。节表只列**进了产物**
+     * 的节；`.debug*` 被归为 Drop、不占 blob 偏移，所以它们的行表只能靠锚点（对象 `.text`
+     * 的 blob 偏移）重定位。 */
+    for (size_t i = 0; i < parsed.size(); i++) {
+        bool has_line = false;
+        for (size_t s = 0; s < parsed[i].secs.size(); s++) {
+            const Section& sec = parsed[i].secs[s];
+            if (sec.name.rfind(".debug_line", 0) == 0) has_line = true;
+            if (sec_base[i][s] == UINT64_MAX) continue;
+            /* 零字节的节不进表：它不占产物字节，而它的 `blob_off` 会与下一个非空节重合
+             * （对齐后再摆、长度 0）—— 留着只会让「按 `blob_off` 升序且不重叠」这条不变量
+             * 在零长度条目上不成立。 */
+            if (sec.size == 0) continue;
+            res.sections.push_back(AsmResult::SectionPlacement{
+                static_cast<uint32_t>(i), static_cast<uint32_t>(s + 1), sec.name,
+                cls_name(classify(sec.name)), sec_base[i][s], sec.size, sec.align});
+        }
+        if (has_line) res.debug_line_objs.push_back(static_cast<uint32_t>(i));
+    }
+    /* 遍历序是 (对象, 节)，而布局先按类分组 → 上面push进来的次序不是 blob 序。消费方
+     * （W3）靠这个升序二分，所以在这里排完再出去。 */
+    std::sort(res.sections.begin(), res.sections.end(),
+              [](const AsmResult::SectionPlacement& a, const AsmResult::SectionPlacement& b) {
+                  return a.blob_off < b.blob_off;
+              });
 
     /* ---- 2. 全局符号表（已定义的名字 → 最终偏移）---- */
     std::unordered_map<std::string, uint64_t> defined;
@@ -323,6 +364,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
         stubs.insert(stubs.end(), code, code + kCodeStubLen);
     }
     const uint64_t slots_base = body_end + stubs.size();
+    res.slots_base = slots_base;
     for (Pending& p : pending) {
         if (!is_imp_slot(p.name)) continue;
         size_t pad = (8 - (slots.size() & 7)) & 7;

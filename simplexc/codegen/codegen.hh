@@ -59,10 +59,21 @@ using sema::ty_str;
 using sema::ty_time;
 using sema::ty_void;
 
+/* ---------------------------------------------------------------- 选项 */
+/* `debug_info` 打开后只多一样东西：每条指令的 `DebugLoc` 行号（产出 `.debug_line`）。
+ * `source_path` 进 DWARF 的文件名；不打开调试信息时它是死的。
+ *
+ * 为什么是选项而不是两支代码路径：调试信息**不许改机器码**（hotspot spec §5 的 G1），所以它
+ * 只能是「额外的元数据」，任何开关都不该让发射逻辑分叉。 */
+struct CodegenOptions {
+    bool debug_info = false;
+    std::string source_path;
+};
+
 /* ---------------------------------------------------------------- Codegen */
 class Codegen {
 public:
-    explicit Codegen(const sema::Hir& hir);
+    explicit Codegen(const sema::Hir& hir, const CodegenOptions& opts = CodegenOptions{});
     virtual ~Codegen();
 
     const std::vector<std::string>& warnings() const { return warnings_; }
@@ -91,7 +102,11 @@ protected:
     std::vector<std::unique_ptr<FnCtx>> fn_ctxs_;
 
     void mark_no_builtin(LLVMValueRef fnref);
-    FnCtx& begin_function(LLVMValueRef fnref, const TyRef& ret_ty);
+    /* `decl_line < 1` = 沿用调用点的行（内联辅助函数/前缀函数没有自己的声明行）。 */
+    FnCtx& begin_function(LLVMValueRef fnref, const TyRef& ret_ty, int decl_line = 0);
+    /* 把当前位置设成 `line`（`cur_fn()` 的子程序作用域内）。调试信息关着时什么都不做，
+     * 所以报文点不需要逐处判 `opts_.debug_info`。 */
+    void set_loc(int line);
     void finish_function();
     LLVMBasicBlockRef new_block(const char* name);
     LLVMBasicBlockRef br_new_block(const char* name);
@@ -258,6 +273,10 @@ protected:
 
     std::unique_ptr<Context> ctx_;
     std::unique_ptr<Module> mod_;
+    /* 声明在 `mod_` 之后：析构按反序，`DebugInfo` 必须先于模块与上下文释放（它持有 DIBuilder，
+     * 而 DIBuilder 指回模块）。 */
+    std::unique_ptr<DebugInfo> dbg_;
+    CodegenOptions opts_;
     LLVMTypeRef i64_ = nullptr;
     LLVMTypeRef ptr_ = nullptr;
     LLVMTypeRef void_ty_ = nullptr;
@@ -270,7 +289,7 @@ protected:
 /* ---------------------------------------------------------------- Program */
 class Program : public Codegen {
 public:
-    explicit Program(const sema::Hir& hir);
+    explicit Program(const sema::Hir& hir, const CodegenOptions& opts = CodegenOptions{});
 
     /* 生成整个模块：程序根 → `tc_main`，其余实例在引用处按需发射。 */
     void build();

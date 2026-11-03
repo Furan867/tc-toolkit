@@ -174,7 +174,8 @@ add_executable(simplexc_cli
   "${SIMPLEXC_OBJ}/assemble.o")
 set_target_properties(simplexc_cli PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_include_directories(simplexc_cli PRIVATE "${SIMPLEXC_DIR}")
-target_link_libraries(simplexc_cli PRIVATE simplexc_flags LLVMC::LLVMC)
+# `bcrypt`：`--offsets-out` 要产物的 sha256（系统 CNG，见 cli/simplexc_cli.cc 的 sha256_hex）。
+target_link_libraries(simplexc_cli PRIVATE simplexc_flags LLVMC::LLVMC bcrypt)
 
 # Windows 先从 exe 所在目录找依赖 DLL（再看 PATH）→ 把 LLVM-C.dll 放到 simplexc/build/ 旁边，
 # 判据（check.py 等）就不用为这一步改 PATH。

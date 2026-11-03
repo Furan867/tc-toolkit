@@ -128,7 +128,7 @@ const std::string* callee_name_of(const sema::Hir& hir, const sema::HNode& n) {
 
 /* 基座上下文：`cur_fn()` 在第一个函数开始之前也得有效（发全局初值时还要读它）。它没有 builder、
  * 没有 builder 作用域，`finish_function` 拒绝弹它。 */
-Codegen::Codegen(const sema::Hir& hir) : hir_(hir) {
+Codegen::Codegen(const sema::Hir& hir, const CodegenOptions& opts) : hir_(hir), opts_(opts) {
     fn_ctxs_.push_back(std::make_unique<FnCtx>());
     fnrefs_.assign(hir.funcs.size(), nullptr);
 }
@@ -141,6 +141,10 @@ void Codegen::open_module(const char* name) {
     init_native_target();
     ctx_ = std::make_unique<Context>();
     mod_ = std::make_unique<Module>(ctx_->get(), name);
+    /* 调试信息必须在**任何指令之前**建好：CU 与两条 module flag 在模块上一锤定音，之后不再动。 */
+    if (opts_.debug_info) {
+        dbg_ = std::make_unique<DebugInfo>(ctx_->get(), module(), opts_.source_path);
+    }
     i64_ = LLVMInt64TypeInContext(ctx_->get());
     ptr_ = LLVMPointerType(i64_, 0);
     void_ty_ = LLVMVoidTypeInContext(ctx_->get());
@@ -224,7 +228,7 @@ void Codegen::mark_no_builtin(LLVMValueRef fnref) {
     }
 }
 
-FnCtx& Codegen::begin_function(LLVMValueRef fnref, const TyRef& ret_ty) {
+FnCtx& Codegen::begin_function(LLVMValueRef fnref, const TyRef& ret_ty, int decl_line) {
     mark_no_builtin(fnref);
     const FnCtx& outer = cur_fn(); /* 压栈只动 `unique_ptr`，所以这个引用在 push 后仍有效 */
     auto child = std::make_unique<FnCtx>();
@@ -241,7 +245,24 @@ FnCtx& Codegen::begin_function(LLVMValueRef fnref, const TyRef& ret_ty) {
     child->block = child->entry;
     child->scopes.emplace_back();
     fn_ctxs_.push_back(std::move(child));
+    if (dbg_ != nullptr) {
+        /* 每个 LLVM 函数都必须有自己的 DISubprogram，且每条指令的位置都必须指着它 ——
+         * 否则 verifier 报「debug location is not for this function」。 */
+        size_t sym_len = 0;
+        const char* sym = LLVMGetValueName2(fnref, &sym_len);
+        const std::string sym_name = sym != nullptr ? std::string(sym, sym_len) : std::string();
+        const int line = decl_line >= 1 ? decl_line : (outer.dbg_line >= 1 ? outer.dbg_line : 1);
+        cur_fn().dbg_scope = dbg_->attach_subprogram(fnref, sym_name, line);
+        set_loc(line);
+    }
     return cur_fn();
+}
+
+void Codegen::set_loc(int line) {
+    if (dbg_ == nullptr) return;
+    const int at = line >= 1 ? line : 0;
+    cur_fn().dbg_line = at;
+    dbg_->set_loc(cur_fn().bd, cur_fn().dbg_scope, at);
 }
 
 void Codegen::finish_function() {
@@ -483,6 +504,7 @@ void Codegen::lower_block(const sema::HNode& block) {
 }
 
 void Codegen::lower_stmt(const sema::HNode& st) {
+    set_loc(st.span.line);
     switch (st.kind) {
         case sema::HKind::VarDecl: s_VarDecl(st); break;
         case sema::HKind::Assign: s_Assign(st); break;
@@ -700,6 +722,7 @@ void Codegen::s_Switch(const sema::HNode& st) {
 /* ================================================================ 表达式 */
 
 V Codegen::e(const sema::HNode& node) {
+    set_loc(node.span.line);
     switch (node.kind) {
         case sema::HKind::Const: return e_const(node);
         case sema::HKind::StrLit: return e_strlit(node);
@@ -1169,7 +1192,7 @@ LLVMValueRef Codegen::ensure_func(int index) {
     if (nested) nested_fnrefs_[nested_key] = fnref;
     else fnrefs_[idx] = fnref;
     fn_seen_++;
-    FnCtx& fc = begin_function(fnref, f.ret);
+    FnCtx& fc = begin_function(fnref, f.ret, f.decl_line);
     fc.name = logical_name_of(f);
     /* 嵌套 def 身份**沿用外层**（旧 `begin_function` 的 `child->def = outer.def`）：旧路径里
      * `def` 不是 null 才用逻辑名当 owner，而它正是「词法上在某个顶层实例体内」。 */
@@ -1783,7 +1806,7 @@ LLVMValueRef Codegen::ensure_prefix_fn(const std::string& name, const TyRef& ret
     LLVMSetLinkage(fnref, LLVMInternalLinkage);
     fns_[key] = fnref;
     fn_seen_++;
-    FnCtx& f = begin_function(fnref, ret_ty);
+    FnCtx& f = begin_function(fnref, ret_ty, span.line);
     f.name = name;
     if (name == "get_time") body_get_time();
     else if (name == "sleep") body_sleep();
@@ -2536,7 +2559,7 @@ V Codegen::string_literal(int string_id, int line) {
 
 /* ================================================================ Program */
 
-Program::Program(const sema::Hir& hir) : Codegen(hir) {
+Program::Program(const sema::Hir& hir, const CodegenOptions& opts) : Codegen(hir, opts) {
     open_module("simplex");
     make_types();
     make_globals();
@@ -2572,12 +2595,20 @@ void Program::make_globals() {
     }
 }
 
-void Program::build() { emit_main(); }
+void Program::build() {
+    emit_main();
+    /* 收尾必须在 verify 之前（`emit_object` 的第一件事就是 verify）：`LLVMDIBuilderFinalize`
+     * 才算子程序/作用域的收尾信息，没 finalize 就 verify/落码，后端得到的是一份没收尾的调试
+     * 信息（轻则丢行表，重则 assert）。放在 `build` 而不是 `emit_object`：`build` 是「发完所有
+     * 指令」的那个点，之后不会再有 DebugLoc 需要创建。 */
+    if (dbg_ != nullptr) dbg_->finalize();
+}
 
 void Program::emit_main() {
     LLVMValueRef fnref =
         LLVMAddFunction(module(), "tc_main", LLVMFunctionType(void_ty_, nullptr, 0, 0));
-    FnCtx& f = begin_function(fnref, ty_void());
+    /* 程序根没有 `decl_line`（sema 只给 `funcs[]` 填）：用根块的 span 行。 */
+    FnCtx& f = begin_function(fnref, ty_void(), hir_.main.body.span.line);
     f.name = "tc_main";
     f.is_top_def = false; /* 程序根不属于任何 def（嵌套 def 的 owner 因此是 `closure`） */
     lower_block(hir_.main.body);

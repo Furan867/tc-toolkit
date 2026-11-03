@@ -86,6 +86,10 @@ struct FnCtx {
      * 现状取「外层如果是个顶层 def 实例就用它的名字，否则用 `closure`」（`lower.cc` 的
      * `ensure_nested_fn`）。程序根、前缀函数、内联辅助函数都不是 def 实例。 */
     bool is_top_def = false;
+    /* 调试信息：本函数的 DISubprogram（`set_loc` 的 scope）与当前行。没开调试信息时两者
+     * 恒为空/0；`dbg_line` 让内联辅助函数能沿用调用点的行，而不是记成一个假行号。 */
+    LLVMMetadataRef dbg_scope = nullptr;
+    int dbg_line = 0;
     const FnCtx* parent = nullptr;
 };
 

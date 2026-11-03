@@ -9,6 +9,7 @@
 | `host_selftest` | `python simplexc/tools/host/selftest.py --src …006.si --bin …006.bin --ticks 3`（M2 宿主自比对）|
 | `lower_equiv`   | `simplexc/build/simplexc_cli.exe`（**C++ 产品路径**）出 rv32im 产物 → 宿主与参考逐 tick 比对（10 tick，灌 RESET_DATA）|
 | `blob_baseline` | `simplexc/tools/blob_baseline.py --verify simplexc/tools/baseline`（98 份语料的装配产物逐字段比，重构前后必须等价）|
+| `debug_info_equiv` | G1：177.si 开/关 `--debug-info` 各出一份 COFF，`objdump -d` 只比 `.text`，diff 必须为空 |
 | `hook_offline`  | `hook_offline.run_all()`：壳的四种情形 + refcmp + 超时（case 数见摘要 cases=N/M）|
 | `probe_006`     | `simplexc/tools/probe_006.py`（M1.5 探针，**可选**：缺依赖/脚本在改 → SKIP）|
 
@@ -44,6 +45,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -64,6 +66,8 @@ BASELINE_BLOBS = os.path.join(ROOT, "work", "tmp", "baseline-blobs")
 
 CORPUS_SRC = os.path.join("simplexc", "corpus", "src", "006.si")
 CORPUS_BIN = os.path.join("simplexc", "corpus", "ref", "006.bin")
+# G1（调试信息不改机器码）的样本：语料里元件注释段最多的一份，行号覆盖面最宽。
+DEBUG_INFO_SRC = os.path.join("simplexc", "corpus", "src", "177.si")
 BUILD = os.path.join(SIMPLEXC, "build")
 SIMPLEXC_CLI = os.path.join(BUILD, "simplexc_cli.exe")
 HOST = os.path.join(HERE, "host", "host.py")
@@ -290,6 +294,113 @@ def step_blob_baseline(ctx):
         summary["same"] = f"{same}/{same + diff}"
         summary["diff"] = str(diff)
     return {**r, "summary": summary}
+
+
+def _text_disasm(objdump, obj):
+    """`objdump -d --section=.text` 的指令行（去掉带文件名的头行）。
+
+    为什么要去：两份 obj 的路径不同，而 objdump 把路径印在第一行 —— 那行不是机器码。
+    """
+    r = run_cmd([objdump, "-d", "--section=.text", obj], timeout=STEP_TIMEOUT)
+    keep = [ln for ln in r["output"].splitlines()
+            if "file format" not in ln and not ln.startswith("Disassembly of section")]
+    return r, keep
+
+
+def _first_diff(a, b):
+    for i, (x, y) in enumerate(zip(a, b, strict=False)):
+        if x != y:
+            return f"第 {i + 1} 行：{x.strip()!r} vs {y.strip()!r}"
+    if len(a) != len(b):
+        longer = a if len(a) > len(b) else b
+        return f"行数不同（{len(a)} vs {len(b)}），多出：{longer[min(len(a), len(b))].strip()!r}"
+    return ""
+
+
+@step("debug_info_equiv", "G1：调试信息不改机器码（177.si 开/关 --debug-info，objdump -d 只比 .text）")
+def step_debug_info_equiv(ctx):
+    """hotspot W1 的 G1（`docs/specs/2026-11-01-hotspot-profiler-design.md` §5/§8）。
+
+    为什么要常驻：调试信息一旦混进 `dbg.value`/`dbg.declare`，或者某个 pass 因为看见 `!dbg`
+    而改主意，机器码就变了 —— 那是「分析的不是跑的那份」的另一种形态，从产物字节上看不出来。
+    比两样：`.text` 反汇编文本（去掉 objdump 的文件名头）必须逐行相同；产物整文件必须逐字节
+    相同（装配器丢掉 `.debug*`，所以调试信息不该动 blob 一个字节）。另查 g1 的行表：
+    `objdump --dwarf=decodedline` 非空，且行号落在 1..源文件行数（0 = 行程序序列结尾，另计）。
+    """
+    objdump = shutil.which("objdump")
+    if objdump is None:
+        why = "PATH 里没有 objdump（w64devkit 的 binutils）"
+        return {"status": "SKIP", "rc": None, "seconds": 0.0, "summary": {"reason": why},
+                "output": "", "reason": why}
+    if not os.path.exists(SIMPLEXC_CLI):
+        why = "缺 CLI：先跑 python simplexc/tools/build.py simplexc_cli"
+        return {"status": "SKIP", "rc": None, "seconds": 0.0, "summary": {"reason": why},
+                "output": "", "reason": why}
+    workdir = os.path.join(ctx["work"], "debug_info")
+    os.makedirs(workdir, exist_ok=True)
+    try:
+        with open(DEBUG_INFO_SRC, encoding="utf-8", errors="replace") as f:
+            src_lines = len(f.read().splitlines())
+    except OSError as e:
+        return {"status": "FAIL", "rc": None, "seconds": 0.0,
+                "summary": {"error": f"读不到 {rel(DEBUG_INFO_SRC)}：{e}"},
+                "output": "", "reason": str(e)}
+
+    t0 = time.perf_counter()
+    disasm, blobs, logs = {}, {}, []
+    for tag, extra in (("g0", []), ("g1", ["--debug-info"])):
+        obj = os.path.join(workdir, tag + ".obj")
+        bin_path = os.path.join(workdir, tag + ".bin")
+        r = run_cmd([SIMPLEXC_CLI, "--src", DEBUG_INFO_SRC, "--out", bin_path,
+                     "--obj-out", obj, *extra], timeout=STEP_TIMEOUT)
+        logs.append(r["output"])
+        if r["status"] != "PASS":
+            why = f"{tag} 编译失败（{r['reason'] or 'rc≠0'}）"
+            return {"status": "FAIL", "rc": r["rc"], "seconds": round(time.perf_counter() - t0, 3),
+                    "summary": {"variant": tag, "reason": why},
+                    "output": "\n".join(logs), "reason": why}
+        od, disasm[tag] = _text_disasm(objdump, obj)
+        if od["status"] != "PASS":
+            why = f"objdump -d {tag}.obj 失败（rc={od['rc']}）"
+            return {"status": "FAIL", "rc": od["rc"], "seconds": round(time.perf_counter() - t0, 3),
+                    "summary": {"variant": tag, "reason": why},
+                    "output": "\n".join(logs + [od["output"]]), "reason": why}
+        with open(bin_path, "rb") as f:
+            blobs[tag] = f.read()
+
+    dl = run_cmd([objdump, "--dwarf=decodedline", os.path.join(workdir, "g1.obj")],
+                 timeout=STEP_TIMEOUT)
+    if dl["status"] != "PASS":
+        why = f"objdump --dwarf=decodedline 失败（rc={dl['rc']}）"
+        return {"status": "FAIL", "rc": dl["rc"], "seconds": round(time.perf_counter() - t0, 3),
+                "summary": {"reason": why}, "output": "\n".join(logs + [dl["output"]]),
+                "reason": why}
+    # 行表行形如：`177.si   13519   0x3a   x`（列：文件 行号 地址 标志）
+    line_nums = [int(m.group(1)) for m in
+                 re.finditer(r"^\s*\S+\s+(\d+)\s+(?:0x[0-9a-fA-F]+|\d+)\s", dl["output"], re.M)]
+    located = [n for n in line_nums if n > 0]
+    out_of_range = [n for n in located if n > src_lines]
+
+    summary = {
+        "insn": sum(1 for ln in disasm["g1"] if re.search(r"^\s+[0-9a-f]+:", ln)),
+        "text_diff": "空" if disasm["g0"] == disasm["g1"] else _first_diff(disasm["g0"], disasm["g1"]),
+        "blob_identical": blobs["g0"] == blobs["g1"],
+        "line_rows": len(located),
+        "end_of_seq_rows": len(line_nums) - len(located),
+        "line_range": f"1..{src_lines}",
+    }
+    reasons = []
+    if disasm["g0"] != disasm["g1"]:
+        reasons.append("`.text` 反汇编有差异（调试信息改了机器码）")
+    if not located:
+        reasons.append("g1 没有行表（`--dwarf=decodedline` 为空 —— module flag / finalize 顺序）")
+    if out_of_range:
+        reasons.append(f"行号越界：{out_of_range[:5]}（源文件 {src_lines} 行）")
+    if reasons:
+        return {"status": "FAIL", "rc": 0, "seconds": round(time.perf_counter() - t0, 3),
+                "summary": summary, "output": "\n".join(logs), "reason": "；".join(reasons)}
+    return {"status": "PASS", "rc": 0, "seconds": round(time.perf_counter() - t0, 3),
+            "summary": summary, "output": "\n".join(logs)}
 
 
 @step("hook_offline", "壳的失败路径/熔断/回退/超时（hook_offline.run_all，case 数见摘要）")

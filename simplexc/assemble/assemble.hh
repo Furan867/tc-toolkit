@@ -90,6 +90,27 @@ struct AsmResult {
     uint32_t stub_count = 0, reloc_count = 0;
     /* 每个**已解析**的未定义符号的落点，顺序 = 造桩顺序（`stub_count` 是它的条数）*/
     std::vector<StubRef> stubs;
+
+    /* 布局的另外两个基点：`body_end` = 各节拼完的末尾（= 代码桩块起点 `stubs_base`，
+     * 两者相等是布局定义、不是巧合），`slots_base` = `__imp_` 数据槽块起点。
+     * `--offsets-out` 要用它们把「对象址」换算成 blob 偏移（hotspot spec §6）。 */
+    uint64_t body_end = 0, stubs_base = 0, slots_base = 0;
+
+    /* 每个进产物的输入节落在哪：`obj` = 装配入参下标（0 基）、`sec` = COFF 节下标（1 基）——
+     * 与 `.debug_line` 里锚点的口径一致。按 `blob_off` 升序（不变量由 `assemble` 保证）。 */
+    struct SectionPlacement {
+        uint32_t obj = 0;
+        uint32_t sec = 0;
+        std::string name;
+        std::string cls;   /* "text" / "rdata" / "data" / "bss" */
+        uint64_t blob_off = 0; /* 相对机器码起点（= blob 文件下标 - 8） */
+        uint64_t size = 0;
+        uint64_t align = 1;
+    };
+    std::vector<SectionPlacement> sections;
+    /* 带 `.debug_line` 的装配入参下标（0 基）。这些对象才有行表可展开，是 `--offsets-out`
+     * 里 `debug_lines[].anchors` 的成员集合。 */
+    std::vector<uint32_t> debug_line_objs;
 };
 
 AsmResult assemble(const std::vector<ObjectFile>& objs,

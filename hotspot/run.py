@@ -31,6 +31,8 @@ READ_FREQ = ROOT / "tools/read_freq.py"
 SIMCTL = ROOT / "tools/simctl.py"
 DEFAULT_CONFIG = ROOT / "hotspot/config.toml"
 SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
+WORK_TMP = ROOT / "work/tmp/hotspot_run"
+RUNS_DIR = ROOT / "hotspot/workspace/runs"
 
 SIM_SPEED = re.compile(r"sim_speed\s+([0-9]+(?:\.[0-9]+)?)")
 GAME_PID = re.compile(r"\bPID\s+(\d+)")
@@ -457,9 +459,76 @@ def report_stage(run_dir: Path, sidecar: Path) -> Path:
     return html
 
 
+def _tree_stats(path: Path) -> tuple[int, int, int]:
+    """(目录数, 文件数, 字节数)；目录数把 path 自己算进去 —— rmtree 会连它一起删。"""
+    dirs = files = size = 0
+    for child in [path, *path.rglob("*")]:
+        try:
+            if child.is_dir():
+                dirs += 1
+                continue
+            files += 1
+            size += child.stat().st_size
+        except OSError:
+            continue
+    return dirs, files, size
+
+
+def _clean_targets(opts: argparse.Namespace) -> list[tuple[str, Path]]:
+    targets = [("sidecar 缓存", SIDECAR_CACHE), ("run 临时目录", WORK_TMP)]
+    if opts.runs:
+        targets.append(("run 目录", RUNS_DIR))
+    return targets
+
+
+def clean_command(opts: argparse.Namespace) -> int:
+    """`clean` 子命令：删 sidecar 缓存与 work/tmp/hotspot_run。
+
+    runs 里是报表，删了只能重新采样才能再造，所以默认不碰、只跟 `--runs` 走。
+    work/hook 里是输入（hook 产物），永远不在清理范围。
+    """
+    targets = _clean_targets(opts)
+    for label, path in targets:
+        if not path.exists():
+            print(f"→ 没有缓存：{label} {path}")
+    plan = [
+        (label, path, _tree_stats(path)) for label, path in targets if path.exists()
+    ]
+    if not plan:
+        return 0
+
+    dirs = sum(stats[0] for _, _, stats in plan)
+    files = sum(stats[1] for _, _, stats in plan)
+    size = sum(stats[2] for _, _, stats in plan)
+    if opts.dry_run:
+        for label, path, (one_dirs, one_files, one_size) in plan:
+            print(
+                f"[dry-run] 将删 {label} {path}："
+                f"{one_dirs} 个目录 / {one_files} 个文件 / {one_size} 字节"
+            )
+        print(f"[dry-run] 合计 {dirs} 个目录 / {files} 个文件 / {size} 字节，未删")
+        return 0
+
+    failed = False
+    for label, path, _ in plan:
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            print(f"✗ 删不掉 {label} {path}：{exc}", file=sys.stderr)
+            failed = True
+    print(f"已删 {dirs} 个目录 / {files} 个文件 / {size} 字节")
+    return 1 if failed else 0
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="一条命令跑完热点分析（默认取 work/hook 里最近一次编译 hook 的源）",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["clean"],
+        help="clean：删 sidecar 缓存与 work/tmp/hotspot_run（不跑分析）",
     )
     parser.add_argument(
         "--src",
@@ -495,7 +564,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="跳过 sim_speed 检查（离线/测试；也是「不启停」）",
     )
+    parser.add_argument(
+        "--runs",
+        action="store_true",
+        help="clean 时连 hotspot/workspace/runs 一起删（默认保留）",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="clean 时只列将删的路径与数量，不删",
+    )
     opts = parser.parse_args(argv)
+    if opts.command != "clean" and (opts.runs or opts.dry_run):
+        parser.error("--runs / --dry-run 只用于 clean 子命令")
     opts.hook_num = None        # 无参模式选中的 hook 编号（run 目录名要用）
     opts.started_by_us = False  # 仿真是不是我们启动的（只有这种才在结束时停）
     return opts
@@ -524,16 +605,19 @@ def _run_stem(opts: argparse.Namespace, target: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     opts = parse_args(argv)
+    if opts.command == "clean":
+        return clean_command(opts)
+
     work_dir: Path | None = None
     try:
         config, target = preflight(opts)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         stem = _run_stem(opts, target)
-        work_dir = ROOT / "work/tmp/hotspot_run" / f"{stamp}_{stem}"
+        work_dir = WORK_TMP / f"{stamp}_{stem}"
         run_dir = (
             _resolve(opts.out)
             if opts.out
-            else ROOT / "hotspot/workspace/runs" / f"{stamp}_{stem}_t{opts.window}"
+            else RUNS_DIR / f"{stamp}_{stem}_t{opts.window}"
         )
 
         if opts.artifact is not None:

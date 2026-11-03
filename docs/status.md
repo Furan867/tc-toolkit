@@ -20,6 +20,8 @@
 - 一键入口 `python hotspot/run.py`：无参取 `work/hook` 最新产物，有参 `--src` /
   `--artifact --sidecar`；默认自动启停（只停自己启动的），`--no-sim-control` 关闭；
   sidecar 按 sha 缓存在 `hotspot/workspace/cache/sidecar/`
+- `python hotspot/run.py clean`：清 sidecar 缓存 + `work/tmp/hotspot_run`；`--runs`
+  清历史 run；`--dry-run` 只列不删
 - 配置：`config.toml` 移出仓库，`config.example.toml` 入库
 
 ## 当前

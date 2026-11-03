@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -393,6 +395,112 @@ class SidecarCacheTest(unittest.TestCase):
         self.assertEqual(run_mock.call_args.kwargs["stage"], "sidecar")
         self.assertTrue(sidecar.is_file())
         self.assertTrue((self.cache / f"{self.key}.lo0.fv1" / "sidecar.json").is_file())
+
+
+class CleanTargetsTest(unittest.TestCase):
+    """不 patch 路径：验 clean 默认指向的位置，且工作输入 work/hook 不在里面。"""
+
+    def test_targets_are_cache_work_tmp_and_runs(self):
+        self.assertEqual(
+            run.SIDECAR_CACHE, run.ROOT / "hotspot/workspace/cache/sidecar"
+        )
+        self.assertEqual(run.WORK_TMP, run.ROOT / "work/tmp/hotspot_run")
+        self.assertEqual(run.RUNS_DIR, run.ROOT / "hotspot/workspace/runs")
+        hook = run.ROOT / "work/hook"
+        for path in (run.SIDECAR_CACHE, run.WORK_TMP, run.RUNS_DIR):
+            self.assertNotIn(hook, path.parents)
+            self.assertNotEqual(path, hook)
+
+
+class CleanTest(unittest.TestCase):
+    """clean 子命令：拿临时目录假装缓存/中间产物/run 目录，验删哪几个、报什么数。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.cache = self.tmp / "cache/sidecar"
+        self.work_tmp = self.tmp / "work/tmp/hotspot_run"
+        self.runs = self.tmp / "runs"
+        for name, value in (
+            ("SIDECAR_CACHE", self.cache),
+            ("WORK_TMP", self.work_tmp),
+            ("RUNS_DIR", self.runs),
+        ):
+            patcher = mock.patch.object(run, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _populate(self) -> None:
+        """缓存两个 key、中间产物一份、runs 里一份报表；合计 4 个目录 / 3 个文件 / 13 字节。"""
+        for name in ("key1", "key2"):
+            (self.cache / name).mkdir(parents=True)
+            (self.cache / name / "sidecar.json").write_bytes(b"1234")
+        self.work_tmp.mkdir(parents=True)
+        (self.work_tmp / "blob.bin").write_bytes(b"12345")
+        (self.runs / "2026_run").mkdir(parents=True)
+        (self.runs / "2026_run/report.html").write_bytes(b"<html>")
+
+    def _main(self, argv: list[str]) -> tuple[int, str]:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = run.main(argv)
+        return code, out.getvalue()
+
+    def test_clean_is_positional_subcommand(self):
+        self.assertEqual(run.parse_args(["clean"]).command, "clean")
+        self.assertIsNone(run.parse_args(["--src", "x.si"]).command)
+        self.assertIsNone(run.parse_args([]).command)
+
+    def test_default_cleans_cache_and_work_tmp_but_not_runs(self):
+        self._populate()
+        with mock.patch.object(
+            run, "preflight", side_effect=AssertionError("clean 不该跑 preflight")
+        ):
+            code, out = self._main(["clean"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(self.cache.exists())
+        self.assertFalse(self.work_tmp.exists())
+        self.assertTrue((self.runs / "2026_run/report.html").is_file())
+        self.assertIn("4 个目录", out)
+        self.assertIn("3 个文件", out)
+        self.assertIn("13 字节", out)
+
+    def test_dry_run_keeps_everything(self):
+        self._populate()
+        with mock.patch.object(
+            run, "preflight", side_effect=AssertionError("clean 不该跑 preflight")
+        ):
+            code, out = self._main(["clean", "--dry-run"])
+
+        self.assertEqual(code, 0)
+        self.assertTrue((self.cache / "key1/sidecar.json").is_file())
+        self.assertTrue((self.work_tmp / "blob.bin").is_file())
+        self.assertIn("[dry-run]", out)
+        self.assertIn("4 个目录", out)
+        self.assertIn("3 个文件", out)
+        self.assertIn("13 字节", out)
+        self.assertNotIn("已删", out)
+
+    def test_runs_flag_cleans_runs(self):
+        self._populate()
+        with mock.patch.object(
+            run, "preflight", side_effect=AssertionError("clean 不该跑 preflight")
+        ):
+            code, _ = self._main(["clean", "--runs"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(self.cache.exists())
+        self.assertFalse(self.work_tmp.exists())
+        self.assertFalse(self.runs.exists())
+
+    def test_missing_cache_reports_and_returns_zero(self):
+        code, out = self._main(["clean"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("没有缓存", out)
+        self.assertNotIn("已删", out)
 
 
 if __name__ == "__main__":

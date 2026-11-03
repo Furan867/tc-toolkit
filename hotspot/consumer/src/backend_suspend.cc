@@ -137,12 +137,20 @@ std::expected<WindowStats, std::string> SuspendBackend::run_window(std::chrono::
         return std::unexpected("没有可用线程句柄，先 prepare");
     }
 
-    // 开窗时轻量校验线程集合：数量变了就重枚举（毫秒级代价，spec §4.6）。
+    // 开窗时轻量校验线程集合：锁定后只校验锁定线程还在 —— 不能因数量不等就 rescan 回全线程，
+    // 否则 74 个非仿真线程的 IMAGE 样本会把 bucket2 稀释成 98%（真机踩过）。
     auto current = snapshot_thread_ids(pid_);
     if (!current.has_value()) {
         return std::unexpected(current.error());
     }
-    if (current->size() != thread_ids_.size()) {
+    if (locked_) {
+        for (auto id : thread_ids_) {
+            if (std::find(current->begin(), current->end(), id) == current->end()) {
+                return std::unexpected("锁定的仿真线程 " + std::to_string(id) +
+                                      " 已消失，请重新 locate/open");
+            }
+        }
+    } else if (current->size() != thread_ids_.size()) {
         if (auto scanned = rescan_threads(); !scanned.has_value()) {
             return std::unexpected(scanned.error());
         }

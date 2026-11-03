@@ -12,7 +12,9 @@ using hotspot::feature_candidates;
 using hotspot::feature_offset;
 using hotspot::feature_window;
 using hotspot::hook_num_from_stem;
+using hotspot::kRuntimeTailLength;
 using hotspot::load_artifact;
+using hotspot::verify_code_copy;
 
 namespace {
 
@@ -152,7 +154,126 @@ TEST_CASE(artifact_missing_file_reports_reason)
 
 TEST_CASE(hook_num_from_stem_takes_trailing_digits)
 {
-    CHECK(hook_num_from_stem("hook_out_013").has_value());
-    CHECK_EQ(*hook_num_from_stem("hook_out_013"), std::string{"013"});
+    const auto num = hook_num_from_stem("hook_out_013");
+    CHECK(num.has_value());
+    CHECK_EQ(num.value_or(""), std::string{"013"});
     CHECK(!hook_num_from_stem("plain").has_value());
+}
+
+namespace {
+
+// 一份「内存里的副本」：默认与产物相同，调用方按需改字节。产物 0x2000 字节，
+// 尾部 kRuntimeTailLength（1024）B 从 0x1C00 起，特征窗在 0x400 —— 两者不重叠。
+constexpr std::size_t kSyntheticCodeSize = 0x2000;
+
+std::vector<std::uint8_t> synthetic_code()
+{
+    std::vector<std::uint8_t> code(kSyntheticCodeSize);
+    for (std::size_t i = 0; i < code.size(); ++i) {
+        code[i] = static_cast<std::uint8_t>((i * 37 + 11) & 0xFF);
+    }
+    return code;
+}
+
+std::size_t tail_start()
+{
+    return kSyntheticCodeSize - kRuntimeTailLength;
+}
+
+void set_differences(std::vector<std::uint8_t> &memory, std::size_t from, std::size_t count)
+{
+    for (std::size_t i = 0; i < count; ++i) {
+        memory[from + i] = static_cast<std::uint8_t>(memory[from + i] ^ 0xFF);
+    }
+}
+
+} // namespace
+
+TEST_CASE(verify_accepts_identical_copy)
+{
+    const auto code = synthetic_code();
+    const auto result = verify_code_copy(code, code);
+    CHECK(result.matched);
+    CHECK_EQ(result.tail_differences, std::size_t{0});
+}
+
+TEST_CASE(verify_accepts_one_written_tail_byte)
+{
+    // hook_out_007.bin 真机现场：尾部 .bss 的 1 个字节被游戏写成 0x0a。
+    auto code = synthetic_code();
+    auto memory = code;
+    memory[tail_start() + 0x10] = 0x0A;
+    const auto result = verify_code_copy(memory, code);
+    CHECK(result.matched);
+    CHECK_EQ(result.tail_differences, std::size_t{1});
+}
+
+TEST_CASE(verify_accepts_seventeen_written_tail_bytes)
+{
+    // 第 6 个候选的现场：尾部 0x56a0-0x56bf 连续 17 字节被写。
+    const auto code = synthetic_code();
+    auto memory = code;
+    set_differences(memory, tail_start() + 0x20, 17);
+    const auto result = verify_code_copy(memory, code);
+    CHECK(result.matched);
+    CHECK_EQ(result.tail_differences, std::size_t{17});
+}
+
+TEST_CASE(verify_rejects_body_difference)
+{
+    // 主体里的差异不是运行时写入：那是另一份代码，不能算副本。
+    const auto code = synthetic_code();
+    auto memory = code;
+    memory[kSyntheticCodeSize / 2] = static_cast<std::uint8_t>(memory[kSyntheticCodeSize / 2] ^ 0xFF);
+    CHECK(!verify_code_copy(memory, code).matched);
+}
+
+TEST_CASE(verify_accepts_full_tail_quota)
+{
+    // 正好用满尾部位宽：64 = kRuntimeTailMaxDiff。
+    const auto code = synthetic_code();
+    auto memory = code;
+    set_differences(memory, tail_start(), hotspot::kRuntimeTailMaxDiff);
+    const auto result = verify_code_copy(memory, code);
+    CHECK(result.matched);
+    CHECK_EQ(result.tail_differences, hotspot::kRuntimeTailMaxDiff);
+}
+
+TEST_CASE(verify_rejects_too_many_tail_differences)
+{
+    // 65 > kRuntimeTailMaxDiff(64)：尾部容差不能宽到让别的产物混进来。
+    const auto code = synthetic_code();
+    auto memory = code;
+    set_differences(memory, tail_start(), hotspot::kRuntimeTailMaxDiff + 1);
+    const auto result = verify_code_copy(memory, code);
+    CHECK(!result.matched);
+    CHECK_EQ(result.tail_differences, hotspot::kRuntimeTailMaxDiff + 1);
+}
+
+TEST_CASE(verify_rejects_difference_just_outside_tail_window)
+{
+    // 比尾部窗口多 1 字节（code_size − 1025）：己经在主体里，必须拒绝 —— 边界差一位就是
+    // 「另一份代码」与「运行时写入」的分界。
+    const auto code = synthetic_code();
+    auto memory = code;
+    const std::size_t index = kSyntheticCodeSize - hotspot::kRuntimeTailLength - 1;
+    memory[index] = static_cast<std::uint8_t>(memory[index] ^ 0xFF);
+    CHECK(!verify_code_copy(memory, code).matched);
+}
+
+TEST_CASE(verify_rejects_feature_window_difference)
+{
+    // 特征窗必须严格相同（过短产物时特征窗会落在尾部容差区，不能被容差放过）。
+    const auto code = synthetic_code();
+    auto memory = code;
+    memory[hotspot::feature_offset(kSyntheticCodeSize) + 5] =
+        static_cast<std::uint8_t>(memory[hotspot::feature_offset(kSyntheticCodeSize) + 5] ^ 0xFF);
+    CHECK(!verify_code_copy(memory, code).matched);
+}
+
+TEST_CASE(verify_rejects_short_memory_read)
+{
+    const auto code = synthetic_code();
+    const std::vector<std::uint8_t> memory(kSyntheticCodeSize - 1, 0);
+    CHECK(!verify_code_copy(memory, code).matched);
 }

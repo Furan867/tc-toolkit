@@ -11,6 +11,12 @@
 !/docs/
 !/simplexc/
 !/tools/
+!/hotspot/
+
+# hotspot：源码与 config.toml 入库，运行期产物与构建目录不入库
+/hotspot/workspace/
+/hotspot/consumer/build/
+/hotspot/consumer/compile_commands.json
 
 # 各层通用的系统 / Python 垃圾
 **/__pycache__/

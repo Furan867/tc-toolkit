@@ -1,0 +1,47 @@
+# hotspot/consumer
+
+采样会话（W2）：suspend 后端产出 `samples.tsv v1`，加常驻 REPL 与 `save`。
+设计与键表见 `docs/specs/2026-11-01-hotspot-profiler-design.md` §4.0–4.6、§10。
+
+## 构建与自测
+
+```bash
+cmake -S hotspot/consumer -B hotspot/consumer/build -G Ninja   # 本机没有 MSVC，默认生成器 NMake 不可用
+cmake --build hotspot/consumer/build
+ctest --test-dir hotspot/consumer/build --output-on-failure
+# 或：cmake --preset mingw -S hotspot/consumer && cmake --build --preset mingw
+```
+
+`-Wall -Werror` 挂在 `hotspot_flags` 上，全部自有源码（src/ 与 tests/）都吃这一套。
+
+## 用法
+
+```text
+hotspot-consumer [--config hotspot/config.toml]
+> open work/hook/all/hook_out_001.bin [--pid N] [--interval-ms 1]
+> window 10 save          # 采 10 s 并落 run 目录（samples.tsv + run.toml）
+> status / locate / save [dir] / quit
+```
+
+`open` 之后定位/枚举只做一次，多窗口复用；`window` 开头轻量校验线程集合。
+`save` 建 `runs/<ts>_<产物名>_t<秒>/`，写 `samples.tsv` + `run.toml`，读两次 freq
+（`freq.command`，超时 `freq.timeout_sec`）填入 `freq.start_hz/end_hz`。
+无游戏、无 PID、产物不存在都只报错，REPL 不退出（`quit`/EOF 才退）。
+
+后端目前只有 `suspend`（免管理员；SuspendThread + GetThreadContext，粗采
+`suspend_probe_rounds` 轮锁定仿真线程，未命中则退回全线程并告警）。`etw` 后端
+未实现；需要时按自写最小 ETW 解析或 MSVC C ABI 桥另加。
+
+## 已验证 / 待真机验证
+
+已验证（本机，2026-11-05）：
+
+- 构建 0 warning（`-Wall -Werror`）；`ctest` 2/2 通过（聚合/定位/配置/落盘/会话用例）；
+- 事件注入：多副本合并、bucket 0/1/2 判定、blob_offset 换算、samples.tsv 头与行序；
+- 特征窗偏移（0x400 / 过短退 len/3）、候选基址换算、产物头 `(head & ~(1<<62)) == 文件长`；
+- 无游戏/无 PID/坏产物的 REPL 错误路径与 `game.lock` 的 RAII 清理。
+
+待真机验证（缺游戏进程或管理员终端，未阻塞交付）：
+
+- 单样本暂停时长上界实测值（`suspend` 后端的 `WindowStats::max_pause`，目前只在有游戏时才有数）；
+- `open` 后 `window` 与 `save` 的端到端样本量与 bucket 份额（需游戏已载入电路）。

@@ -1,0 +1,27 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "mingw",
+      "displayName": "w64devkit (MinGW-w64 GCC) + Ninja",
+      "description": "本机没有 MSVC，CMake 的默认生成器是 NMake，不能用；工具链从 PATH 找（见 ../cmake/toolchain-mingw-w64devkit.cmake），产物落 build/",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "toolchainFile": "${sourceDir}/../../cmake/toolchain-mingw-w64devkit.cmake"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mingw",
+      "configurePreset": "mingw",
+      "description": "全部目标（libhotspot_core / libhotspot_etw / hotspot-consumer / hotspot_tests）"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "mingw",
+      "configurePreset": "mingw",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

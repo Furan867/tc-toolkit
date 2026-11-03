@@ -86,17 +86,6 @@ constexpr std::size_t kHeaderBytes = 8;
 std::string g_stdlib_prefix;
 bool g_stdlib_ready = false;
 
-bool read_whole_file(const char* path, std::string& out) {
-  std::FILE* f = std::fopen(path, "rb");
-  if (f == nullptr) return false;
-  char buf[4096];
-  std::size_t n = 0;
-  while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
-  const bool ok = std::ferror(f) == 0;
-  std::fclose(f);
-  return ok;
-}
-
 /* 与 CLI 同一份查表（`cli/win32_export.hh`：kernel32 → ucrtbase → msvcrt），`__imp_X` 的剥法与
  * 模块顺序都只在那边定义。
  *
@@ -194,14 +183,16 @@ extern "C" const char* simplexc_compile(const char* src, long long src_len,
        代价：报错行号是拼接后的行号（与参考编译器内部加前缀时同一种口径）。 */
     if (stdlib_path != nullptr) {
       if (!g_stdlib_ready) {
-        if (!read_whole_file(stdlib_path, g_stdlib_prefix)) {
+        if (!lw::read_source_file(stdlib_path, &g_stdlib_prefix)) {
           std::cerr << "[simplexc] stdlib 前缀读不到：" << stdlib_path << std::endl;
           std::snprintf(g_last_error, sizeof g_last_error, "stdlib 前缀读不到：%s", stdlib_path);
           return kInternalError;
         }
         g_stdlib_ready = true;
       }
-      text.insert(0, g_stdlib_prefix);
+      /* 拼接与「源码第 1 行变成第几行」的口径都在 `lw::splice_prefix`（CLI 的 `--stdlib` 吃
+         同一份）。壳不报行号，所以只用 `.text`。 */
+      text = lw::splice_prefix(g_stdlib_prefix, std::move(text)).text;
     }
     sx::Frontend fe(sx::SrcText{text});
     /* 声明层错误（原型 `Frontend.decl_errors`）不是异常，但同样是我们不支持的源码形态。

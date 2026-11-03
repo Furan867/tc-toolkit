@@ -67,5 +67,24 @@ struct OwnedModule {
  * / 前端自己的 `ParseError`。 */
 OwnedModule build_module(const Frontend& fe, std::string source_name);
 
+/* ---------------------------------------------------------------- 源码文本（壳与 CLI 共用）
+ *
+ * 为什么这一处必须共用：`stdlib = on` 时前缀拼在**用户源码之前**，于是「用户源码第 1 行」变成
+ * 拼后文本的第 `line_offset + 1` 行 —— 报错行号、`--elements-out` 的行区间、`.debug_line` 全部
+ * 吃这个数。两处各算一次就会出现「元件表推的行」与「编译器报的行」差一个前缀。
+ *
+ * 拼接就是 `insert(0, prefix)`：**不**加换行、不插分隔（壳一直这么做，参考编译器内部同口径）。
+ * 前缀不以换行结尾时，源码第 1 行与前缀末行同占一行，但**行号映射不变**（前缀有几个 `\n`，
+ * 源码第 1 行就在第 `n+1` 行）。 */
+struct SplicedSource {
+  std::string text;
+  int line_offset = 0; /* 前缀里的换行数 = 用户源码第 1 行在拼后文本里的行号 - 1 */
+};
+
+SplicedSource splice_prefix(const std::string& prefix, std::string src);
+
+/* 整个文件读成串（壳的 stdlib 缓存与 CLI 的 `--stdlib`/`--src` 都走它）。读不了返回 false。 */
+bool read_source_file(const std::string& path, std::string* out);
+
 }  // namespace lower
 }  // namespace simplexc

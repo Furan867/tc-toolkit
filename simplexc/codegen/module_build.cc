@@ -7,7 +7,9 @@
  */
 #include "module_build.hh"
 
+#include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -421,6 +423,26 @@ OwnedModule build_module(const Frontend& fe, std::string source_name) {
   }
   out.ast.source_name = std::move(source_name);
   return out;
+}
+
+SplicedSource splice_prefix(const std::string& prefix, std::string src) {
+  SplicedSource out;
+  out.line_offset = static_cast<int>(std::count(prefix.begin(), prefix.end(), '\n'));
+  src.insert(0, prefix);
+  out.text = std::move(src);
+  return out;
+}
+
+bool read_source_file(const std::string& path, std::string* out) {
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (f == nullptr) return false;
+  out->clear();
+  char buf[4096];
+  std::size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out->append(buf, n);
+  const bool ok = std::ferror(f) == 0;
+  std::fclose(f);
+  return ok;
 }
 
 }  // namespace lower

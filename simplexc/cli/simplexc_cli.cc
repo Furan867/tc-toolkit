@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -246,7 +247,8 @@ std::vector<ElementSegment> parse_elements(const std::string& text) {
   return segs;
 }
 
-bool write_elements(const std::string& path, const std::vector<ElementSegment>& segs) {
+bool write_elements(const std::string& path, const std::vector<ElementSegment>& segs,
+                    int line_offset) {
   std::string out = "# el.tsv v1\n";
   for (const ElementSegment& s : segs) {
     out += s.id;
@@ -257,9 +259,9 @@ bool write_elements(const std::string& path, const std::vector<ElementSegment>& 
     out += '\t';
     out += s.tail;
     out += '\t';
-    out += std::to_string(s.line_lo);
+    out += std::to_string(s.line_lo + line_offset);
     out += '\t';
-    out += std::to_string(s.line_hi);
+    out += std::to_string(s.line_hi + line_offset);
     out += '\n';
   }
   return write_file(path, out.data(), out.size());
@@ -340,15 +342,16 @@ bool write_offsets(const std::string& path, const std::vector<uint8_t>& blob,
 
 void usage() {
   std::fprintf(stderr,
-               "用法：simplexc-cli --src <file.si> [--out <blob>] [--ir-out <ll>] [--obj-out <coff>]\n"
-               "                    [--elements-out <el.tsv>] [--offsets-out <json>] [--debug-info]\n"
-               "                    [--objs-dir simplexc/build/objs] [--entry 0xXXXX] [--list-unsupported] [--verbose]\n");
+               "用法：simplexc-cli --src <file.si> [--stdlib <stdlib_prefix.si>] [--out <blob>]\n"
+               "                    [--ir-out <ll>] [--obj-out <coff>] [--elements-out <el.tsv>]\n"
+               "                    [--offsets-out <json>] [--debug-info] [--objs-dir simplexc/build/objs]\n"
+               "                    [--entry 0xXXXX] [--list-unsupported] [--verbose]\n");
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  std::string src, out_path, ir_path, obj_path, elements_path, offsets_path;
+  std::string src, stdlib_path, out_path, ir_path, obj_path, elements_path, offsets_path;
   std::string objs_dir = "simplexc/build/objs";
   bool list_unsupported = false, verbose = false, timing = false, debug_info = false;
   uint64_t entry_override = 0;
@@ -381,6 +384,10 @@ int main(int argc, char** argv) {
       obj_path = p;
     } else if (a == "--debug-info") {
       debug_info = true;
+    } else if (a == "--stdlib") {
+      const char* p = need("--stdlib");
+      if (!p) return 2;
+      stdlib_path = p;
     } else if (a == "--elements-out") {
       const char* p = need("--elements-out");
       if (!p) return 2;
@@ -434,22 +441,50 @@ int main(int argc, char** argv) {
     using Clock = std::chrono::steady_clock;
     auto t0 = Clock::now();
     /* 元件表只依赖源文件原文（注释在 `mask_source` 里被抹成空格，raw_lines 里也没有原文），
-       所以它在前端跑之前就能落盘：编译失败时这份表依然是对的。 */
-    if (!elements_path.empty()) {
-      std::vector<uint8_t> raw;
-      if (!read_file(src.c_str(), raw)) {
+       所以它在前端跑之前就能落盘：编译失败时这份表依然是对的。
+       `--stdlib` 把前缀拼在源码前，于是源码第 1 行变成第 `line_offset + 1` 行 —— el.tsv 的行区间
+       必须跟着后移，否则「元件表推的行」与 `.debug_line` 里的行差一个前缀。 */
+    std::string src_text;
+    if (!elements_path.empty() || !stdlib_path.empty()) {
+      if (!lw::read_source_file(src, &src_text)) {
         std::fprintf(stderr, "读不了 %s\n", src.c_str());
         return 2;
       }
-      const std::vector<ElementSegment> segs =
-          parse_elements(std::string(raw.begin(), raw.end()));
-      if (!write_elements(elements_path, segs)) {
+    }
+    std::string spliced;
+    int line_offset = 0;
+    if (!stdlib_path.empty()) {
+      std::string prefix;
+      if (!lw::read_source_file(stdlib_path, &prefix)) {
+        std::fprintf(stderr, "读不了 stdlib 前缀 %s\n", stdlib_path.c_str());
+        return 2;
+      }
+      /* 传**拷贝**：`src_text` 还要给元件表用（拼后的文本只喂前端）。 */
+      const lw::SplicedSource sp = lw::splice_prefix(prefix, src_text);
+      spliced = sp.text;
+      line_offset = sp.line_offset;
+      if (verbose) {
+        std::fprintf(stderr, "[cli] stdlib %zu B（%d 行）拼在源码前 → %zu B\n", prefix.size(),
+                     line_offset, spliced.size());
+      }
+    }
+    if (!elements_path.empty()) {
+      const std::vector<ElementSegment> segs = parse_elements(src_text);
+      if (!write_elements(elements_path, segs, line_offset)) {
         std::fprintf(stderr, "写不了元件表 %s\n", elements_path.c_str());
         return 2;
       }
       if (verbose) std::fprintf(stderr, "[cli] 元件段 %zu 条 → %s\n", segs.size(), elements_path.c_str());
     }
-    sx::Frontend fe(src);
+    /* 没拼前缀就走**路径**入口（与不带 `--stdlib` 的旧行为逐字节相同：`SrcText` 入口会把
+       `src_path` 填成 `<memory>`，报错文本与 `.debug_line` 的文件名都会变）。 */
+    std::optional<sx::Frontend> fe_storage;
+    if (stdlib_path.empty()) {
+      fe_storage.emplace(src);
+    } else {
+      fe_storage.emplace(sx::SrcText{std::move(spliced)});
+    }
+    const sx::Frontend& fe = *fe_storage;
     if (!fe.decl_errors.empty()) {
       std::string msg;
       for (const std::string& e : fe.decl_errors) {
@@ -468,7 +503,11 @@ int main(int argc, char** argv) {
                    owned.ast.label ? owned.ast.label->name.c_str() : "(无)");
     }
 
-    const sm::Hir hir = sm::analyze(cg::module_source_of(owned.ast));
+    sm::ModuleSource ms = cg::module_source_of(owned.ast);
+    /* 拼没拼前缀要让 sema 知道：`str` / `hex` / `bin` 的硬编码实现只在**没拼**时注册
+       （`Analyzer::call_formatter`）—— 无条件注册会改掉 `stdlib = on` 的产物字节。 */
+    ms.stdlib_prefix_included = !stdlib_path.empty();
+    const sm::Hir hir = sm::analyze(ms);
     cg::CodegenOptions copts;
     copts.debug_info = debug_info;
     copts.source_path = src;

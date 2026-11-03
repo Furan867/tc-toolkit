@@ -55,7 +55,7 @@
 | 元件 | `.si` 源码里一段连续的代码块（注释行引领，如 `work/hook/hook_src_001.si:355-361`），机器码可能被优化搬运，**不假定机器码连续** |
 | 元件主键 | `(type, id)`：id = 注释第一段数字（同一元件「代码段+绑定段」两条注释共享，旧链验证过的合并键）；**同一 sidecar 内 id 必须唯一**（旧链实测 1234 段=617 实例；生成器违反即报错，不静默配对） |
 | 元件行区间规则 | 区间 = **[元件注释行， 下一个元件注释行/顶层注释或块边界)**；末元件止于下一个非元件顶层注释或文件尾；每元件两区间（代码段+绑定段）。防「末元件吞公共代码」的历史坑（虚高 89%，`docs/facts/perf-tooling.md`） |
-| 元件表 | 前端从 raw_lines 逐注释段产出的行式表（§5.3 有列定义），Provider 按 (type,id) 合并成台账 |
+| 元件表 | 前端从源文件原文逐注释段产出的行式表（§5.3 有列定义），Provider 按 (type,id) 合并成台账 |
 | 侧车 sidecar | 编译时产出的、blob 旁随附的独立映射文件（JSON，§6） |
 | Provider | 侧车生成器，按编译器各一：`ours`（simplexc，路线 A）/ `ref`（原版，仅锁 schema） |
 | 采样后端 | 产出 (IP, ThreadId) 样本流的两种实现：`etw`（内核 PMU，主）与 `suspend`（自建，备用）；接口同构（§4.0） |
@@ -110,7 +110,7 @@ tc-toolkit/hotspot/
 | 提权 | **需要管理员**（开内核日志会话） | **不需要**（同用户进程 OpenProcess 即可，旧链走通验证；单样本暂停时长上界 W2 实测后回填） |
 | 每样本扰动 | 中断打点，被测线程零暂停 | 每 SuspendThread 数 µs 起的暂停（跨进程 GetThreadContext 可能达几十 µs），**上界未测** |
 | 直取线程 | 事件全系统 → 样本须按 TID 过滤（快照层，§4.1） | 直接持目标进程线程句柄，**无需系统过滤** |
-| 插件量 | 会话管理 + ETL 解析（krabs） | ~200 行 |
+| 插件量 | 会话管理 + ETL 解析（krabsetw） | ~200 行 |
 | 精细用途 | 主力；时延/抖动类研究也用它 | 单一频率，作为免管理员环境通道 |
 
 接口纪律：两后端对聚合层暴露的中间结构相同（IP、ThreadId、来源窗口时长）；
@@ -134,7 +134,7 @@ samples.tsv v1 契约（§4.4）不变；「换后端」是 consumer 内部战�
 - 会话调度参数：间隔经正规入口设置（xperf `-profint` 或同族 TraceSetInformation API，
   等价性由 W2 实测）；**量纲暂按 100 ns 折算（1 ms=10000），可设下限不预设**，实现
   第一轮实测后回填本节（§13）；**改间隔可能需要重建会话**——REPL 里以
-  `open --interval <ms>`（参数形态，§4.6 草案）指定、逐窗口不可变；
+  `open --interval-ms <ms>`（参数形态，§4.6）指定、逐窗口不可变；
 - **软件交换**：freq 读数（§9）由 consumer `save` 通过 config 里的外部命令补记；
   上述 TID 快照、间隔键在 config 有对应键（§10）。
 
@@ -158,7 +158,9 @@ samples.tsv v1 契约（§4.4）不变；「换后端」是 consumer 内部战�
    整体错 8 字节、候选全废（旧工具实测踩过：`tools/locate_jit_image.py:104-110`）；
 2. 在目标进程的可执行内存区搜特征；每次命中与**产物文件的代码段**（blob 文件 +8
    起的 code_size 字节）做整段逐字节比对确认——比对通过即同时完成「产物文件 ==
-   内存中代码」的哈希级校验，防「分析的是这份、跑的是另一份」错配；
+   内存中代码」的哈希级校验，防「分析的是这份、跑的是另一份」错配。⚠️ 文件头是
+   `文件总长 | (1<<62)`（bit62 = 游戏不 free，`simplexc/assemble/assemble.cc:490-502`），
+   长度判据必须先掩位；`head == len(img)` 对带 bit62 的产物失效；
 3. **多候选处理（历史实测同一电路一次编译 ≤19 副本共存）**：全部比对成功的候选都
    记为 blob 内命中，折算到同一坐标；候选集合合并计数，独立副本不区分；
 4. 归因窗口 = 每个 `[base, base + code_size)`。
@@ -189,15 +191,18 @@ v1 语义。
 - C++23 / GCC 14.2（`docs/specs/2026-10-15-simplexc-interfaces.md:317` 有据）；
   cmake / ninja PATH 实测在位（2026-11-01）；**编译选项一律 `-Wall -Werror`**
  （hotspot 全部 C++ 目标；0 warning 属规范结果，不是第二个目标）；
-- `etw` 后端依赖 krabs（Microsoft 开源 ETW 解析库，header-only）——cmake 引入方式
-  与仓库先例一致：**`FetchContent_Declare(krabs URL <tarball> URL_HASH SHA256=…)`**
- （CMake 的 `GIT_TAG` 无法做 hash 校验；URL+URL_HASH 是唯一可 pin sha256 的形态，
-  `docs/facts/build-assemble.md:3-8` 同先例）；vcpkg 暂不引入（header-only 无二进制
-  依赖，见本节）；
-- 已知风险：krabs 按 MSVC 路径开发，MinGW-w64 适配有**未验证**——具体怀疑点：
-  `tdh.hpp` 可能依赖 MSVC WRL 头/`__uuidof`；C++23 开关下是否干净待实测 → 实现
-  第一道验收就是 consumer 可执行件编译跑通；碰壁回退：**仅此工具**切 clang-cl/MSVC
-  构建，不动仓库其他构建链。
+- `etw` 后端依赖 **krabsetw**（`microsoft/krabsetw`，header-only；`microsoft/krabs`
+ 不存在）——2026-11-03 实测：上游无 tag，只能 pin commit
+ `d626e49c41a2a324ad8b433b186703aa551373b3`（tarball sha256
+ `a360723eea0eac16532d409d3e3649faa9328bb972cdeb7dffe522ae3b23bb47`）；原始头在
+ MinGW g++ 14.2 下 169 error，需 6 个头约 25 行改动 + 一层 TDH 符号 shim（MinGW
+ `tdh.h` 是残缺子集）。故改为 **vendored 副本 + patch**
+ （`hotspot/consumer/third_party/krabsetw/`，保留 LICENSE、commit 与 sha256），
+ 不用 FetchContent；vcpkg 不引入；
+- MinGW 适配已走通编译+链接（probe 2.4 MB）：`wrl/client.h` 在、`__uuidof` 不是
+ 问题；必需 `-DUNICODE -D_UNICODE -D__FUNCSIG__=__PRETTY_FUNCTION__`、手动
+ `-ltdh -ladvapi32 -lole32`；
+- 回退方案作废：本机 clang-cl / cl / MSVC **均不存在**，不能切 MSVC 构建链。
 
 ### 4.6 常驻交互式会话（形态：REPL；不做「一次调用后退出」的采样器）
 
@@ -207,7 +212,7 @@ v1 语义。
 - 会话状态：目标 PID/全部线程句柄、当前产物+基址候选（§4.3）、已产出的样本聚合；
   `open` 后多窗口复用，不重复定位/枚举；
 - 线程集合在 `window` 开头轻量校验（线程数/存活变化则重枚举，毫秒级代价）；
-- 最小命令集（草案）：`open <artifact> [--pid N] [--interval <ms>]` 定位并缓存 /
+- 最小命令集：`open <artifact> [--pid N] [--interval-ms <ms>]` 定位并缓存 /
   `window <sec> [save]` 采一个窗口 / `status` / `locate` 重跑定位 / `save [dir]` 落
   run 目录（建目录、写 samples.tsv+run.toml、调外部 freq 命令取首尾读数、etw 后端
   删留 ETL）/ `quit`；
@@ -226,10 +231,11 @@ v1 语义。
 
 **前端→LLVM 一切经 C API**（仓库冻结约定：`LLVM-C.dll` + C API，
 `docs/specs/2026-10-15-simplexc-interfaces.md` §7、`simplexc/codegen/llvm_ffi.hh:1-11`；
-`simplexc/build/llvm/` 只有 `libLLVM-C.a`；**不引入 C++ API**）。已导出并可用：
-`LLVMCreateDIBuilder`、`LLVMDIBuilderCreateCompileUnit`（`build/llvm/include/llvm-c/DebugInfo.h:311`）、
-`LLVMDIBuilderCreateDebugLocation`（`:507`）、`LLVMSetCurrentDebugLocation2`（`Core.h:4638`）、
-`LLVMAddModuleFlag`（`LLVM-C.def:21`）、`LLVMDIBuilderFinalize`（`:270`）。
+`simplexc/.deps/llvm/` 有 `lib/libLLVM-C.a` 与 `include/`；**不引入 C++ API**）。
+`nm` 实测已导出可用（LLVM 23.1.3）：
+`LLVMCreateDIBuilder`、`LLVMDIBuilderCreateCompileUnit`（`.deps/llvm/include/llvm-c/DebugInfo.h:311`）、
+`LLVMDIBuilderCreateDebugLocation`（`:507`）、`LLVMSetCurrentDebugLocation2`（`llvm-c/Core.h:4638`）、
+`LLVMAddModuleFlag`（`llvm-c/Core.h:1009`）、`LLVMDIBuilderFinalize`（`:270`）。
 
 1. **DIBuilder 基建（C API 调用序）**：CompileUnit → DIFile / DISubprogram 元数据链；
    module 前列 flags：`"Debug Info Version"=3`（缺失则后端静默丢 debug info，最
@@ -238,14 +244,16 @@ v1 语义。
    `LLVMDIBuilderFinalize`。
 2. **DebugLoc 喂行号**：每条 IR 指令挂 `DebugLoc{line}`。只喂行号，不喂列号（元件按
    **行区间**归并，元件边界全在注释行侧，同一行不跨两元件 → 列信息无必要）。
-3. **元件表产出（前端行表路径，不经 codegen）**：前端对 `.si` 的行/注释捕获**已存在**
- ——`ScannedSource.raw_lines`（`simplexc/frontend/frontend.hh:44-47`）＋ `mask_source`
-   （`simplexc/frontend/decls.cc:399`）保有注释原文；`decls.cc:719-723` 的
-   `line_class` 是覆盖率统计口径，不做注释语义、别接错。W1 的实现点：从 raw_lines
-   解析元件注释行（§2 宽容规则），**逐注释段**输出元件：
-   `el.tsv` 每行 = `id, type, width, tail, line_lo, line_hi`（该段自己的行区间；
-  （type,id) 台账合并与行区间数组化在 Provider（§6）完成，承接 §2 行区间规则）。
-   交 Provider。codegen 只喂行号，不承元件语义。
+3. **元件表产出（源文件原文路径，不经 codegen）**：实测 `mask_source` 把 `//` 与
+  `/* */` 在 raw/code 两份里**都抹成空格**（`simplexc/frontend/decls.cc:400-419`），
+  `raw_lines` 不含注释原文；`decls.cc:719-723` 的 `line_class` 的 comment 分支是
+  多行字符串续行，不是注释行。W1 的实现点：CLI 从 `--src` 源文件原文解析元件注释
+  行（§2 宽容规则；行号与 raw_lines 等长对齐，`decls.hh:27`），新增
+  `--elements-out <path>`，**逐注释段**输出元件：
+  `el.tsv` 首行 `# el.tsv v1`，之后每行 = `id\ttype\twidth\ttail\tline_lo\tline_hi`
+  （该段自己的行区间；缺 tail 记空字段）。（type,id) 台账合并与行区间数组化在
+  Provider（§6）完成，承接 §2 行区间规则。交 Provider。codegen 只喂行号，不承
+  元件语义。
 4. **G1 门（挂进 simplexc 判据流程）**：同一 IR 开/关 `--debug-info` 各过一遍后端，
    `objdump -d` 全量 diff（只比 `.text`）必须为空；非空先排除 LLVM 特定 bug 再
    继续——**调试信息不允许改变机器码**。flag 本体是 W1 新增（现 CLI 无此 flag；
@@ -304,10 +312,24 @@ rnglists 支持参差）届时实测。侧车 schema 不变。
 - 先把行表展开成 (blob 偏移 → 行号) 有序表：据此给**全部**有行号信息的机器段产
   `lines`；再按元件行区间 join 出 `segments`（widget 内未被任何元件行区间覆盖的
   机器段不进 `segments`，只留在 `lines` 里）；
-- **偏移基准重映射**：`.debug_line` 地址 → blob 偏移的修正（长度头 8、段布局）由
-  **W1 让装配器/CLI 另吐一份重映射基准**（如 `<blob>.offsets`，含代码段相对 blob 的
-  起始与行表地址基），W3 **只读不碰装配器**；改装配器划 W1。若装配器产出不便，
-  回退：join 脚本只依赖 obj，从 COFF 分节装载地址自行推导（W3 自己验证）；
+- **偏移基准重映射**：实测 `.debug_line` 的地址是**对象 `.text` 节内偏移**（对象
+  节 VMA=0；行程序首址处一条 `ADDR64 → .text` 重定位；`objdump` 不重定位），而装配
+  器把 `.debug*` 全部丢弃（`simplexc/assemble/assemble.cc:163-172`）→ 必须靠 W1 另吐
+  `<blob>.offsets`；W3 **只读不碰装配器**。格式（JSON，W3 独占消费）：
+  ```jsonc
+  { "version": 1, "artifact": {"len": …, "sha256": …}, "header_len": 8,
+    "code_size": …, "entry": …, "body_end": …, "stubs_base": …, "slots_base": …,
+    "sections": [ { "obj": 0, "obj_path": "module.obj", "sec": 1, "name": ".text",
+                    "class": "text|rdata|data|bss", "blob_off": 0, "size": …, "align": 16 } ],
+    "debug_lines": [ { "obj": 0, "obj_path": "module.obj",
+                       "anchors": [ { "text_sec": 1, "blob_off": 0 } ] } ] }
+  ```
+  `obj` = 装配入参下标（0 基），`sec` = COFF 节下标（1 基）；`anchors` 每条 = 一个
+  带 `.debug_line` 的对象及其 `.text` 基址（首版单 `.text` 对象只有一条；多 `.text`
+  按重定位锚点展开）。不变式：`sections` 按 `blob_off` 升序互不重叠、
+  `blob_off+size <= body_end`；`code_size == len-8`；`stubs_base == body_end`。
+  回退（W3 已验证可行）：从 COFF 节表复刻装配规则，唯一不可推导的是对象入参顺序；
+  仅作降级路径，不与 offsets 同时启用；
 - `stubs` 取现成 `<blob>.stubs` + 8 行换算（无新增装配工作）；
 - 命令入口：`simplexc_cli --src x.si --out blob --obj-out coff`（现成）。
 
@@ -351,7 +373,7 @@ store 魔数 → 机器码搜立即数锚点 → 「标记恒 17 字节」坐标
 | # | 判据 | 跑法（命令级） | 时点 |
 |---|---|---|---|
 | G1 | 调试信息不改机器码 | `simplexc_cli --src simplexc/corpus/src/177.si --out g0.bin --obj-out g0.obj`，重复一次带 `--debug-info` 得 g1；`objdump -d g0.obj` vs `g1.obj` 只比 `.text`，diff 为空 | simplexc 判据流程常驻 |
-| G2 | 侧车正确性三方抽查 | 抽样总体 = sidecar `segments` 均匀取 N 段（N 默认 20，可调）；对每段：`objdump --dwarf=decodedline <obj>` 输出 / sidecar 行 / `objdump -dl <obj>` 该段首指令行注，三方对齐（坐标按 §2；⚠️ llvm-dwarfdump 不在 `build/llvm/bin`——备选：W3 前置 `tools/fetch_llvm.py --extra` 拉一份，或全程 objdump） | ours Provider 构建后 |
+| G2 | 侧车正确性三方抽查 | 抽样总体 = sidecar `segments` 均匀取 N 段（N 默认 20，可调）；对每段：`objdump --dwarf=decodedline <obj>` 输出 / sidecar 行 / `objdump -dl <obj>` 该段首指令行注，三方对齐（坐标按 §2；⚠️ llvm-dwarfdump 不在 `.deps/llvm/bin`——备选：W3 前置 `tools/fetch_llvm.py --extra` 拉一份，或全程 objdump） | ours Provider 构建后 |
 | G3′ | 重复性 | 同一产物同参数背靠背两个 run；top-5 **按 (type,id) 集合重合 ≥ K**（K 默认 4，初值可调；不比顺序）；同一脚本对两份 report 计算 | 每份产物首测 |
 | G3″ | 回归对照 | ours 与 ref 各编同电路各采一次，热点分配显著差异人工审定 | 依赖 ref Provider（不在范围，暂缓） |
 | G4 | 覆盖水位 | 三桶份额写入 run.toml（analysis 回写）；基线 = `workspace/baseline.json`（首跑建）：bucket=0 份额 < 基线的 ×（默认 80%，初值可调）→ 告警；etw 侧途中新开线程**样本丢失不可计数**，告警信号 = bucket 份额下降 + 首尾快照差集非空（§4.1） | 每次报表附带 |
@@ -387,6 +409,40 @@ tc-toolkit/hotspot/
   <产物库同步>                   # hook 落盘的 .si/.bin 依旧在 work/hook/，工具**只读**
 ```
 
+**`config.toml` 键（默认值；W2 冻结）**：
+
+| 键 | 类型 | 默认 | 语义 |
+|---|---|---|---|
+| `game.exe_name` | str | `"Turing Complete.exe"` | 目标进程名 |
+| `sampler.backend` | enum | `"etw"` | `etw` \| `suspend` |
+| `sampler.interval_ms` | int | `1` | 采样间隔（etw 量纲待实测） |
+| `sampler.window_sec` | int | `10` | 窗口默认时长 |
+| `sampler.suspend_probe_rounds` | int | `40` | suspend 锁定仿真线程的粗采轮数 |
+| `etw.session_name` | str | `"hotspot"` | ETW 会话名 |
+| `etw.keep_etl` | bool | `false` | 解析后保留 ETL |
+| `lock.dir` | str | `work/tmp/locks` | `game.lock` 所在目录 |
+| `paths.workspace` | str | `hotspot/workspace` | run 归档根 |
+| `paths.artifacts` | str | `work/hook` | 只读产物库 |
+| `freq.command` | str | `python tools/read_freq.py --samples 1` | 外部频率读数命令 |
+| `freq.timeout_sec` | float | `5` | 单次读数超时 |
+
+**`run.toml` 键（consumer 初写，analysis 只回写 `buckets`）**：
+
+| 键 | 类型 | 语义 |
+|---|---|---|
+| `schema` | int | run 格式版本（=1） |
+| `created_at` | str(ISO) | 落盘时刻 |
+| `artifact.path` / `artifact.sha256` / `artifact.file_len` / `artifact.code_len` | str/int | 产物引用（**不拷贝**；sha 含 8 字节头；code_len = file_len-8） |
+| `artifact.num` | str\|null | hook 编译点编号（三位） |
+| `locate.bases` | list[str] | 全部整段校验通过的副本基址（hex） |
+| `locate.feature_off` | int | 特征窗偏移（默认 `0x400`） |
+| `window.sec` / `window.interval_ms` / `window.sample_count` | num | 实际窗口参数与样本数 |
+| `window.tids` | list[int] | etw 首尾快照并集 |
+| `freq.start_hz` / `freq.end_hz` / `freq.start_at` / `freq.end_at` | float | 窗口首尾各一次读数与时刻 |
+| `freq.interval_sec` | float | 两次读数间隔基准（默认 1.0） |
+| `buckets` | map | analysis 回写三桶份额 |
+| `tick.start` / `tick.end` | int\|null | 精确 tick（待实验，未定） |
+
 - runs/ 不进 git（.gitignore）；ETL 原档解析完**默认删除**，`--keep-etl` 保留
  （几十 MB/次）；
 - 全部路径（产物、freq 命令、游戏进程名、会话名）走命令行参数或 `config.toml`
@@ -397,10 +453,11 @@ tc-toolkit/hotspot/
 流程假设游戏已人工就绪（启动→载入电路→电路在跑），全程四步：
 
 ```bash
-# (0) 编译产物 + 调试信息（simplexc 现有入口；--debug-info 为 W1 新增）
-simplexc_cli --src circuit.si --out c.bin --obj-out c.obj --debug-info
+# (0) 编译产物 + 调试信息 + 元件表 + 重映射基准（后三者均为 W1 新增）
+simplexc_cli --src circuit.si --out c.bin --obj-out c.obj \
+             --debug-info --elements-out el.tsv --offsets-out c.offsets
 
-# (1) 生成侧车（W3，纯离线；--offsets 为 W1 装配器吐的基准文件，回退模式可省）
+# (1) 生成侧车（W3，纯离线；--offsets 为 W1 产出的基准文件，回退模式可省）
 python hotspot/tools/make_sidecar.py --blob c.bin --obj c.obj \
        --elements el.tsv --offsets c.offsets --out c.sidecar.json
 
@@ -429,8 +486,8 @@ python hotspot/analysis/report.py --run workspace/runs/<run目录>
 
 | 步 | 内容 | 检收 |
 |---|---|---|
-| W1 | 调试信息实现（C API）：DIBuilder 基建（module flag 关键：Debug Info Version=3、**Dwarf Version=4 显式置位**）/ DebugLoc 行号 / 元件表 el.tsv（raw_lines 解析，每注释段一行）/ `--debug-info` flag / 装配器吐 `<blob>.offsets` / G1 挂判据 | G1 绿 + 元件表抽查 |
-| W2 | consumer：共享聚合层 / 采样后端×2（etw 主）/ 常驻 REPL（open/window/save，含 `open --interval`）+ 外部 freq 命令进 run.toml + 单样本暂停时长实测回填（§4.0） | 编译跑通；事件注入单测（合成 (IP,TID) 序列喂聚合/分桶函数——真 ETL 域内合成不可行，按此形态核）；真样本冒烟需持 `work/tmp/locks/game.lock` |
+| W1 | 调试信息实现（C API）：DIBuilder 基建（module flag 关键：Debug Info Version=3、**Dwarf Version=4 显式置位**）/ DebugLoc 行号 / 元件表 el.tsv（源文件原文解析，每注释段一行；`--elements-out`）/ `--debug-info` flag / 装配器吐 `<blob>.offsets`（`--offsets-out`）/ G1 挂判据 | G1 绿 + 元件表抽查 |
+| W2 | consumer：共享聚合层 / 采样后端×2（etw 主）/ 常驻 REPL（open/window/save，含 `open --interval-ms`）+ 外部 freq 命令进 run.toml + 单样本暂停时长实测回填（§4.0） | 编译跑通；事件注入单测（合成 (IP,TID) 序列喂聚合/分桶函数——真 ETL 域内合成不可行，按此形态核）；真样本冒烟需持 `work/tmp/locks/game.lock` |
 | W3 | ours join 脚本（读 obj × el.tsv × `.offsets`，产 lines/segments/stubs/meta；**只读装配器产物**）+ G2 抽查（objdump decodedline 优先） | G2 绿 |
 | W4 | 归因 + report.md / report.html（四表交互页 + 对比页，页面集草案待负责人过目）+ workspace index.html + G3′/G4 + baseline.json | G3′ 重合 ≥4/5 + 四表人工抽认 |
 
@@ -444,7 +501,7 @@ W3（侧车）产物。采样后端已定双后端、etw 为主（§4.0）。
 - 注释可选第五段（BANK/Input/Output 这类词）：语义未证，主规则不依赖；
 - 采样间隔下限与单位：`-profint` 量纲暂按 100 ns 折算（1 ms=10000），**下限与
   同族 API 等价性 W2 实测回填**（§4.1）；
-- krabs × MinGW：WRL 头/`__uuidof`/C++23 干净度，第一道关（§4.5）；
+- krabsetw × MinGW：已实测（原始 169 error；6 个头改动 + TDH shim 后编译链接通过），**运行时 TDH 解码面待真 ETL 验证**（§4.5）；
 - etw 途中新线程样本不可计数（§4.1）——影响 G4 信号形态，不影响归因正确性；
 - suspend 单样本暂停时长上界（µs 或几十 µs）W2 实测回填（§4.0）；
 - tick 计数器：存在与否不预设，一次内存取证实验即定（§9）；
@@ -452,7 +509,7 @@ W3（侧车）产物。采样后端已定双后端、etw 为主（§4.0）。
 
 ## 14. 风险清单
 
-1. krabs / MinGW-w64 适配（WRL/`__uuidof`）——回退已定（§4.5）；
+1. krabsetw / MinGW-w64 适配——已实测需 vendored+patch；MSVC 回退不可用（本机无 clang-cl/cl，§4.5）；
 2. `.debug_line` → blob 偏移重映射跨段修正不平凡——已划 W1 吐基准（§6），W3 有
    独立回退（自行从 COFF 装载地址推导）；
 3. aliasing 锁相（1 ms = 10⁴ × tick 是整数倍）——相位依赖调度抖动；有疑缩短间隔

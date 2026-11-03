@@ -13,6 +13,8 @@
   真机 10 s 窗口 bucket0 1279/1279（100%），已归属 1115（87.2% 全样本）
 - W3：sidecar join 与 G2 抽查（20/20、80/80）
 - W4：四表 + `report.md` / `report.html` + G3′/G4 + baseline；7 条 analysis 单测通过
+- 一键入口 `python hotspot/run.py --src … [--stdlib …]`：编译 → sidecar → 采样 → 报表；
+  默认采样后停电路（`--keep-running` 保留）
 - 配置：`config.toml` 移出仓库，`config.example.toml` 入库
 
 ## 当前

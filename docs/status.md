@@ -3,27 +3,33 @@
 # 状态
 
 在追：**热点分析工具** —— 组件级时间归因（偏移 → 行 → 元件）。
-设计 `docs/specs/2026-11-01-hotspot-profiler-design.md`（v8；2026-11-03 按实测补开工契约）。
+设计 `docs/specs/2026-11-01-hotspot-profiler-design.md`（v9：etw 自写，不用第三方库）。
 
-- **W1–W4 已落地**，当前只启用了 suspend 后端；etw 后端未实现
-- W1：DIBuilder + DebugLoc 行号 + `--debug-info` / `--elements-out` / `--offsets-out` + G1
-- W2：聚合层 + suspend 后端 + 常驻 REPL
-- W3 等 W1 的 `el.tsv` 与 `<blob>.offsets`；W4 等 W2 的 run 目录 + W3 的 sidecar
+## 已落地
 
-## 开工前实测改掉的 spec 前提
+- W1：DIBuilder/DebugLoc、`--debug-info` / `--elements-out` / `--offsets-out`；
+  `--stdlib` 逐字节复现 hook 产物（007：sha `ab8fe261…` 一致）
+- W2：聚合层 + suspend 后端 + 常驻 REPL；定位忽略运行时 `.bss`、窗口只采锁定线程后，
+  真机 10 s 窗口 bucket0 1279/1279（100%），已归属 1115（87.2% 全样本）
+- W3：sidecar join 与 G2 抽查（20/20、80/80）
+- W4：四表 + `report.md` / `report.html` + G3′/G4 + baseline；7 条 analysis 单测通过
+- 配置：`config.toml` 移出仓库，`config.example.toml` 入库
 
-- 元件表：`mask_source` 把注释抹成空格，`raw_lines` **不含注释** → 改读 `--src` 原文
-- `.debug_line` 地址是对象 `.text` 节内偏移（装配器丢弃 `.debug*`）→ 必须靠 `<blob>.offsets`
-- blob 头 = `文件总长 | (1<<62)`，长度判据先掩 bit62
+## 当前
 
-## 下一步（W1/W2 验收判据）
+- **etw 自写**：spec v9 已改；只解析 SampledProfile，实时收，不落 ETL；失败 assert
+- 探针 `work/tmp/etw_probe/etw_probe.exe` 已编译，等管理员终端验证
+  Provider GUID / Event ID / 负载布局
 
-- W1：G1 绿（同源开/关 `.text` objdump diff 空）+ `el.tsv` 行数/行区间抽查 + offsets 不变式
-- W2：`-Wall -Werror` 零警告 + 事件注入单测（合成 IP/TID → 聚合/分桶）+ REPL 无游戏错误路径
-- 真样本阶段（待环境）：etw 要管理员终端；采样要游戏已启动并载入电路
+## 下一步
+
+- 跑探针，钉死 GUID/ID/布局与事件率
+- 重写 `backend_etw`，接聚合层；真机 ETW vs suspend 对比
+- 验收阈值由负责人现场定（spec §8/§12 已不留默认数字）
 
 ## 其它线
 
 - **simplexc**（自研编译器）：暂停，等热点工具做完；进度见
   `docs/notes/2026-11-02-simplexc-progress.md`
-- 判据入口 `python simplexc/tools/check.py`（6 步 + W1 新增 G1）
+- 判据入口 `python simplexc/tools/check.py`（6 步 + G1）；当前 3 步红：游戏目录缺
+  `compile_real.dll`，非回归

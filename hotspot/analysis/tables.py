@@ -130,7 +130,7 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
         BucketRow(key="bucket1", label="bucket1 其他非 IMAGE 可执行区（旧电路 JIT 残留等）",
                   samples=attribution.bucket_totals.get(1, 0),
                   share=_share(attribution.bucket_totals.get(1, 0), total)),
-        BucketRow(key="bucket2", label="bucket2 IMAGE 区（exe/dll，含游戏自身仿真驱动主循环）",
+        BucketRow(key="bucket2", label="bucket2 IMAGE 区（exe/dll，游戏引擎/调度/输入）",
                   samples=attribution.bucket_totals.get(2, 0),
                   share=_share(attribution.bucket_totals.get(2, 0), total)),
     )

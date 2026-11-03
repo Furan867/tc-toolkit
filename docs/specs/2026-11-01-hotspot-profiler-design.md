@@ -1,6 +1,6 @@
 # 热点分析工具（hotspot）设计
 
-状态行：**讨论定案（2026-11-01）审后修订 v8（决策保真 21 条已过；契约链 5 处断点已修；参数口径已统一为「默认可议」），未开工**。开工需负责人一票。
+状态行：**v9（2026-11-05）：W1–W4 已落地；suspend 已真机跑通；etw 改为自写（不用第三方库），待探针与实现**。
 取代：旧工具链（`tools/analyze_sim_hotspot.py` 等）的职能；代码关系：**全部新写**，
 旧代码不复用、不复制，只有「跑法/指标口径」的遗产被沿用。
 
@@ -24,8 +24,8 @@
 - 呈现 = **静态交互报告**（analysis 产单文件 `report.html`，浏览器打开）+ 文本
   `report.md`（归档/引用）；桌面 GUI = 负责人**保留意见、暂不实现**（Tkinter 可做
   简单款；何时做、做什么形态届时再议，非否决——见本节范围外清单外）；
-- 采样 = **双后端都做，ETW 为主**（`etw` 需管理员/零暂停，`suspend` 免管理员/每样本
-  有暂停开销；共享聚合层，§4.0），以**常驻交互式会话**进行（§4.6）：进程/产物/线程
+- 采样 = **双后端都做，ETW 为主**（`etw` 需管理员/零暂停，自写 Win32 实时消费；
+  `suspend` 免管理员/每样本有暂停开销；共享聚合层，§4.0），以**常驻交互式会话**进行（§4.6）：进程/产物/线程
   识别只做一次，多窗口复用——不做「一次调用后退出」的一次性采样器（旧链每次找仿真
   线程数秒；一次性调用器形态作废）；
 - 归因链不依赖 MSVC/PDB；归因数据全部来自**编译时产出的侧车文件**，运行时零现场
@@ -58,9 +58,8 @@
 | 元件表 | 前端从源文件原文逐注释段产出的行式表（§5.3 有列定义），Provider 按 (type,id) 合并成台账 |
 | 侧车 sidecar | 编译时产出的、blob 旁随附的独立映射文件（JSON，§6） |
 | Provider | 侧车生成器，按编译器各一：`ours`（simplexc，路线 A）/ `ref`（原版，仅锁 schema） |
-| 采样后端 | 产出 (IP, ThreadId) 样本流的两种实现：`etw`（内核 PMU，主）与 `suspend`（自建，备用）；接口同构（§4.0） |
-| ETL | ETW 会话停止后落的内核事件二进制档案，`etw` 后端专用 |
-| 仿真主循环 | 游戏 exe 内驱动「跑一圈仿真」的代码，不属于任何元件 → IMAGE 分桶（bucket=2，带「含仿真驱动」标签，§4.4） |
+| 采样后端 | 产出 (IP, ThreadId) 样本流的两种实现：`etw`（内核 PMU，自写，主）与 `suspend`（自建，备用）；接口同构（§4.0） |
+| 电路主循环 | 产物内驱动「跑一圈仿真」的代码（通过监听内存命令推进 tick），属于 blob → bucket=0 |
 | 外部调用桩 | 产物里 `kernel32.'xxx'(...)` 等外部调用的转发段；**有现成普查**（`AsmResult::stubs` → `<blob>.stubs`），进侧车独立列出（§6） |
 | 归因 | 样本 (bucket, blob偏移) × 侧车 → 热度表的过程（§7.1） |
 
@@ -102,41 +101,41 @@ tc-toolkit/hotspot/
 ### 4.0 两个后端（负责人定：双后端都做，ETW 为主；接口同构，共享聚合层）
 
 两者产出**同一份** samples.tsv v1，共享聚合层（TID 快滤 → blob 归属/分桶 → 聚合计
-数）；差异只在「样本从哪来」。**为主的是 etw**（suspend 是免管理员备用通道）；
-两后端**同批交付，无先后分期**：
+数）；差异只在「样本从哪来」。**为主的是 etw**（suspend 是免管理员备用通道）：
 
 | | **`etw`（内核 PMU / ETW，主）** | `suspend`（自建 SuspendThread，备用） |
 |---|---|---|
 | 提权 | **需要管理员**（开内核日志会话） | **不需要**（同用户进程 OpenProcess 即可，旧链走通验证；单样本暂停时长上界 W2 实测后回填） |
 | 每样本扰动 | 中断打点，被测线程零暂停 | 每 SuspendThread 数 µs 起的暂停（跨进程 GetThreadContext 可能达几十 µs），**上界未测** |
 | 直取线程 | 事件全系统 → 样本须按 TID 过滤（快照层，§4.1） | 直接持目标进程线程句柄，**无需系统过滤** |
-| 插件量 | 会话管理 + ETL 解析（未实现） | ~200 行 |
+| 插件量 | 会话管理 + 实时事件解码（自写） | ~200 行 |
 | 精细用途 | 主力；时延/抖动类研究也用它 | 单一频率，作为免管理员环境通道 |
 
 接口纪律：两后端对聚合层暴露的中间结构相同（IP、ThreadId、来源窗口时长）；
 samples.tsv v1 契约（§4.4）不变；「换后端」是 consumer 内部战术，不落任何相邻一层。
 
-### 4.1 etw 后端链路（细节；suspend 后端无此节）
+### 4.1 etw 后端链路（自写；suspend 后端无此节）
 
-- 内核把 PMU 计数器配成固定周期溢出，溢出中断记录**当刻各核的 IP + ThreadId**
- （SampledProfile 类事件）；ETW 会话收事件，停止后落 ETL，consumer 逐事件解析；
-- **提权**：开内核日志会话需管理员令牌。consumer 非管理员直接报错退出，**不静默提权**；
-- **会话冲突**：内核日志会话历史上全机唯一，新版 Windows 可能允许多 system logger
-  并存——**不依赖单会话假设**，实现按「自查+冲突报错」推进：同名会话已存在 →
-  明确报「残留会话堵着，名字 X」，提供清理入口（logman 语义）；
-- **异常清理**：会话 stop 挂 try/finally（RAII + 信号路径尽力停）；崩溃残留靠查询
-  清理兜底；
-- **进程过滤**：ETW 事件全系统可见 → consumer 在**窗口起点与终点各做一次**目标进程
- （进程名可配）全部 TID 枚举快照，解析时只留两快照并集里的 TID；TID 在不同进程间会
-  重号——同名进程多开/PID 复用时显式报错，不猜样本归属。⚠️ 采样中途新开启的线程
-  不在快照内，其样本**直接丢失、不可计数**；G4 对此的告警信号不是"这类样本计数"
-  （没有），而是 **bucket 份额下降 + 首尾快照差集非空**（§8）；
-- 会话调度参数：间隔经正规入口设置（xperf `-profint` 或同族 TraceSetInformation API，
-  等价性由 W2 实测）；**量纲暂按 100 ns 折算（1 ms=10000），可设下限不预设**，实现
-  第一轮实测后回填本节（§13）；**改间隔可能需要重建会话**——REPL 里以
-  `open --interval-ms <ms>`（参数形态，§4.6）指定、逐窗口不可变；
-- **软件交换**：freq 读数（§9）由 consumer `save` 通过 config 里的外部命令补记；
-  上述 TID 快照、间隔键在 config 有对应键（§10）。
+- 只用 Win32 C API（`evntrace.h` / `evntcons.h`），不引入第三方库、不用 TDH；只解析
+  SystemTraceProvider 的 SampledProfile 事件，负载按固定布局解 IP/TID；
+- 链路：`StartTraceW(KERNEL_LOGGER_NAME)` 建内核日志会话 →
+  `TraceSetInformation(TraceSampledProfileIntervalInfo)` 设间隔（100 ns 单位，
+  1 ms=10000；下限实测回填，§13）→ `EnableTraceEx2` 开 `EVENT_TRACE_FLAG_PROFILE` →
+  `OpenTraceW`（实时模式）+ `ProcessTrace` 在专用线程收事件；
+- 事件过滤：`EventHeader.ProviderId` 匹配 SystemTraceProvider、`EventDescriptor.Id`
+  匹配 SampledProfile（GUID 与 ID 由探针实测钉死，§13）；`EventHeader.ThreadId` 即
+  采样时线程；负载 v1 = IP(4)+TID(4)、v2 = IP(8)+TID(4)，未知版本丢弃并计数，不猜；
+- 提权：开内核日志会话需管理员令牌；非管理员直接 assert 终止，**不静默提权**；
+- 会话生命周期：整个 REPL 只建一次会话，多次 `window` 复用；`quit`/EOF 时停止并
+  关闭，退出后不持有会话；改间隔重建会话（`open --interval-ms`，§4.6）；
+- 进程过滤：ETW 事件全系统可见 → 窗口起点与终点各做一次目标进程全部 TID 枚举快照，
+  解析时只留两快照并集里的 TID；同名进程多开/PID 复用显式报错，不猜样本归属。⚠️
+  采样中途新开启的线程不在快照内，其样本**直接丢失、不可计数**；G4 对此的告警信号
+  是 **bucket 份额下降 + 首尾快照差集非空**（§8）；
+- 失败路径：`StartTrace`/`TraceSetInformation`/`EnableTraceEx2`/`OpenTrace`/
+  `ProcessTrace` 任一失败直接 assert（开发期，不做自动回退）；
+- 解码与聚合解耦：`backend_etw` 只产出 `(ip, tid)` 流，聚合/分桶不感知 ETW；
+  版本分派表独立，新增事件/版本不改聚合层。
 
 ### 4.2 参数（默认，可调；两后端共用）
 
@@ -180,7 +179,7 @@ bucket <TAB> blob_offset <TAB> thread_id <TAB> count
 
 - `bucket=0`：落在**本产物全部副本**内，blob_offset 有效；
 - `bucket=1`：其他非 IMAGE 可执行区（旧电路 JIT 残留、其它用途 JIT）；
-- `bucket=2`：IMAGE 区（exe/dll，**含游戏自身仿真驱动主循环**）；
+- `bucket=2`：IMAGE 区（exe/dll，游戏引擎/调度/输入等代码；电路主循环在产物内，归 bucket=0）；
 - `thread_id` 为 v1 附带信息，analysis 大多忽略（为 v2 栈采样留位，v2 加列）。
 
 接口冻结点：换采样层（如未来栈采样）= 落 `v2` 新列，analysis 加适配，禁止静默改
@@ -191,10 +190,9 @@ v1 语义。
 - C++23 / GCC 14.2（`docs/specs/2026-10-15-simplexc-interfaces.md:317` 有据）；
   cmake / ninja PATH 实测在位（2026-11-01）；**编译选项一律 `-Wall -Werror`**
  （hotspot 全部 C++ 目标；0 warning 属规范结果，不是第二个目标）；
-- `etw` 后端当前**未实现**（第三方 ETW 解析库已移除，仓库不保留 vendored 依赖）：
- `sampler.backend = "etw"` 在 `create_backend` 明确报未实现。需要时按自写最小
- ETW 解析（`OpenTrace/ProcessTrace` + SampledProfile 固定布局）或 MSVC 编译的
- C ABI 桥另加，二者都需先过真机验证。
+- `etw` 后端**自写**：纯 Win32 C API（`evntrace.h` / `evntcons.h`），不引入第三方库、
+ 不用 TDH；只解析 SampledProfile（固定布局，§4.1）。GCC 即可编译；失败直接 assert
+ （开发期，§4.1）。
 
 ### 4.6 常驻交互式会话（形态：REPL；不做「一次调用后退出」的采样器）
 
@@ -206,8 +204,7 @@ v1 语义。
 - 线程集合在 `window` 开头轻量校验（线程数/存活变化则重枚举，毫秒级代价）；
 - 最小命令集：`open <artifact> [--pid N] [--interval-ms <ms>]` 定位并缓存 /
   `window <sec> [save]` 采一个窗口 / `status` / `locate` 重跑定位 / `save [dir]` 落
-  run 目录（建目录、写 samples.tsv+run.toml、调外部 freq 命令取首尾读数、etw 后端
-  删留 ETL）/ `quit`；
+  run 目录（建目录、写 samples.tsv+run.toml、调外部 freq 命令取首尾读数）/ `quit`；
 - run 目录的创建与 `run.toml` 初写归 `save`（W2 范围）；analysis 只回写 buckets 与
   baseline（§10）；
 - 外部频率读数（§9）经 config 给出的外部命令调用，路径不硬编码（§10）；
@@ -349,8 +346,8 @@ store 魔数 → 机器码搜立即数锚点 → 「标记恒 17 字节」坐标
 2. **最热 N 元件实例**：`type #id`、行区间、样本数、占比；N 可调；
 3. **热点元件行级明细**：对最热元件展开行热点分布（路线 A 免费能力）；
 4. **未归属分桶**：三桶总览（bucket0 已归属 / bucket0 内未归属=「外部调用桩」
- （由 `stubs` 切出，细分）+「公共/根代码」/ bucket1 残区 / bucket2 exe 含主循环），
-   含零值。
+ （由 `stubs` 切出，细分）+「公共/根代码」/ bucket1 残区 / bucket2 游戏引擎/调度/
+   输入），含零值。
 
 每张带：总样本数、窗口时长、artifact sha256、样本量置信提示、近似口径（freq，§9）。
 
@@ -366,9 +363,9 @@ store 魔数 → 机器码搜立即数锚点 → 「标记恒 17 字节」坐标
 |---|---|---|---|
 | G1 | 调试信息不改机器码 | `simplexc_cli --src simplexc/corpus/src/177.si --out g0.bin --obj-out g0.obj`，重复一次带 `--debug-info` 得 g1；`objdump -d g0.obj` vs `g1.obj` 只比 `.text`，diff 为空 | simplexc 判据流程常驻 |
 | G2 | 侧车正确性三方抽查 | 抽样总体 = sidecar `segments` 均匀取 N 段（N 默认 20，可调）；对每段：`objdump --dwarf=decodedline <obj>` 输出 / sidecar 行 / `objdump -dl <obj>` 该段首指令行注，三方对齐（坐标按 §2；⚠️ llvm-dwarfdump 不在 `.deps/llvm/bin`——备选：W3 前置 `tools/fetch_llvm.py --extra` 拉一份，或全程 objdump） | ours Provider 构建后 |
-| G3′ | 重复性 | 同一产物同参数背靠背两个 run；top-5 **按 (type,id) 集合重合 ≥ K**（K 默认 4，初值可调；不比顺序）；同一脚本对两份 report 计算 | 每份产物首测 |
+| G3′ | 重复性 | 同一产物同参数背靠背两个 run；top-5 **按 (type,id) 集合重合数**（阈值验收时由负责人现场定；不比顺序）；同一脚本对两份 report 计算 | 每份产物首测 |
 | G3″ | 回归对照 | ours 与 ref 各编同电路各采一次，热点分配显著差异人工审定 | 依赖 ref Provider（不在范围，暂缓） |
-| G4 | 覆盖水位 | 三桶份额写入 run.toml（analysis 回写）；基线 = `workspace/baseline.json`（首跑建）：bucket=0 份额 < 基线的 ×（默认 80%，初值可调）→ 告警；etw 侧途中新开线程**样本丢失不可计数**，告警信号 = bucket 份额下降 + 首尾快照差集非空（§4.1） | 每次报表附带 |
+| G4 | 覆盖水位 | 三桶份额写入 run.toml（analysis 回写）；基线 = `workspace/baseline.json`（首跑建）：bucket=0 份额低于基线（阈值验收时由负责人现场定）→ 告警；etw 侧途中新开线程**样本丢失不可计数**，告警信号 = bucket 份额下降 + 首尾快照差集非空（§4.1） | 每次报表附带 |
 
 aliasing 怀疑的处理路径：缩短间隔复跑比一份（§4.2）——G3′ 的变体用法。
 
@@ -387,8 +384,9 @@ aliasing 怀疑的处理路径：缩短间隔复跑比一份（§4.2）——G3�
 
 ```
 tc-toolkit/hotspot/
-  config.toml          # 唯一 config：artifact 目录、freq 外部命令、游戏进程名、
-                       # ETW 会话名、锁目录（game.lock 协议）、workspace 路径
+  config.example.toml  # 入库的默认/示例 config（键见下）
+  config.toml          # 运行时配置，不入库（.gitignore）：artifact 目录、freq 外部命令、
+                       # 游戏进程名、ETW 会话名、锁目录（game.lock 协议）、workspace 路径
   workspace/
     runs/<ts>_<artname>_t<sec>/     # profile bundle = 一个 run
        run.toml    # consumer `save` 初写（产物引用 path+sha256——**引用而不拷贝** hook 的
@@ -401,7 +399,7 @@ tc-toolkit/hotspot/
   <产物库同步>                   # hook 落盘的 .si/.bin 依旧在 work/hook/，工具**只读**
 ```
 
-**`config.toml` 键（默认值；W2 冻结）**：
+**`config.toml` 键（默认值；W2 冻结；运行时配置不入库，仓库只放 `config.example.toml`）**：
 
 | 键 | 类型 | 默认 | 语义 |
 |---|---|---|---|
@@ -411,7 +409,6 @@ tc-toolkit/hotspot/
 | `sampler.window_sec` | int | `10` | 窗口默认时长 |
 | `sampler.suspend_probe_rounds` | int | `40` | suspend 锁定仿真线程的粗采轮数 |
 | `etw.session_name` | str | `"hotspot"` | ETW 会话名 |
-| `etw.keep_etl` | bool | `false` | 解析后保留 ETL |
 | `lock.dir` | str | `work/tmp/locks` | `game.lock` 所在目录 |
 | `paths.workspace` | str | `hotspot/workspace` | run 归档根 |
 | `paths.artifacts` | str | `work/hook` | 只读产物库 |
@@ -435,8 +432,7 @@ tc-toolkit/hotspot/
 | `buckets` | map | analysis 回写三桶份额 |
 | `tick.start` / `tick.end` | int\|null | 精确 tick（待实验，未定） |
 
-- runs/ 不进 git（.gitignore）；ETL 原档解析完**默认删除**，`--keep-etl` 保留
- （几十 MB/次）；
+- runs/ 与 `config.toml` 不进 git（.gitignore）；仓库只放 `config.example.toml`；
 - 全部路径（产物、freq 命令、游戏进程名、会话名）走命令行参数或 `config.toml`
  键（上表），**工具内无硬编码路径**；路径 layout 迁移只改参数、不改代码。
 
@@ -479,9 +475,9 @@ python hotspot/analysis/report.py --run workspace/runs/<run目录>
 | 步 | 内容 | 检收 |
 |---|---|---|
 | W1 | 调试信息实现（C API）：DIBuilder 基建（module flag 关键：Debug Info Version=3、**Dwarf Version=4 显式置位**）/ DebugLoc 行号 / 元件表 el.tsv（源文件原文解析，每注释段一行；`--elements-out`）/ `--debug-info` flag / 装配器吐 `<blob>.offsets`（`--offsets-out`）/ G1 挂判据 | G1 绿 + 元件表抽查 |
-| W2 | consumer：共享聚合层 / 采样后端×2（etw 主）/ 常驻 REPL（open/window/save，含 `open --interval-ms`）+ 外部 freq 命令进 run.toml + 单样本暂停时长实测回填（§4.0） | 编译跑通；事件注入单测（合成 (IP,TID) 序列喂聚合/分桶函数——真 ETL 域内合成不可行，按此形态核）；真样本冒烟需持 `work/tmp/locks/game.lock` |
+| W2 | consumer：共享聚合层 / suspend 后端（已落地）/ etw 自写（实时，§4.1）/ 常驻 REPL（open/window/save，含 `open --interval-ms`）+ 外部 freq 命令进 run.toml + 单样本暂停时长实测回填（§4.0） | 编译跑通；解码单测（固定字节→IP/TID）+ 事件注入单测（合成 (IP,TID) 序列喂聚合/分桶函数）；探针确认真实事件；真样本冒烟需持 `work/tmp/locks/game.lock` |
 | W3 | ours join 脚本（读 obj × el.tsv × `.offsets`，产 lines/segments/stubs/meta；**只读装配器产物**）+ G2 抽查（objdump decodedline 优先） | G2 绿 |
-| W4 | 归因 + report.md / report.html（四表交互页 + 对比页，页面集草案待负责人过目）+ workspace index.html + G3′/G4 + baseline.json | G3′ 重合 ≥4/5 + 四表人工抽认 |
+| W4 | 归因 + report.md / report.html（四表交互页 + 对比页，页面集草案待负责人过目）+ workspace index.html + G3′/G4 + baseline.json | G3′ 重合数由负责人现场定 + 四表人工抽认 |
 
 依赖：W1 → W3（无行表就没有侧车）；W2 独立可与 W1 并行；W4 靠 W2（run 目录）与
 W3（侧车）产物。采样后端已定双后端、etw 为主（§4.0）。
@@ -491,16 +487,14 @@ W3（侧车）产物。采样后端已定双后端、etw 为主（§4.0）。
 - 注释第一段数字（= id，用途已定）：**其语义未证**，与末段同口径；
 - 注释第四段大数字：语义未证，原样存侧车 `tail`；
 - 注释可选第五段（BANK/Input/Output 这类词）：语义未证，主规则不依赖；
-- 采样间隔下限与单位：`-profint` 量纲暂按 100 ns 折算（1 ms=10000），**下限与
-  同族 API 等价性 W2 实测回填**（§4.1）；
+- 采样间隔下限与单位：`TraceSetInformation` 量纲暂按 100 ns 折算（1 ms=10000），**下限实测回填**（§4.1）；
 - etw 途中新线程样本不可计数（§4.1）——影响 G4 信号形态，不影响归因正确性；
 - suspend 单样本暂停时长上界（µs 或几十 µs）W2 实测回填（§4.0）；
 - tick 计数器：存在与否不预设，一次内存取证实验即定（§9）；
-- ETW 多 system logger 并存的现实：不依赖单会话假设，残留自检照做（§4.1）。
 
 ## 14. 风险清单
 
-1. etw 后端未实现（§4.5）——当前只有 suspend，采样有暂停扰动；
+1. etw 自写的事件 GUID/ID/布局/API 行为需探针实测（§4.1）；未钉死前不接产品；
 2. `.debug_line` → blob 偏移重映射跨段修正不平凡——已划 W1 吐基准（§6），W3 有
    独立回退（自行从 COFF 装载地址推导）；
 3. aliasing 锁相（1 ms = 10⁴ × tick 是整数倍）——相位依赖调度抖动；有疑缩短间隔

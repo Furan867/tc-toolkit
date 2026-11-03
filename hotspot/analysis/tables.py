@@ -44,6 +44,7 @@ class LineRow:
     line: int
     samples: int
     share: float
+    file: str | None = None     # 行号归属的文件；旧 sidecar 没有 → None（按原行号显示）
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class InstRow:
     share: float
     src_lines: tuple[tuple[int, int], ...]
     line_rows: tuple[LineRow, ...]
+    src_file: str | None = None    # 元件的行区间属于哪个文件（el.tsv 只记源文件）
 
 
 @dataclass(frozen=True)
@@ -102,22 +104,32 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
         samples = attribution.per_instance.get(key, 0)
         line_counter = attribution.instance_lines.get(key, Counter())
         line_rows = tuple(
-            LineRow(line=line, samples=n, share=_share(n, samples))
-            for line, n in sorted(line_counter.items(), key=lambda kv: (-kv[1], kv[0])))
+            LineRow(file=ref.file, line=ref.line, samples=n, share=_share(n, samples))
+            for ref, n in sorted(line_counter.items(),
+                                 key=lambda kv: (-kv[1], kv[0].file or "", kv[0].line)))
         inst_rows.append(InstRow(
             type=key[0], id=key[1], samples=samples, share=_share(samples, attributed),
-            src_lines=sidecar.elements[key[1]].lines, line_rows=line_rows))
+            src_lines=sidecar.elements[key[1]].lines, line_rows=line_rows,
+            src_file=sidecar.source_file))
 
     total = attribution.total
     stub_detail = tuple(
         (name, n, _share(n, attribution.stub_samples))
         for name, n in sorted(attribution.stub_totals.items(), key=lambda kv: (-kv[1], kv[0])))
-    root_detail = (
+    root_detail = [
         ("有行号信息", attribution.root_with_line,
          _share(attribution.root_with_line, attribution.root_samples)),
+    ]
+    # 带行号信息但没有元件的机器段（公共/根代码）按**文件**拆开：stdlib 前缀本来就没有元件注释，
+    # 它的行落在这一桁是预期内的；混在一起看不出到底是哪份代码在跑。
+    root_detail += [
+        (f"有行号信息 · {name}", n, _share(n, attribution.root_samples))
+        for name, n in sorted(attribution.root_line_files.items(), key=lambda kv: (-kv[1], kv[0]))]
+    root_detail += [
         ("无行号信息", attribution.root_samples - attribution.root_with_line,
          _share(attribution.root_samples - attribution.root_with_line, attribution.root_samples)),
-    )
+    ]
+    root_detail = tuple(root_detail)
     buckets = (
         BucketRow(key="bucket0_attributed", label="bucket0 已归属（落在元件机器段里）",
                   samples=attributed, share=_share(attributed, total)),

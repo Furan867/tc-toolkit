@@ -150,8 +150,16 @@ def _share_cell(share: float) -> str:
             f"{_bar(share)}</td>")
 
 
-def _lines_text(pairs: tuple[tuple[int, int], ...]) -> str:
-    return ", ".join(f"{lo}-{hi}" for lo, hi in pairs) if pairs else "（无）"
+def _lines_text(file: str | None, pairs: tuple[tuple[int, int], ...]) -> str:
+    """行区间文本：带来源文件时写成 `file:lo-hi`（旧 sidecar 没有 file 就只写行区间）。"""
+    if not pairs:
+        return "（无）"
+    head = f"{file}:" if file else ""
+    return ", ".join(f"{head}{lo}-{hi}" for lo, hi in pairs)
+
+
+def _line_label(file: str | None, line: int) -> str:
+    return f"{file}:{line}" if file else f"{line}"
 
 
 def _artifact_text(t: Tables) -> str:
@@ -211,7 +219,7 @@ def render_markdown(t: Tables) -> str:
     out.append("| 元件 | 源码行区间 | 样本数 | 占比 |")
     out.append("|---|---|---:|---:|")
     for row in t.instances:
-        out.append(f"| {row.type} #{row.id} | {_lines_text(row.src_lines)} "
+        out.append(f"| {row.type} #{row.id} | {_lines_text(row.src_file, row.src_lines)} "
                    f"| {row.samples} | {_pct(row.share)} |")
     out.append("")
 
@@ -230,7 +238,7 @@ def render_markdown(t: Tables) -> str:
         out.append("| 源码行 | 样本数 | 占该元件 |")
         out.append("|---:|---:|---:|")
         for line in row.line_rows:
-            out.append(f"| {line.line} | {line.samples} | {_pct(line.share)} |")
+            out.append(f"| {_line_label(line.file, line.line)} | {line.samples} | {_pct(line.share)} |")
         out.append("")
 
     out.append(f"## 表 4 未归属分桶（分母 = 全样本 {t.total_samples}）")
@@ -361,7 +369,7 @@ def _panel_instances(t: Tables) -> str:
         out.append(
             f'<tr class="row expandable" data-detail="{detail_id}">'
             f'<td class="mono">{html.escape(row.type)} #{row.id}</td>'
-            f'<td class="mono">{html.escape(_lines_text(row.src_lines))}</td>'
+            f'<td class="mono">{html.escape(_lines_text(row.src_file, row.src_lines))}</td>'
             f'<td class="num" data-v="{row.samples}">{row.samples}</td>'
             f"{_share_cell(row.share)}</tr>")
         out.append(f'<tr class="detail hidden" id="{detail_id}" data-open="0">'
@@ -378,7 +386,8 @@ def _line_table(row: InstRow, table_id: str) -> str:
            '<th class="num">样本数</th><th class="num">占该元件</th></tr></thead>',
            "<tbody>"]
     for line in row.line_rows:
-        out.append(f'<tr class="row"><td class="num" data-v="{line.line}">{line.line}</td>'
+        out.append(f'<tr class="row"><td class="mono" data-v="{line.line}">'
+                   f"{html.escape(_line_label(line.file, line.line))}</td>"
                    f'<td class="num" data-v="{line.samples}">{line.samples}</td>'
                    f"{_share_cell(line.share)}</tr>")
     out.append("</tbody></table>")
@@ -398,7 +407,8 @@ def _panel_lines(t: Tables) -> str:
             for line in row.line_rows:
                 out.append(
                     f'<tr class="row"><td class="mono">{html.escape(row.type)} #{row.id}</td>'
-                    f'<td class="num" data-v="{line.line}">{line.line}</td>'
+                    f'<td class="mono" data-v="{line.line}">'
+                    f"{html.escape(_line_label(line.file, line.line))}</td>"
                     f'<td class="num" data-v="{line.samples}">{line.samples}</td>'
                     f"{_share_cell(line.share)}</tr>")
         else:

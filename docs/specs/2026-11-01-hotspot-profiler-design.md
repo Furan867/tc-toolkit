@@ -240,7 +240,9 @@ v1 语义。
   行（§2 宽容规则；行号与 raw_lines 等长对齐，`decls.hh:27`），新增
   `--elements-out <path>`，**逐注释段**输出元件：
   `el.tsv` 首行 `# el.tsv v1`，之后每行 = `id\ttype\twidth\ttail\tline_lo\tline_hi`
-  （该段自己的行区间；缺 tail 记空字段）。（type,id) 台账合并与行区间数组化在
+  （该段自己的行区间；缺 tail 记空字段）。**行号是源文件内的 1 基行号，不加 `--stdlib`
+  前缀的行数**：一个行号属于哪份文件由 `<blob>.offsets` 的 `sources` 说（§6），两边都加
+  一遍前缀就会重复扣减。（type,id) 台账合并与行区间数组化在
   Provider（§6）完成，承接 §2 行区间规则。交 Provider。codegen 只喂行号，不承
   元件语义。
 4. **G1 门（挂进 simplexc 判据流程）**：同一 IR 开/关 `--debug-info` 各过一遍后端，
@@ -271,18 +273,26 @@ rnglists 支持参差）届时实测。侧车 schema 不变。
   "meta": {                       // 产出：make_sidecar 从 simplexc_cli --timing 的 stderr
      "opt_level": ...,            // （前端/lowering/LLVM/装配四段，无 sema 段则标 null）
      "pass_pipeline": "...",      // opt_level/pass_pipeline 取编译入口常量（default<O2>）
-     "stages": { "frontend": …, "sema": null, "lowering": …, "llvm": …, "assemble": … }
+     "stages": { "frontend": …, "sema": null, "lowering": …, "llvm": …, "assemble": … },
+     "sources": [                  // 原样拄自 offsets：行号的来源文件表（参与拼接的文件）
+       { "file": "stdlib_prefix.si", "lines": 1503, "role": "stdlib", "path": "…" },
+       { "file": "hook_src_009.si",  "lines": 9053, "role": "source", "path": "…" } ]
   },                              // 用途：主设计 §7.6「LLVM 化了没变快」可归因
   "elements": [                        // 元件台账：按 (type,id) 去重（Provider 合并 el.tsv）；行区间数组（§2 规则）
      { "id": 9, "type": "com_register_word", "width": 8,
-       "lines": [[355,361], [802,809]], "tail": 1985710402811285152 }
+       "lines": [[355,361], [802,809]], "tail": 1985710402811285152,
+       "source": "hook_src_009.si" },  // 行区间属于哪份文件（= sources 里 role=source 的 file）
   ],
   "segments": [ { "start": 0, "end": 122, "id": 9 } ],    // 主查询表：blob 偏移区间 → 元件
-  "lines":    [ { "start": 0, "end": 44, "line": 1234 } ],// 全部有行号信息的机器段（含元件段与未归属段）；
-                                                          // 表 3（行级明细）与「未归属段」都从它查
+  "lines":    [ { "start": 0, "end": 44, "line": 1234,
+                 "file": "hook_src_009.si" } ],  // 全部有行号信息的机器段（含元件段与未归属段）；
+                                                 // `line` 是**文件内**行号，`file` 说它是哪份文件；
+                                                 // 表 3（行级明细）与「未归属段」都从它查
   "stubs":    [ { "start": 412, "end": 440, "kind": "stub", "name": "kernel32.VirtualAlloc" } ]
 }
 ```
+
+旧 sidecar（没有 `file`/`meta.sources`）按拼接后行号显示、不做文件分类：分析层不因缺字段报错。
 
 - 表不变式与排序约束：`segments.id ⊆ elements.id`；**同一 sidecar 内 id 唯一**（§2）；
   `segments`/`lines`/`stubs` 均按 start 升序；**区间 half-open `[start,end)`**，且
@@ -300,7 +310,9 @@ rnglists 支持参差）届时实测。侧车 schema 不变。
   §2 行区间规则合并出 `elements` 台账；
 - 先把行表展开成 (blob 偏移 → 行号) 有序表：据此给**全部**有行号信息的机器段产
   `lines`；再按元件行区间 join 出 `segments`（widget 内未被任何元件行区间覆盖的
-  机器段不进 `segments`，只留在 `lines` 里）；
+  机器段不进 `segments`，只留在 `lines` 里）；行号先按 offsets 的 `line_offset`
+  绑回 (file, 文件内行)，且**只有 `role=source` 的行能 join** —— stdlib 前缀没有元件
+  注释，它的行号与源文件同从 1 数，两者混在一个行号空间里就会错配；
 - **偏移基准重映射**：实测 `.debug_line` 的地址是**对象 `.text` 节内偏移**（对象
   节 VMA=0；行程序首址处一条 `ADDR64 → .text` 重定位；`objdump` 不重定位），而装配
   器把 `.debug*` 全部丢弃（`simplexc/assemble/assemble.cc:163-172`）→ 必须靠 W1 另吐
@@ -308,11 +320,19 @@ rnglists 支持参差）届时实测。侧车 schema 不变。
   ```jsonc
   { "version": 1, "artifact": {"len": …, "sha256": …}, "header_len": 8,
     "code_size": …, "entry": …, "body_end": …, "stubs_base": …, "slots_base": …,
+    "line_offset": 1503,            // `--stdlib` 前缀的换行数：拼接后源码第 1 行 = line_offset+1
+    "sources": [                     // 参与拼接的文件（无 --stdlib 时只有角色 source 一条）
+      { "file": "stdlib_prefix.si", "lines": 1503, "role": "stdlib", "path": "…" },
+      { "file": "hook_src_009.si",  "lines": 9053, "role": "source", "path": "…" } ],
     "sections": [ { "obj": 0, "obj_path": "module.obj", "sec": 1, "name": ".text",
                     "class": "text|rdata|data|bss", "blob_off": 0, "size": …, "align": 16 } ],
     "debug_lines": [ { "obj": 0, "obj_path": "module.obj",
                        "anchors": [ { "text_sec": 1, "blob_off": 0 } ] } ] }
   ```
+  `sources[].file` = 文件名（W3 按它写 `lines[].file`），`lines` = 该文件的行数，`path` 可为空；
+  `role=stdlib` 的 `lines` 取 `line_offset`（前缀占拼接坐标第 1..line_offset 行；前缀不以换行
+  结尾时其末行与源码首行同占一行，这一行算前缀）。旧 offsets 没有这两个字段时 W3 按拼接后
+  行号出 sidecar（不写 `file`）。
   `obj` = 装配入参下标（0 基），`sec` = COFF 节下标（1 基）；`anchors` 每条 = 一个
   带 `.debug_line` 的对象及其 `.text` 基址（首版单 `.text` 对象只有一条；多 `.text`
   按重定位锚点展开）。不变式：`sections` 按 `blob_off` 升序互不重叠、

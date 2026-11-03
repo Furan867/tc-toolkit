@@ -483,6 +483,18 @@ def _check_sorted_non_overlapping(spans, what, limit, allow_empty=False):
         prev_end = end
 
 
+def _source_file(sidecar):
+    """`meta.sources` 里 role=="source" 的文件名（旧 sidecar 没有 → None）。"""
+    meta = sidecar.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    for item in meta.get("sources") or []:
+        if isinstance(item, dict) and item.get("role") == "source":
+            name = item.get("file")
+            return name if isinstance(name, str) and name else None
+    return None
+
+
 def check_invariants(sidecar, code_size):
     """整份 sidecar 的不变式（spec §6）—— 违反即抛，不修不猜。"""
     if sidecar.get("version") != SCHEMA_VERSION:
@@ -514,7 +526,12 @@ def check_invariants(sidecar, code_size):
                                "不在 elements 里")
 
     seg_starts = [s["start"] for s in sidecar["segments"]]
+    # elements 的行区间只在**源文件**行空间里：stdlib 前缀的行段没有元件注释，它们的行号与源文件
+    # 行号值域相同（两边都从 1 数），拿来查元件表会命中不存在的归属。
+    source_file = _source_file(sidecar)
     for span in sidecar["lines"]:
+        if source_file is not None and span.get("file") != source_file:
+            continue
         i = bisect.bisect_right(seg_starts, span["start"]) - 1
         owner = None
         if i >= 0:

@@ -232,6 +232,32 @@ class ReportCase(unittest.TestCase):
         self.assertEqual(doc["artifact"]["code_len"], CODE_LEN)
         self.assertEqual(doc["window"]["sample_count"], 182)
 
+    def test_line_numbers_carry_source_file(self) -> None:
+        """新 sidecar 的行号带 `file`：表 2/3 显示 `file:line`，表 4 按文件拆有行号信息的根代码。"""
+        doc = sidecar_doc()
+        doc["meta"] = {**doc["meta"], "sources": [
+            {"file": "stdlib_prefix.si", "lines": 1503, "role": "stdlib", "path": ""},
+            {"file": "hook_src_009.si", "lines": 9053, "role": "source", "path": ""}]}
+        for span in doc["lines"]:
+            span["file"] = "hook_src_009.si"
+        for element in doc["elements"]:
+            element["source"] = "hook_src_009.si"
+        run_dir = write_run(self.workspace / "runs", "run_named", SAMPLES_A, sidecar=doc)
+
+        proc = run_cli("--run", str(run_dir))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        markdown = (run_dir / "report.md").read_text(encoding="utf-8")
+        instances = table_rows(markdown, "表 2")
+        self.assertEqual(instances[0][0], "com_register_word #1")
+        self.assertEqual(instances[0][1], "hook_src_009.si:10-12")
+        lines = {row[0]: row[1:] for row in table_rows(markdown, "表 3 热点元件行级明细")}
+        self.assertEqual(lines["hook_src_009.si:10"], ["30", "60.0%"])
+        self.assertEqual(lines["hook_src_009.si:11"], ["20", "40.0%"])
+        buckets = {row[0]: row[1:] for row in table_rows(markdown, "表 4")}
+        self.assertEqual(buckets["└ 有行号信息 · hook_src_009.si"], ["12", "80.0%（占该桶）"])
+        page = (run_dir / "report.html").read_text(encoding="utf-8")
+        self.assertIn("hook_src_009.si:10", page)
+
     def test_meta_and_approximation_notes(self) -> None:
         proc = run_cli("--run", str(self.run_a))
         self.assertEqual(proc.returncode, 0, proc.stderr)

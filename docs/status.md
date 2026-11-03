@@ -13,6 +13,8 @@
   真机 10 s 窗口 bucket0 1279/1279（100%），已归属 1115（87.2% 全样本）
 - W3：sidecar join 与 G2 抽查（20/20、80/80）
 - W4：四表 + `report.md` / `report.html` + G3′/G4 + baseline；7 条 analysis 单测通过
+- 行号绑定来源文件：`el.tsv` 用源文件行、`offsets` 带 `line_offset/sources`、
+  `sidecar.lines[].file`；缓存键含 `line_offset`
 - 一键入口 `python hotspot/run.py`：无参取 `work/hook` 最新产物，有参 `--src` /
   `--artifact --sidecar`；默认自动启停（只停自己启动的），`--no-sim-control` 关闭；
   sidecar 按 sha 缓存在 `hotspot/workspace/cache/sidecar/`

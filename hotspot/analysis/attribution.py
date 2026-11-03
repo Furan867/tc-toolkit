@@ -142,8 +142,19 @@ class Sidecar:
     artifact_sha256: str | None
     elements: dict[int, Element]
     segments: IntervalTable[int]
-    lines: IntervalTable[int]
+    lines: IntervalTable[LineRef]
     stubs: IntervalTable[tuple[str, str]]
+    source_file: str | None = None      # meta.sources 里 role=="source" 的文件（旧 sidecar → None）
+
+
+@dataclass(frozen=True)
+class LineRef:
+    """一行源码的归属：`file` 是旧 sidecar 没有的字段，没有就按原行号显示。"""
+    file: str | None
+    line: int
+
+    def __str__(self) -> str:
+        return f"{self.file}:{self.line}" if self.file else f"{self.line}"
 
 
 def load_sidecar(path: str, code_len: int | None = None) -> Sidecar:
@@ -185,14 +196,13 @@ def load_sidecar(path: str, code_len: int | None = None) -> Sidecar:
         return eid
 
     segments = _load_table(path, code_len, "segments", doc.get("segments"), segment_payload)
-    lines = _load_table(
-        path, code_len, "lines", doc.get("lines"),
-        lambda item, where: _int_field(path, item, "line", where))
+    lines = _load_table(path, code_len, "lines", doc.get("lines"), _line_payload(path))
     stubs = _load_table(path, code_len, "stubs", doc.get("stubs"), _stub_payload(path))
 
     return Sidecar(
         path=str(path), compiler=compiler, artifact_len=art_len, artifact_sha256=art_sha,
-        elements=elements, segments=segments, lines=lines, stubs=stubs)
+        elements=elements, segments=segments, lines=lines, stubs=stubs,
+        source_file=_source_file(path, doc.get("meta")))
 
 
 def _load_elements(path: str, raw) -> dict[int, Element]:
@@ -257,6 +267,29 @@ def _load_table(
     return IntervalTable(name, rows)
 
 
+def _line_payload(path: str):
+    def extract(item: dict, where: str) -> LineRef:
+        line = _int_field(path, item, "line", where)
+        name = item.get("file")
+        if name is not None and (not isinstance(name, str) or not name):
+            raise AnalysisError(path, f"{where}: file 必须是非空字符串或 null（实测 {name!r}）")
+        return LineRef(file=name, line=line)
+    return extract
+
+
+def _source_file(path: str, meta) -> str | None:
+    """`meta.sources` 里 role=="source" 的文件名；旧 sidecar 没有这份台账 → None。"""
+    if meta is None:
+        return None
+    if not isinstance(meta, dict):
+        raise AnalysisError(path, f"meta 必须是对象或 null（实测 {type(meta).__name__}）")
+    for item in meta.get("sources") or []:
+        if isinstance(item, dict) and item.get("role") == "source":
+            name = item.get("file")
+            return name if isinstance(name, str) and name else None
+    return None
+
+
 def _stub_payload(path: str):
     def extract(item: dict, where: str) -> tuple[str, str]:
         name = item.get("name")
@@ -286,11 +319,12 @@ class Attribution:
     attributed: int                                   # bucket0 命中 segments（表 1–3 分母）
     per_instance: Counter = field(default_factory=Counter)          # (type, id) -> 样本数
     per_type: Counter = field(default_factory=Counter)              # type -> 样本数
-    instance_lines: dict = field(default_factory=dict)              # (type, id) -> Counter[line]
+    instance_lines: dict = field(default_factory=dict)              # (type, id) -> Counter[LineRef]
     stub_totals: Counter = field(default_factory=Counter)           # "name" -> 样本数
     stub_samples: int = 0
     root_samples: int = 0
     root_with_line: int = 0                                         # 公共根里带行号信息的样本
+    root_line_files: Counter = field(default_factory=Counter)       # 公共根里带行号的样本按文件分
 
 
 def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -> Attribution:
@@ -322,6 +356,9 @@ def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -
             result.stub_samples += row.count
             continue
         result.root_samples += row.count
-        if sidecar.lines.find(row.offset) is not None:
+        ref = sidecar.lines.find(row.offset)
+        if ref is not None:
             result.root_with_line += row.count
+            if ref.file:
+                result.root_line_files[ref.file] += row.count
     return result

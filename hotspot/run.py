@@ -133,6 +133,21 @@ def _sidecar_artifact_sha256(path: Path) -> str | None:
     return str(sha).lower() if sha else None
 
 
+def _offsets_line_offset(path: Path) -> int:
+    """offsets 的 `line_offset`（stdlib 前缀行数）—— sidecar 的行号归属取决于它。
+
+    旧 offsets 没有这个键（W1 加之前产的），按 0 算：那时 sidecar 本来就没有文件绑定。
+    """
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise StageError("sidecar", f"读不了 offsets {path}：{exc}") from exc
+    value = document.get("line_offset", 0)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise StageError("sidecar", f"offsets {path} 的 line_offset={value!r} 不是非负整数")
+    return value
+
+
 def read_sim_state() -> tuple[int | None, float]:
     """一次读数：游戏 PID 与当前仿真主频（MHz）。
 
@@ -311,11 +326,16 @@ def compile_stage(
 
 
 def sidecar_stage(paths: dict[str, Path], cache_dir: Path = SIDECAR_CACHE) -> Path:
-    """生成 sidecar.json；同一份产物（blob sha256 相同）直接用缓存，省掉 objdump 那趟。"""
+    """生成 sidecar.json；同一份产物（blob sha256 相同）直接用缓存，省掉 objdump 那趟。
+
+    缓存键要带 offsets 的 `line_offset`：行号绑定来源文件之前产的 sidecar 里是拼接后行号，
+    只按 blob sha 命中会把源码行标成 stdlib 的（产物字节没变，行号口径变了）。
+    """
     sidecar = paths["blob"].parent / "sidecar.json"
-    key = _sha256_file(paths["blob"])
+    blob_sha = _sha256_file(paths["blob"])
+    key = f"{blob_sha}.lo{_offsets_line_offset(paths['offsets'])}"
     cached = cache_dir / key / "sidecar.json"
-    if cached.is_file() and _sidecar_artifact_sha256(cached) == key:
+    if cached.is_file() and _sidecar_artifact_sha256(cached) == blob_sha:
         shutil.copy2(cached, sidecar)
         return sidecar
 

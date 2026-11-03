@@ -5,6 +5,8 @@
 ②sidecar 的 `lines`/`segments`（我们 join 出来的结论，坐标已重映射成 blob 偏移）
 ③`objdump -d -l` 的反汇编行注（objdump 自己的 DWARF 消费者 + 反汇编器，独立于 ①②）
 三者对**该段首地址**给出的行号必须一致 —— 不一致就说明重映射或 join 错了。
+sidecar 的行按来源文件绑定（file + 文件内行），比较前按 offsets 的 `line_offset` 把源文件的
+行加回拼接后行号（stdlib 行本来就没动过）。
 
 坐标：sidecar 是 blob 偏移；objdump 是对象 `.text` 节内偏移，按 `--offsets` 的 anchors
 换算（blob 偏移 − anchor），与 make_sidecar 用的是同一份基准。
@@ -58,6 +60,26 @@ def run_objdump(argv):
         raise sc.SidecarError(f"{' '.join(argv)} 失败（{proc.returncode}）："
                               f"{proc.stderr.strip()[:400]}")
     return proc.stdout
+
+
+def sidecar_line_map(offsets, sidecar):
+    """sidecar `lines` 的行是 (file, 文件内行)，decodedline 与 objdump -l 给的是**拼接后**行号。
+
+    源文件的行要加回前缀行数才能与 objdump 对得上；stdlib 行本来就没动过。旧 sidecar 没有
+    `file`：行号原样用。
+    """
+    line_offset = offsets.get("line_offset")
+    if not isinstance(line_offset, int) or isinstance(line_offset, bool):
+        line_offset = 0
+    source_file = next((s.get("file") for s in (offsets.get("sources") or [])
+                        if isinstance(s, dict) and s.get("role") == "source"), None)
+    out = {}
+    for span in sidecar["lines"]:
+        name = span.get("file")
+        spliced = span["line"] + line_offset if name is not None and name == source_file \
+            else span["line"]
+        out[span["start"]] = (name, span["line"], spliced)
+    return out
 
 
 class Sources:
@@ -132,7 +154,7 @@ def main(argv=None):
         print("错误：sidecar 没有 segments，无可抽查（行表或元件表是空的？）", file=sys.stderr)
         return 1
 
-    line_at = {span["start"]: span["line"] for span in sidecar["lines"]}
+    line_at = sidecar_line_map(offsets, sidecar)
     sections_by_key = {(s["obj"], s["sec"]): s for s in offsets["sections"]}
     sources = Sources(args.objdump, args.obj, sections_by_key, entry["obj"])
     dl_starts = sources.line_range_starts()
@@ -148,10 +170,11 @@ def main(argv=None):
             continue
         obj_addr = seg["start"] - anchor["blob_off"]
         dl_line = dl_starts.get(obj_addr, (None, None))[1]
-        side_line = line_at.get(seg["start"])
+        side_file, side_shown, side_line = line_at.get(seg["start"], (None, None, None))
         dis_line = sources.disasm_lines(anchor["sec"]).get(obj_addr)
+        shown = f"{side_file}:{side_shown}" if side_file else side_shown
         head = (f"[{i:>2}/{len(picked)}] blob 0x{seg['start']:04x}-0x{seg['end']:04x} "
-                f"元件 {seg['id']}  行 decodedline={dl_line} sidecar={side_line} "
+                f"元件 {seg['id']}  行 decodedline={dl_line} sidecar={shown} "
                 f"objdump-dl={dis_line}")
         if None in (dl_line, side_line, dis_line):
             bad.append((seg, dl_line, side_line, dis_line, "有一方给不出该地址的行号"))

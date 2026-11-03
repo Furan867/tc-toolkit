@@ -247,8 +247,25 @@ std::vector<ElementSegment> parse_elements(const std::string& text) {
   return segs;
 }
 
-bool write_elements(const std::string& path, const std::vector<ElementSegment>& segs,
-                    int line_offset) {
+/* 行号口径：换行数，末行没有换行时也算一行。`<blob>.offsets` 的 `sources[].lines` 用它 ——
+   判据「元件行区间落在源文件之内」直接读这个数，不必去数文件。 */
+int count_source_lines(const std::string& text) {
+  int lines = 0;
+  for (const char c : text) {
+    if (c == '\n') ++lines;
+  }
+  if (!text.empty() && text.back() != '\n') ++lines;
+  return lines;
+}
+
+std::string file_name_of(const std::string& path) {
+  const std::size_t cut = path.find_last_of("\\/");
+  return cut == std::string::npos ? path : path.substr(cut + 1);
+}
+
+/* 行区间是**源文件内**的 1 基行号，不加 stdlib 前缀的行数：一个行号属于哪个文件由
+   `<blob>.offsets` 的 `sources` 说，el.tsv 只说源文件自己的行。 */
+bool write_elements(const std::string& path, const std::vector<ElementSegment>& segs) {
   std::string out = "# el.tsv v1\n";
   for (const ElementSegment& s : segs) {
     out += s.id;
@@ -259,22 +276,33 @@ bool write_elements(const std::string& path, const std::vector<ElementSegment>& 
     out += '\t';
     out += s.tail;
     out += '\t';
-    out += std::to_string(s.line_lo + line_offset);
+    out += std::to_string(s.line_lo);
     out += '\t';
-    out += std::to_string(s.line_hi + line_offset);
+    out += std::to_string(s.line_hi);
     out += '\n';
   }
   return write_file(path, out.data(), out.size());
 }
 
 // ---------------------------------------------------------------- 节布局（offsets JSON）
+/* 一处参与拼接的源文件。`file` 是行号归属用的文件名（下游把 `.debug_line` 的拼接后行号
+   拆回 (file, 文件内行) 时按它写），`role` 区分前缀与源码：前缀占拼接坐标的第
+   1..line_offset 行，源码的行全部 `+ line_offset`。 */
+struct SourceFile {
+  std::string file;
+  int lines = 0;
+  std::string role; /* "stdlib" | "source" */
+  std::string path;
+};
+
 /* `--offsets-out`：把「对象 `.text` 节内偏移」换算成 blob 偏移所需的两样东西（hotspot spec §6）：
    字节级节布局 + 行表的锚点。为什么必须另吐一个文件：行程序的首址是一条 `ADDR64 → .text`
    重定位（对象节 VMA=0），而装配器对 `.debug*` 整节丢弃 —— 对象里的地址在产物里没有直接对应，
    W3 只能靠「这个对象的 `.text` 被摆在 blob 哪里」推回去。 */
 bool write_offsets(const std::string& path, const std::vector<uint8_t>& blob,
                    const std::vector<std::string>& obj_names, const tc::AsmResult& r,
-                   uint64_t entry, std::string* err) {
+                   uint64_t entry, const std::vector<SourceFile>& sources, int line_offset,
+                   std::string* err) {
   const std::string sha = sha256_hex(blob);
   if (sha.empty()) {
     *err = "算不出产物的 sha256（BCrypt 失败）";
@@ -324,6 +352,16 @@ bool write_offsets(const std::string& path, const std::vector<uint8_t>& blob,
   artifact.set("len", sx::Json::integer(static_cast<long long>(blob.size())));
   artifact.set("sha256", sx::Json::string(sha));
 
+  sx::Json sources_json = sx::Json::array();
+  for (const SourceFile& s : sources) {
+    sx::Json e = sx::Json::object();
+    e.set("file", sx::Json::string(s.file));
+    e.set("lines", sx::Json::integer(static_cast<long long>(s.lines)));
+    e.set("role", sx::Json::string(s.role));
+    e.set("path", sx::Json::string(s.path));
+    sources_json.push(std::move(e));
+  }
+
   sx::Json root = sx::Json::object();
   root.set("version", sx::Json::integer(1));
   root.set("artifact", std::move(artifact));
@@ -333,6 +371,8 @@ bool write_offsets(const std::string& path, const std::vector<uint8_t>& blob,
   root.set("body_end", sx::Json::integer(static_cast<long long>(r.body_end)));
   root.set("stubs_base", sx::Json::integer(static_cast<long long>(r.stubs_base)));
   root.set("slots_base", sx::Json::integer(static_cast<long long>(r.slots_base)));
+  root.set("line_offset", sx::Json::integer(static_cast<long long>(line_offset)));
+  root.set("sources", std::move(sources_json));
   root.set("sections", std::move(sections));
   root.set("debug_lines", std::move(debug_lines));
 
@@ -442,10 +482,12 @@ int main(int argc, char** argv) {
     auto t0 = Clock::now();
     /* 元件表只依赖源文件原文（注释在 `mask_source` 里被抹成空格，raw_lines 里也没有原文），
        所以它在前端跑之前就能落盘：编译失败时这份表依然是对的。
-       `--stdlib` 把前缀拼在源码前，于是源码第 1 行变成第 `line_offset + 1` 行 —— el.tsv 的行区间
-       必须跟着后移，否则「元件表推的行」与 `.debug_line` 里的行差一个前缀。 */
+       `--stdlib` 把前缀拼在源码前，源码第 1 行在拼接后文本里变成第 `line_offset + 1` 行；
+       el.tsv 照样记**源文件内**的行号，行号归属哪个文件交给 `--offsets-out` 的 `sources`
+       去说 —— 两边都加一遍偏移就会重复扣减。 */
     std::string src_text;
-    if (!elements_path.empty() || !stdlib_path.empty()) {
+    std::string stdlib_text;
+    if (!elements_path.empty() || !stdlib_path.empty() || !offsets_path.empty()) {
       if (!lw::read_source_file(src, &src_text)) {
         std::fprintf(stderr, "读不了 %s\n", src.c_str());
         return 2;
@@ -454,23 +496,22 @@ int main(int argc, char** argv) {
     std::string spliced;
     int line_offset = 0;
     if (!stdlib_path.empty()) {
-      std::string prefix;
-      if (!lw::read_source_file(stdlib_path, &prefix)) {
+      if (!lw::read_source_file(stdlib_path, &stdlib_text)) {
         std::fprintf(stderr, "读不了 stdlib 前缀 %s\n", stdlib_path.c_str());
         return 2;
       }
       /* 传**拷贝**：`src_text` 还要给元件表用（拼后的文本只喂前端）。 */
-      const lw::SplicedSource sp = lw::splice_prefix(prefix, src_text);
+      const lw::SplicedSource sp = lw::splice_prefix(stdlib_text, src_text);
       spliced = sp.text;
       line_offset = sp.line_offset;
       if (verbose) {
-        std::fprintf(stderr, "[cli] stdlib %zu B（%d 行）拼在源码前 → %zu B\n", prefix.size(),
+        std::fprintf(stderr, "[cli] stdlib %zu B（%d 行）拼在源码前 → %zu B\n", stdlib_text.size(),
                      line_offset, spliced.size());
       }
     }
     if (!elements_path.empty()) {
       const std::vector<ElementSegment> segs = parse_elements(src_text);
-      if (!write_elements(elements_path, segs, line_offset)) {
+      if (!write_elements(elements_path, segs)) {
         std::fprintf(stderr, "写不了元件表 %s\n", elements_path.c_str());
         return 2;
       }
@@ -594,8 +635,16 @@ int main(int argc, char** argv) {
       }
     }
     if (!offsets_path.empty()) {
+      /* 前缀占拼接坐标的第 1..line_offset 行，所以它的 lines 取 line_offset：前缀不以换行结尾时，
+         前缀末行与源码首行同占一行，那一行算前缀（否则归哪边都是猜）。 */
+      std::vector<SourceFile> sources;
+      if (!stdlib_path.empty()) {
+        sources.push_back({file_name_of(stdlib_path), line_offset, "stdlib", stdlib_path});
+      }
+      sources.push_back({file_name_of(src), count_source_lines(src_text), "source", src});
       std::string why;
-      if (!write_offsets(offsets_path, r.blob.bytes, obj_names, r, entry, &why)) {
+      if (!write_offsets(offsets_path, r.blob.bytes, obj_names, r, entry, sources, line_offset,
+                         &why)) {
         std::fprintf(stderr, "写不了节布局 %s：%s\n", offsets_path.c_str(), why.c_str());
         return 2;
       }

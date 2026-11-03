@@ -344,6 +344,11 @@ class SidecarCacheTest(unittest.TestCase):
             "offsets": self.tmp / "blob.bin.offsets",
             "stubs": self.tmp / "blob.bin.stubs",
         }
+        self._write_offsets(0)
+
+    def _write_offsets(self, line_offset: int) -> None:
+        self.paths["offsets"].write_text(json.dumps({"line_offset": line_offset}),
+                                        encoding="utf-8")
 
     def _write_sidecar(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,7 +358,7 @@ class SidecarCacheTest(unittest.TestCase):
         )
 
     def test_cache_hit_skips_make_sidecar(self):
-        self._write_sidecar(self.cache / self.key / "sidecar.json")
+        self._write_sidecar(self.cache / f"{self.key}.lo0" / "sidecar.json")
 
         with mock.patch.object(run, "_run") as run_mock:
             sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
@@ -365,18 +370,29 @@ class SidecarCacheTest(unittest.TestCase):
             self.key,
         )
 
-    def test_cache_miss_runs_and_writes_cache(self):
-        def fake_run(command, *, stage, input_text=None, timeout=120):
-            out = Path(str(command[command.index("--out") + 1]))
-            self._write_sidecar(out)
-            return ""
+    def test_cache_key_follows_line_offset(self):
+        # 只按 blob sha 命中会把旧口径（拼接后行号）的 sidecar 当成新的
+        self._write_sidecar(self.cache / f"{self.key}.lo0" / "sidecar.json")
+        self._write_offsets(1503)
 
-        with mock.patch.object(run, "_run", side_effect=fake_run) as run_mock:
+        with mock.patch.object(run, "_run", side_effect=self._fake_make_sidecar) as run_mock:
+            sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
+
+        run_mock.assert_called_once()
+        self.assertTrue((self.cache / f"{self.key}.lo1503" / "sidecar.json").is_file())
+        self.assertTrue(sidecar.is_file())
+
+    def _fake_make_sidecar(self, command, *, stage, input_text=None, timeout=120):
+        self._write_sidecar(Path(str(command[command.index("--out") + 1])))
+        return ""
+
+    def test_cache_miss_runs_and_writes_cache(self):
+        with mock.patch.object(run, "_run", side_effect=self._fake_make_sidecar) as run_mock:
             sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
 
         self.assertEqual(run_mock.call_args.kwargs["stage"], "sidecar")
         self.assertTrue(sidecar.is_file())
-        self.assertTrue((self.cache / self.key / "sidecar.json").is_file())
+        self.assertTrue((self.cache / f"{self.key}.lo0" / "sidecar.json").is_file())
 
 
 if __name__ == "__main__":

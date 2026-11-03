@@ -11,6 +11,9 @@
                         见函数注释（别拿它当判据）。
     game_build_id()     appmanifest 的 buildid —— Steam 每次更新都改它。
     game_fingerprint()  `compile.dll` 的内容指纹 —— 二进制变了地址表就失效。
+
+还放「最近一次编译 hook 落下来的产物对在哪」：`latest_hook_product()` ——
+无参跑热点分析的入口。
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ import pathlib
 import re
 import shutil
 import struct
+from dataclasses import dataclass
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent   # tools/ 的父目录
 
@@ -230,6 +234,103 @@ def tool(name: str) -> str:
             f"或把它的目录加进 PATH。"
         )
     return found
+
+
+# ---- 编译 hook 的产物落点 ----------------------------------------------------
+
+@dataclass
+class HookProduct:
+    """一次编译 hook 落下的一对产物（`hook_src_NNN.si` + `hook_out_NNN.bin`）。
+
+    `num` 是文件名里的编号段（保留原样，含前导零）；`stdlib` / `impl` 来自
+    `manifest.tsv`，`impl != "ours"` 的产物是参考实现编出来的，复现不了自研产物。
+    """
+
+    num: str
+    src: pathlib.Path
+    out: pathlib.Path
+    mtime: float
+    stdlib: bool
+    impl: str
+
+
+_HOOK_OUT_NAME = re.compile(r"^hook_out_(\d+)\.bin$")
+_HOOK_SRC_NAME = re.compile(r"^hook_src_(\d+)\.si$")
+
+
+def _read_manifest(path: pathlib.Path) -> dict[str, dict[str, str]]:
+    """`manifest.tsv` → {编号: {列名: 值}}。按表头映射列，行短了缺的列就没值。"""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return {}
+    header = [name.strip() for name in lines[0].split("\t")]
+    if "seq" not in header:
+        return {}
+
+    rows: dict[str, dict[str, str]] = {}
+    for line in lines[1:]:
+        cells = line.split("\t")
+        row = {name: cells[i].strip() for i, name in enumerate(header) if i < len(cells)}
+        num = row.get("seq")
+        if num:
+            rows[num] = row
+    return rows
+
+
+def latest_hook_product(hook_dir: pathlib.Path | None = None) -> HookProduct | None:
+    """最近一次编译 hook 的产物对；没有可用产物返回 None。
+
+    编号相同的 `hook_src_*.si` 与 `hook_out_*.bin` 才是一对，所以两个都扫（hook 可能
+    只落下了一半）；「最近」按 mtime 比，同一秒落盘的按编号整数比大小 —— 编号是
+    落盘顺序，mtime 的分辨率不够时它是唯一还带顺序的读数。
+
+    `manifest.tsv` 里的 src/out 可能是改过名的文件，所以优先用 manifest 记的路径；
+    缺那一行时退回同名配对，并按「自研 + 无 stdlib 前缀」算。
+    """
+    root = pathlib.Path(hook_dir) if hook_dir is not None else REPO_ROOT / "work" / "hook"
+    if not root.is_dir():
+        return None
+
+    files: dict[str, dict[str, pathlib.Path]] = {}
+    for entry in root.iterdir():
+        if not entry.is_file():
+            continue
+        for kind, name in (("out", _HOOK_OUT_NAME), ("src", _HOOK_SRC_NAME)):
+            match = name.match(entry.name)
+            if match:
+                files.setdefault(match.group(1), {})[kind] = entry
+
+    manifest = _read_manifest(root / "manifest.tsv")
+    products: list[HookProduct] = []
+    for num, pair in files.items():
+        if "src" not in pair or "out" not in pair:
+            continue
+        row = manifest.get(num, {})
+        if row.get("impl", "ours") != "ours":
+            continue
+        src = root / row["src"] if row.get("src") else pair["src"]
+        out = root / row["out"] if row.get("out") else pair["out"]
+        if not (src.is_file() and out.is_file()):
+            continue
+        products.append(
+            HookProduct(
+                num=num,
+                src=src,
+                out=out,
+                mtime=max(out.stat().st_mtime, src.stat().st_mtime),
+                stdlib=row.get("stdlib", "").lower() == "on",
+                impl=row.get("impl", "ours"),
+            )
+        )
+
+    if not products:
+        return None
+    return max(products, key=lambda product: (product.mtime, int(product.num)))
 
 
 if __name__ == "__main__":

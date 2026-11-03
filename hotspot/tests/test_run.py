@@ -1,7 +1,9 @@
 """run.py 的编排单测：不启动游戏、不编译、不采样。"""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -157,6 +159,224 @@ class MainTest(unittest.TestCase):
                 run.main(["--src", "x.si", "--keep-running"]), 0
             )
             stop.assert_not_called()
+
+
+RUNNING = "PID 4242   模块基址 0x140000000\nsim_speed    45.400 MHz   (45400000 Hz)"
+STOPPED = "PID 4242   模块基址 0x140000000\nsim_speed        0        ← 仿真没在跑（哨兵值）"
+GAME_GONE = "Turing Complete.exe 没在运行\n"
+
+
+def _script(states: list[str]):
+    """`_run` 替身：read_freq 按 states 依次吐输出（最后一个重复用），其余命令都成功。"""
+    commands: list[list[str]] = []
+    pending = list(states)
+
+    def fake(command, *, stage, input_text=None, timeout=120):
+        parts = [str(part) for part in command]
+        commands.append(parts)
+        if any(part.endswith("read_freq.py") for part in parts):
+            return pending.pop(0) if len(pending) > 1 else pending[0]
+        return ""
+
+    return commands, fake
+
+
+def _simctl_calls(commands: list[list[str]]) -> list[list[str]]:
+    return [parts for parts in commands if any(part.endswith("simctl.py") for part in parts)]
+
+
+class _MainHarness(unittest.TestCase):
+    """把工具链与四个阶段都替掉，只留 preflight 与自动启停这段真逻辑。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.config = self.tmp / "config.toml"
+        self.config.write_text("", encoding="utf-8")
+        self.src = self.tmp / "circuit.si"
+        self.src.write_text("", encoding="utf-8")
+        for name in ("SIMPLEXC", "CONSUMER"):
+            fake_tool = self.tmp / f"{name.lower()}.exe"
+            fake_tool.write_text("", encoding="utf-8")
+            patcher = mock.patch.object(run, name, fake_tool)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.blob = self.tmp / "blob.bin"
+        self.blob.write_bytes(b"artifact")
+        self.run_dir = self.tmp / "run"
+
+    def argv(self, *extra: str) -> list[str]:
+        return ["--config", str(self.config), "--out", str(self.run_dir), *extra]
+
+    def run_main(self, argv: list[str]):
+        stats = {"samples": 100, "bucket0": 90, "bucket1": 5, "bucket2": 5}
+        with mock.patch.object(
+            run, "compile_stage", return_value={"blob": self.blob}
+        ) as compile_, mock.patch.object(
+            run, "sidecar_stage", return_value=self.tmp / "sidecar.json"
+        ), mock.patch.object(
+            run, "sample_stage", return_value=stats
+        ) as sample, mock.patch.object(
+            run, "report_stage", return_value=self.tmp / "report.html"
+        ):
+            code = run.main(argv)
+        return code, compile_, sample
+
+
+class AutoModeTest(_MainHarness):
+    def _product(self, num: str = "042"):
+        src = self.tmp / f"hook_src_{num}.si"
+        src.write_text("", encoding="utf-8")
+        out = self.tmp / f"hook_out_{num}.bin"
+        out.write_text("", encoding="utf-8")
+        return run.tc_common.HookProduct(
+            num=num, src=src, out=out, mtime=1.0, stdlib=False, impl="ours"
+        )
+
+    def test_no_src_uses_latest_hook_product(self):
+        product = self._product()
+        commands, fake = _script([RUNNING])
+        with mock.patch.object(
+            run.tc_common, "latest_hook_product", return_value=product
+        ) as latest, mock.patch.object(run, "_run", side_effect=fake):
+            # 不给 --out：这条同时验无参模式的 run 目录命名
+            code, compile_, sample = self.run_main(["--config", str(self.config)])
+
+        self.assertEqual(code, 0)
+        latest.assert_called_once_with()
+        compile_.assert_called_once_with(mock.ANY, mock.ANY, product.src)
+        self.assertTrue(sample.call_args.args[3].name.endswith("_hook042_t10"))
+        self.assertEqual(_simctl_calls(commands), [])
+
+    def test_no_src_without_hook_product_fails(self):
+        with mock.patch.object(
+            run.tc_common, "latest_hook_product", return_value=None
+        ):
+            code, compile_, _ = self.run_main(self.argv())
+
+        self.assertEqual(code, 1)
+        compile_.assert_not_called()
+
+    def test_starts_and_stops_sim_when_stopped(self):
+        commands, fake = _script([STOPPED, RUNNING])
+        with mock.patch.object(run, "_run", side_effect=fake):
+            code, _, _ = self.run_main(self.argv("--src", str(self.src)))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [parts[-1] for parts in _simctl_calls(commands)], ["run", "stop"]
+        )
+
+    def test_leaves_running_sim_alone(self):
+        commands, fake = _script([RUNNING])
+        with mock.patch.object(run, "_run", side_effect=fake):
+            code, _, _ = self.run_main(self.argv("--src", str(self.src)))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(_simctl_calls(commands), [])
+
+    def test_no_sim_control_leaves_sim_alone(self):
+        commands, fake = _script([RUNNING])
+        with mock.patch.object(run, "_run", side_effect=fake):
+            code, _, _ = self.run_main(
+                self.argv("--src", str(self.src), "--no-sim-control")
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(_simctl_calls(commands), [])
+
+    def test_no_sim_control_with_stopped_sim_fails(self):
+        commands, fake = _script([STOPPED])
+        with mock.patch.object(run, "_run", side_effect=fake):
+            code, _, sample = self.run_main(
+                self.argv("--src", str(self.src), "--no-sim-control")
+            )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(_simctl_calls(commands), [])
+        sample.assert_not_called()
+
+    def test_game_not_running_fails(self):
+        _, fake = _script([GAME_GONE])
+        with mock.patch.object(run, "_run", side_effect=fake):
+            code, compile_, _ = self.run_main(self.argv("--src", str(self.src)))
+
+        self.assertEqual(code, 1)
+        compile_.assert_not_called()
+
+
+class ArtifactModeTest(_MainHarness):
+    def test_artifact_alone_fails(self):
+        with mock.patch.object(run, "_run", side_effect=_script([RUNNING])[1]):
+            code, compile_, _ = self.run_main(self.argv("--artifact", str(self.blob)))
+
+        self.assertEqual(code, 1)
+        compile_.assert_not_called()
+
+    def test_sidecar_sha_mismatch_fails(self):
+        sidecar = self.tmp / "sidecar.json"
+        sidecar.write_text(
+            json.dumps({"artifact": {"sha256": "0" * 64}}), encoding="utf-8"
+        )
+        with mock.patch.object(run, "_run", side_effect=_script([RUNNING])[1]):
+            code, compile_, _ = self.run_main(
+                self.argv("--artifact", str(self.blob), "--sidecar", str(sidecar))
+            )
+
+        self.assertEqual(code, 1)
+        compile_.assert_not_called()
+
+
+class SidecarCacheTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.cache = self.tmp / "cache"
+        self.blob = self.tmp / "blob.bin"
+        self.blob.write_bytes(b"artifact")
+        self.key = hashlib.sha256(b"artifact").hexdigest()
+        self.paths = {
+            "blob": self.blob,
+            "obj": self.tmp / "module.obj",
+            "elements": self.tmp / "el.tsv",
+            "offsets": self.tmp / "blob.bin.offsets",
+            "stubs": self.tmp / "blob.bin.stubs",
+        }
+
+    def _write_sidecar(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"artifact": {"len": 8, "sha256": self.key}}),
+            encoding="utf-8",
+        )
+
+    def test_cache_hit_skips_make_sidecar(self):
+        self._write_sidecar(self.cache / self.key / "sidecar.json")
+
+        with mock.patch.object(run, "_run") as run_mock:
+            sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
+
+        run_mock.assert_not_called()
+        self.assertEqual(sidecar, self.tmp / "sidecar.json")
+        self.assertEqual(
+            json.loads(sidecar.read_text(encoding="utf-8"))["artifact"]["sha256"],
+            self.key,
+        )
+
+    def test_cache_miss_runs_and_writes_cache(self):
+        def fake_run(command, *, stage, input_text=None, timeout=120):
+            out = Path(str(command[command.index("--out") + 1]))
+            self._write_sidecar(out)
+            return ""
+
+        with mock.patch.object(run, "_run", side_effect=fake_run) as run_mock:
+            sidecar = run.sidecar_stage(self.paths, cache_dir=self.cache)
+
+        self.assertEqual(run_mock.call_args.kwargs["stage"], "sidecar")
+        self.assertTrue(sidecar.is_file())
+        self.assertTrue((self.cache / self.key / "sidecar.json").is_file())
 
 
 if __name__ == "__main__":

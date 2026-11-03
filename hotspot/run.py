@@ -1,26 +1,39 @@
 """一条命令跑完热点分析：编译 → sidecar → 采样 → 报表。
 
 只做编排：每个阶段调用现成的可执行文件/脚本，不复制它们的逻辑。
+
+不给 `--src` 就用 `work/hook` 里最近一次编译 hook 的源；仿真没在跑时自己点运行，
+只在「是我们启动的」情况下才在结束时停（原本在跑的电路不去动）。
+`--artifact` + `--sidecar` 能拿现成产物跳过编译，拿它做同一份产物的重采/重算。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
+import json
 import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 
 ROOT = Path(__file__).resolve().parent.parent
+TOOLS = ROOT / "tools"
 SIMPLEXC = ROOT / "simplexc/build/simplexc_cli.exe"
 CONSUMER = ROOT / "hotspot/consumer/build/hotspot-consumer.exe"
 MAKE_SIDECAR = ROOT / "hotspot/tools/make_sidecar.py"
 REPORT = ROOT / "hotspot/analysis/report.py"
 READ_FREQ = ROOT / "tools/read_freq.py"
+SIMCTL = ROOT / "tools/simctl.py"
 DEFAULT_CONFIG = ROOT / "hotspot/config.toml"
+SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
 
 SIM_SPEED = re.compile(r"sim_speed\s+([0-9]+(?:\.[0-9]+)?)")
+GAME_PID = re.compile(r"\bPID\s+(\d+)")
 WINDOW_STATS = re.compile(
     r"样本\s+(\d+).*?bucket0\s+(\d+).*?bucket1\s+(\d+).*?bucket2\s+(\d+)",
     re.S,
@@ -41,6 +54,29 @@ class StageError(RuntimeError):
         self.stage = stage
         self.command = command
         self.output = output
+
+
+def _load_tc_common() -> ModuleType:
+    """按路径加载 `tools/tc_common.py`。
+
+    `tools/` 不是包（没有 `__init__.py`），别的脚本靠往 `sys.path` 插目录来 `import
+    tc_common`；这里按路径加载，不动全局导入路径（hotspot/tools 下也有同名目录，插进去
+    会把两个 `tools` 命名空间包混在一起）。
+
+    加载前必须登记进 `sys.modules`：`@dataclass` 处理字段时按 `cls.__module__` 反查
+    模块字典，查不到就 `AttributeError`。
+    """
+    path = TOOLS / "tc_common.py"
+    spec = importlib.util.spec_from_file_location("tc_common", path)
+    if spec is None or spec.loader is None:
+        raise StageError("preflight", f"加载不了 {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+tc_common = _load_tc_common()
 
 
 def _resolve(value: str | Path) -> Path:
@@ -78,22 +114,130 @@ def _run(
     return result.stdout
 
 
-def _game_running() -> bool:
-    if not READ_FREQ.is_file():
-        return False
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sidecar_artifact_sha256(path: Path) -> str | None:
+    """sidecar.json 里记的产物指纹；读不到（缺文件 / 坏 JSON / 缺字段）返回 None。"""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    artifact = document.get("artifact")
+    sha = artifact.get("sha256") if isinstance(artifact, dict) else None
+    return str(sha).lower() if sha else None
+
+
+def read_sim_state() -> tuple[int | None, float]:
+    """一次读数：游戏 PID 与当前仿真主频（MHz）。
+
+    游戏没开时 read_freq 退出码非 0（消息在 stderr），这里折算成「没有 PID」而不是
+    阶段失败 —— 调用方要分开「游戏没开」和「游戏开着但仿真停着」。
+    """
     try:
         output = _run(
             [sys.executable, READ_FREQ, "--samples", "1"],
             stage="preflight",
-            timeout=20,
+            timeout=30,
         )
     except StageError:
-        return False
-    match = SIM_SPEED.search(output)
-    return bool(match and float(match.group(1)) > 0)
+        return None, 0.0
+
+    pid = GAME_PID.search(output)
+    speed = SIM_SPEED.search(output)
+    return (
+        int(pid.group(1)) if pid else None,
+        float(speed.group(1)) if speed else 0.0,
+    )
+
+
+def _game_running() -> bool:
+    """仿真在跑（主频 > 0）；游戏没开也是 False。"""
+    return read_sim_state()[1] > 0
+
+
+def _start_sim() -> None:
+    _run([sys.executable, SIMCTL, "run"], stage="preflight", timeout=60)
+
+
+def _wait_sim_running(timeout: float = 15.0) -> None:
+    """轮询主频 > 0。F6 是切换键，点错方向会变成暂停，所以必须验主频而不是验发过键。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _game_running():
+            return
+        time.sleep(1.0)
+    raise StageError(
+        "preflight",
+        f"注入运行后 {timeout:g} s 内主频仍是 0（F6 是切换键，可能被点成暂停了）",
+    )
+
+
+def ensure_sim_running(opts: argparse.Namespace) -> None:
+    """保证仿真在跑：主频 > 0 就不碰，停着就自己启动并记下「是我们启动的」。"""
+    pid, speed = read_sim_state()
+    if pid is None:
+        raise StageError(
+            "preflight",
+            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python tools/simctl.py run",
+        )
+    if speed > 0:
+        print(f"→ 仿真已在跑（PID {pid}，{speed:g} MHz），不启动也不停")
+        return
+    if opts.no_sim_control:
+        raise StageError(
+            "preflight",
+            "仿真没在跑，又给了 --no-sim-control（不自动启停）；先在游戏里点运行",
+        )
+
+    _start_sim()
+    opts.started_by_us = True
+    _wait_sim_running()
+    print(f"→ 已启动仿真（PID {pid}），结束后停掉")
+
+
+def _pick_hook_src(opts: argparse.Namespace) -> Path:
+    """无参模式：最近一次编译 hook 落下的源（编号记进 opts，run 目录名要用）。"""
+    product = tc_common.latest_hook_product()
+    if product is None:
+        raise StageError(
+            "preflight",
+            "work/hook 里没有可用的 hook 产物：要 impl=ours 的 "
+            "hook_out_*.bin + hook_src_*.si，或者直接给 --src",
+        )
+    opts.hook_num = product.num
+    if product.stdlib:
+        opts.stdlib = ROOT / "work/hook/all/stdlib_prefix.si"
+    print(f"→ 用 hook 产物 {product.num}：{product.src}")
+    return product.src
+
+
+def _check_artifact_pair(opts: argparse.Namespace) -> None:
+    """现成产物模式：两份文件都在，且 sidecar 确实是这份产物的。"""
+    for label, value in (("产物", opts.artifact), ("侧车", opts.sidecar)):
+        if not _resolve(value).is_file():
+            raise StageError("preflight", f"{label}文件不存在：{_resolve(value)}")
+
+    artifact = _resolve(opts.artifact)
+    sidecar = _resolve(opts.sidecar)
+    want = _sha256_file(artifact)
+    got = _sidecar_artifact_sha256(sidecar)
+    if got is None:
+        raise StageError("preflight", f"侧车里读不到 artifact.sha256：{sidecar}")
+    if got != want:
+        raise StageError(
+            "preflight",
+            f"侧车与产物不配对：sidecar artifact.sha256={got}，产物 sha256={want}",
+        )
 
 
 def preflight(opts: argparse.Namespace) -> tuple[Path, Path]:
+    """返回 (config, 这份分析针对的文件)：编译模式是源文件，`--artifact` 模式是产物。"""
     config = _resolve(opts.config)
     if not config.is_file():
         raise StageError(
@@ -105,18 +249,25 @@ def preflight(opts: argparse.Namespace) -> tuple[Path, Path]:
         if not path.is_file():
             raise StageError("preflight", f"缺少 {name}：{path}，先构建")
 
-    src = _resolve(opts.src)
-    if not src.is_file():
-        raise StageError("preflight", f"源文件不存在：{src}")
-    if opts.stdlib and not _resolve(opts.stdlib).is_file():
-        raise StageError("preflight", f"stdlib 前缀不存在：{_resolve(opts.stdlib)}")
-
-    if not opts.skip_game_check and not _game_running():
+    if (opts.artifact is None) != (opts.sidecar is None):
         raise StageError(
             "preflight",
-            "游戏没在跑（sim_speed=0 或读不到）；先 python tools/simctl.py run",
+            "--artifact 与 --sidecar 必须成对给出：只给一个就无法确认 sidecar 是这份产物的",
         )
-    return config, src
+
+    if opts.artifact is not None:
+        _check_artifact_pair(opts)
+        target = _resolve(opts.artifact)
+    else:
+        target = _resolve(opts.src) if opts.src else _pick_hook_src(opts)
+        if not target.is_file():
+            raise StageError("preflight", f"源文件不存在：{target}")
+        if opts.stdlib and not _resolve(opts.stdlib).is_file():
+            raise StageError("preflight", f"stdlib 前缀不存在：{_resolve(opts.stdlib)}")
+
+    if not opts.skip_game_check:
+        ensure_sim_running(opts)
+    return config, target
 
 
 def compile_stage(
@@ -159,8 +310,15 @@ def compile_stage(
     return paths
 
 
-def sidecar_stage(paths: dict[str, Path]) -> Path:
+def sidecar_stage(paths: dict[str, Path], cache_dir: Path = SIDECAR_CACHE) -> Path:
+    """生成 sidecar.json；同一份产物（blob sha256 相同）直接用缓存，省掉 objdump 那趟。"""
     sidecar = paths["blob"].parent / "sidecar.json"
+    key = _sha256_file(paths["blob"])
+    cached = cache_dir / key / "sidecar.json"
+    if cached.is_file() and _sidecar_artifact_sha256(cached) == key:
+        shutil.copy2(cached, sidecar)
+        return sidecar
+
     _run(
         [
             sys.executable,
@@ -183,6 +341,12 @@ def sidecar_stage(paths: dict[str, Path]) -> Path:
     )
     if not sidecar.is_file():
         raise StageError("sidecar", f"没有生成 {sidecar}")
+
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(sidecar, cached)
+    except OSError as exc:
+        print(f"⚠ sidecar 缓存没写成：{exc}", file=sys.stderr)
     return sidecar
 
 
@@ -249,48 +413,77 @@ def report_stage(run_dir: Path, sidecar: Path) -> Path:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="一条命令跑完热点分析")
-    parser.add_argument("--src", required=True, help="源文件 .si")
+    parser = argparse.ArgumentParser(
+        description="一条命令跑完热点分析（默认取 work/hook 里最近一次编译 hook 的源）",
+    )
+    parser.add_argument(
+        "--src",
+        help="源文件 .si（不给就取 work/hook 里最近一次编译 hook 的源）",
+    )
     parser.add_argument("--stdlib", help="stdlib 前缀 .si（复现 hook 产物时用）")
+    parser.add_argument(
+        "--artifact",
+        help="现成的产物 .bin（配合 --sidecar，跳过编译与 sidecar 生成）",
+    )
+    parser.add_argument("--sidecar", help="--artifact 对应的 sidecar.json")
     parser.add_argument("--window", type=int, default=10, help="采样窗口秒数（默认 10）")
     parser.add_argument("--pid", type=int, help="游戏 PID（默认按进程名找）")
     parser.add_argument("--interval-ms", type=int, help="采样间隔毫秒")
-    parser.add_argument("--out", help="run 目录（默认 hotspot/workspace/runs/<ts>_<name>_t<秒>）")
+    parser.add_argument(
+        "--out",
+        help="run 目录（默认 hotspot/workspace/runs/<ts>_<name>_t<秒>）",
+    )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="config.toml 路径")
     parser.add_argument("--clean", action="store_true", help="成功后删除中间产物")
     parser.add_argument(
         "--keep-running",
         action="store_true",
-        help="采样后不停电路（默认停）",
+        help="采样后不停电路（就算是我们启动的也留着）",
+    )
+    parser.add_argument(
+        "--no-sim-control",
+        action="store_true",
+        help="不自动启停仿真（仿真没在跑就报错）",
     )
     parser.add_argument(
         "--skip-game-check",
         action="store_true",
-        help="跳过 sim_speed 检查（离线/测试）",
+        help="跳过 sim_speed 检查（离线/测试；也是「不启停」）",
     )
-    return parser.parse_args(argv)
+    opts = parser.parse_args(argv)
+    opts.hook_num = None        # 无参模式选中的 hook 编号（run 目录名要用）
+    opts.started_by_us = False  # 仿真是不是我们启动的（只有这种才在结束时停）
+    return opts
 
 
-def stop_stage() -> None:
-    """采样结束后停电路；失败只告警，不影响主流程。"""
+def stop_stage(opts: argparse.Namespace) -> None:
+    """结束仿真 —— 只停我们自己启动的，失败只告警。
+
+    判据（是不是我们启动的、有没禁自动控制）放在函数里而不是 main 的 finally 里：
+    finally 只管「跑完了该收拾」，要不要真动仿真由这里说。
+    """
+    if opts.no_sim_control or not opts.started_by_us:
+        return
     try:
-        _run(
-            [sys.executable, ROOT / "tools/simctl.py", "stop"],
-            stage="stop",
-            timeout=30,
-        )
+        _run([sys.executable, SIMCTL, "stop"], stage="stop", timeout=30)
     except StageError as exc:
         print(f"⚠ 停电路失败：{exc}", file=sys.stderr)
 
 
+def _run_stem(opts: argparse.Namespace, target: Path) -> str:
+    """run/工作目录的名字主干：无参模式标 hook 编号，否则用文件名主干。"""
+    if opts.hook_num is not None:
+        return f"hook{opts.hook_num}"
+    return target.stem
+
+
 def main(argv: list[str] | None = None) -> int:
     opts = parse_args(argv)
-    preflight_done = False
+    work_dir: Path | None = None
     try:
-        config, src = preflight(opts)
-        preflight_done = True
+        config, target = preflight(opts)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        stem = src.stem
+        stem = _run_stem(opts, target)
         work_dir = ROOT / "work/tmp/hotspot_run" / f"{stamp}_{stem}"
         run_dir = (
             _resolve(opts.out)
@@ -298,9 +491,15 @@ def main(argv: list[str] | None = None) -> int:
             else ROOT / "hotspot/workspace/runs" / f"{stamp}_{stem}_t{opts.window}"
         )
 
-        paths = compile_stage(opts, work_dir, src)
-        sidecar = sidecar_stage(paths)
-        stats = sample_stage(opts, config, paths["blob"], run_dir)
+        if opts.artifact is not None:
+            blob = target
+            sidecar = _resolve(opts.sidecar)
+        else:
+            paths = compile_stage(opts, work_dir, target)
+            sidecar = sidecar_stage(paths)
+            blob = paths["blob"]
+
+        stats = sample_stage(opts, config, blob, run_dir)
         html = report_stage(run_dir, sidecar)
     except StageError as exc:
         print(f"✗ [{exc.stage}] {exc}", file=sys.stderr)
@@ -315,8 +514,8 @@ def main(argv: list[str] | None = None) -> int:
         print("✗ 中断", file=sys.stderr)
         return 130
     finally:
-        if preflight_done and not opts.keep_running:
-            stop_stage()
+        if not opts.keep_running:
+            stop_stage(opts)
 
     share = 100 * stats["bucket0"] / stats["samples"] if stats["samples"] else 0.0
     print(f"完成：{run_dir}")
@@ -327,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         f"bucket0 份额 {share:.1f}%"
     )
 
-    if opts.clean:
+    if opts.clean and work_dir is not None and work_dir.exists():
         try:
             shutil.rmtree(work_dir)
         except OSError as exc:

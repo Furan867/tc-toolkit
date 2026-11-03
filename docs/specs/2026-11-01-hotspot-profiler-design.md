@@ -110,7 +110,7 @@ tc-toolkit/hotspot/
 | 提权 | **需要管理员**（开内核日志会话） | **不需要**（同用户进程 OpenProcess 即可，旧链走通验证；单样本暂停时长上界 W2 实测后回填） |
 | 每样本扰动 | 中断打点，被测线程零暂停 | 每 SuspendThread 数 µs 起的暂停（跨进程 GetThreadContext 可能达几十 µs），**上界未测** |
 | 直取线程 | 事件全系统 → 样本须按 TID 过滤（快照层，§4.1） | 直接持目标进程线程句柄，**无需系统过滤** |
-| 插件量 | 会话管理 + ETL 解析（krabsetw） | ~200 行 |
+| 插件量 | 会话管理 + ETL 解析（未实现） | ~200 行 |
 | 精细用途 | 主力；时延/抖动类研究也用它 | 单一频率，作为免管理员环境通道 |
 
 接口纪律：两后端对聚合层暴露的中间结构相同（IP、ThreadId、来源窗口时长）；
@@ -191,18 +191,10 @@ v1 语义。
 - C++23 / GCC 14.2（`docs/specs/2026-10-15-simplexc-interfaces.md:317` 有据）；
   cmake / ninja PATH 实测在位（2026-11-01）；**编译选项一律 `-Wall -Werror`**
  （hotspot 全部 C++ 目标；0 warning 属规范结果，不是第二个目标）；
-- `etw` 后端依赖 **krabsetw**（`microsoft/krabsetw`，header-only；`microsoft/krabs`
- 不存在）——2026-11-03 实测：上游无 tag，只能 pin commit
- `d626e49c41a2a324ad8b433b186703aa551373b3`（tarball sha256
- `a360723eea0eac16532d409d3e3649faa9328bb972cdeb7dffe522ae3b23bb47`）；原始头在
- MinGW g++ 14.2 下 169 error，需 6 个头约 25 行改动 + 一层 TDH 符号 shim（MinGW
- `tdh.h` 是残缺子集）。故改为 **vendored 副本 + patch**
- （`hotspot/consumer/third_party/krabsetw/`，保留 LICENSE、commit 与 sha256），
- 不用 FetchContent；vcpkg 不引入；
-- MinGW 适配已走通编译+链接（probe 2.4 MB）：`wrl/client.h` 在、`__uuidof` 不是
- 问题；必需 `-DUNICODE -D_UNICODE -D__FUNCSIG__=__PRETTY_FUNCTION__`、手动
- `-ltdh -ladvapi32 -lole32`；
-- 回退方案作废：本机 clang-cl / cl / MSVC **均不存在**，不能切 MSVC 构建链。
+- `etw` 后端当前**未实现**（第三方 ETW 解析库已移除，仓库不保留 vendored 依赖）：
+ `sampler.backend = "etw"` 在 `create_backend` 明确报未实现。需要时按自写最小
+ ETW 解析（`OpenTrace/ProcessTrace` + SampledProfile 固定布局）或 MSVC 编译的
+ C ABI 桥另加，二者都需先过真机验证。
 
 ### 4.6 常驻交互式会话（形态：REPL；不做「一次调用后退出」的采样器）
 
@@ -501,7 +493,6 @@ W3（侧车）产物。采样后端已定双后端、etw 为主（§4.0）。
 - 注释可选第五段（BANK/Input/Output 这类词）：语义未证，主规则不依赖；
 - 采样间隔下限与单位：`-profint` 量纲暂按 100 ns 折算（1 ms=10000），**下限与
   同族 API 等价性 W2 实测回填**（§4.1）；
-- krabsetw × MinGW：已实测（原始 169 error；6 个头改动 + TDH shim 后编译链接通过），**运行时 TDH 解码面待真 ETL 验证**（§4.5）；
 - etw 途中新线程样本不可计数（§4.1）——影响 G4 信号形态，不影响归因正确性；
 - suspend 单样本暂停时长上界（µs 或几十 µs）W2 实测回填（§4.0）；
 - tick 计数器：存在与否不预设，一次内存取证实验即定（§9）；
@@ -509,7 +500,7 @@ W3（侧车）产物。采样后端已定双后端、etw 为主（§4.0）。
 
 ## 14. 风险清单
 
-1. krabsetw / MinGW-w64 适配——已实测需 vendored+patch；MSVC 回退不可用（本机无 clang-cl/cl，§4.5）；
+1. etw 后端未实现（§4.5）——当前只有 suspend，采样有暂停扰动；
 2. `.debug_line` → blob 偏移重映射跨段修正不平凡——已划 W1 吐基准（§6），W3 有
    独立回退（自行从 COFF 装载地址推导）；
 3. aliasing 锁相（1 ms = 10⁴ × tick 是整数倍）——相位依赖调度抖动；有疑缩短间隔

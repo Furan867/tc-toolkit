@@ -5,15 +5,14 @@
 在追：**热点分析工具** —— 组件级时间归因（偏移 → 行 → 元件）。
 设计 `docs/specs/2026-11-01-hotspot-profiler-design.md`（v8；2026-11-03 按实测补开工契约）。
 
-- **W1 与 W2 并行中**（目录不重叠：`simplexc/**` vs `hotspot/**`）
+- **W1–W4 已落地**，当前只启用了 suspend 后端；etw 后端未实现
 - W1：DIBuilder + DebugLoc 行号 + `--debug-info` / `--elements-out` / `--offsets-out` + G1
-- W2：聚合层 + etw/suspend 双后端 + 常驻 REPL（krabsetw vendored+patch）
+- W2：聚合层 + suspend 后端 + 常驻 REPL
 - W3 等 W1 的 `el.tsv` 与 `<blob>.offsets`；W4 等 W2 的 run 目录 + W3 的 sidecar
 
 ## 开工前实测改掉的 spec 前提
 
 - 元件表：`mask_source` 把注释抹成空格，`raw_lines` **不含注释** → 改读 `--src` 原文
-- krabs 真名 `krabsetw`；MinGW 需 6 头 patch + TDH shim；本机无 clang-cl/MSVC，MSVC 回退不可用
 - `.debug_line` 地址是对象 `.text` 节内偏移（装配器丢弃 `.debug*`）→ 必须靠 `<blob>.offsets`
 - blob 头 = `文件总长 | (1<<62)`，长度判据先掩 bit62
 

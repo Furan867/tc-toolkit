@@ -328,8 +328,9 @@ def run_report(args: argparse.Namespace) -> int:
     write_buckets(run_dir / "run.toml", buckets)
     index_path, run_count = update_index(workspace)
 
-    print(f"{meta.run_name}: 总样本 {att.total}，bucket0 已归属 {att.attributed}"
-          f"（{100 * buckets['bucket0_share']:.1f}% 全样本）")
+    attributed_share = 100 * att.attributed / att.total if att.total else 0.0
+    print(f"{meta.run_name}: 总样本 {att.total}，bucket0 份额 {100 * buckets['bucket0_share']:.1f}%"
+          f"（已归属 {att.attributed}，占全样本 {attributed_share:.1f}%）")
     print(f"  类型 {len(table_set.types)} 种（含零值）/ 最热实例 {len(table_set.instances)} 个"
           f" / 未归属分桶 {len(table_set.buckets)} 行")
     print(f"  buckets 已回写 {run_dir / 'run.toml'}")

@@ -138,8 +138,6 @@ def load_run(run_dir: Path, sidecar_path: str | None = None) -> tuple[tables.Run
         bases=bases,
         freq_start_hz=_number(doc, "freq.start_hz", str(run_toml), required=False),
         freq_end_hz=_number(doc, "freq.end_hz", str(run_toml), required=False),
-        freq_start_at=_number(doc, "freq.start_at", str(run_toml), required=False),
-        freq_end_at=_number(doc, "freq.end_at", str(run_toml), required=False),
     )
     return meta, samples, sidecar
 

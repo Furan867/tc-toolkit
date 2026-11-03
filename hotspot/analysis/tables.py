@@ -29,8 +29,6 @@ class RunMeta:
     bases: tuple[str, ...]
     freq_start_hz: float | None
     freq_end_hz: float | None
-    freq_start_at: float | None
-    freq_end_at: float | None
 
 
 @dataclass(frozen=True)

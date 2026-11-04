@@ -27,6 +27,7 @@ add_library(hotspot_core STATIC
     src/backend_suspend.cc
     src/commands.cc
     src/config.cc
+    src/elevate.cc
     src/locate.cc
     src/lock.cc
     src/run_dir.cc
@@ -35,8 +36,10 @@ add_library(hotspot_core STATIC
     src/sha256.cc
     src/win_process.cc)
 target_include_directories(hotspot_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-# advapi32：StartTraceW/TraceSetInformation/OpenTraceW/ProcessTrace/ControlTraceW/CloseTrace。
-target_link_libraries(hotspot_core PRIVATE hotspot_flags advapi32)
+# advapi32：StartTraceW/TraceSetInformation/OpenTraceW/ProcessTrace/ControlTraceW/CloseTrace、
+#           OpenProcessToken/GetTokenInformation（提权判断）。
+# shell32：ShellExecuteExW（提权重启自己）。
+target_link_libraries(hotspot_core PRIVATE hotspot_flags advapi32 shell32)
 
 add_executable(hotspot-consumer src/main.cc)
 target_link_libraries(hotspot-consumer PRIVATE hotspot_core hotspot_flags)
@@ -48,6 +51,7 @@ add_executable(hotspot_tests
     tests/main.cc
     tests/test_backend_etw.cc
     tests/test_commands.cc
+    tests/test_elevate.cc
     tests/test_features.cc
     tests/test_run_dir.cc
     tests/test_samples.cc

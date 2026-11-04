@@ -5,10 +5,13 @@
 不给 `--src` 就用 `work/hook` 里最近一次编译 hook 的源；仿真没在跑时自己点运行，
 只在「是我们启动的」情况下才在结束时停（原本在跑的电路不去动）。
 `--artifact` + `--sidecar` 能拿现成产物跳过编译，拿它做同一份产物的重采/重算。
+config 里 `sampler.backend` 是 etw 且当前不是管理员时，先 UAC 提权重启自己（见 maybe_relaunch）；
+suspend 免管理员，不提权也不弹框。
 """
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.util
 import json
@@ -33,6 +36,7 @@ DEFAULT_CONFIG = ROOT / "hotspot/config.toml"
 SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
 WORK_TMP = ROOT / "work/tmp/hotspot_run"
 RUNS_DIR = ROOT / "hotspot/workspace/runs"
+RUN_SCRIPT = Path(__file__).resolve()
 
 SIM_SPEED = re.compile(r"sim_speed\s+([0-9]+(?:\.[0-9]+)?)")
 GAME_PID = re.compile(r"\bPID\s+(\d+)")
@@ -170,6 +174,137 @@ def _offsets_line_offset(path: Path) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise StageError("sidecar", f"offsets {path} 的 line_offset={value!r} 不是非负整数")
     return value
+
+
+# ------------------------------------------------------- ETW 提权（suspend 绝不提权）
+#
+# etw 要开 NT Kernel Logger（SeSystemProfilePrivilege），非管理员必然失败。提权放在 run.py
+# 而不是让 consumer 自己提：consumer 一旦用 runas 重启就换到**新控制台**，它 stdin/stdout
+# 上的管道全断，`open/window/save/quit` 喂不进去、统计也读不回来。反过来 run.py 提权后
+# consumer 继承管理员令牌，它自己那次判断看到「已是管理员」就直接过，不会二次 UAC。
+# suspend 免管理员：提权只会白弹一次框，所以判据里必须有后端。
+BACKEND_REQUIRING_ADMIN = "etw"
+TOKEN_QUERY = 0x0008
+TOKEN_ELEVATION_CLASS = 20
+SHELL_EXECUTE_MIN_SUCCESS = 32  # ShellExecuteW 返回值 <= 32 都是 SE_ERR_* 或 ERROR_CANCELLED
+SE_ERR_ACCESSDENIED = 5
+ERROR_CANCELLED = 1223
+
+
+class _TokenElevation(ctypes.Structure):
+    """GetTokenInformation(TokenElevation) 的输出：一个 BOOL。"""
+
+    _fields_ = [("token_is_elevated", ctypes.c_int)]
+
+
+def is_elevated() -> bool:
+    """当前进程是否已在管理员令牌下。
+
+    判据跟 consumer 的 TokenElevation 一模一样：两边判得不一样就会出现「run.py 认为不用
+    提权、consumer 自己又提一次」，那一次会把管道换成新控制台。所以不用 IsUserAnAdmin
+    —— UAC 关掉时它对管理员账户返回 True，而那时候进程并没有提升。
+    """
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    advapi32.OpenProcessToken.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.OpenProcessToken.restype = ctypes.c_int
+    advapi32.GetTokenInformation.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    advapi32.GetTokenInformation.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    token = ctypes.c_void_p()
+    if not advapi32.OpenProcessToken(
+        kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)
+    ):
+        return False
+    try:
+        elevation = _TokenElevation()
+        returned = ctypes.c_uint32()
+        queried = advapi32.GetTokenInformation(
+            token,
+            TOKEN_ELEVATION_CLASS,
+            ctypes.byref(elevation),
+            ctypes.sizeof(elevation),
+            ctypes.byref(returned),
+        )
+        return bool(queried) and bool(elevation.token_is_elevated)
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def sampler_backend(config: Path) -> str:
+    """config.toml 里的 `sampler.backend`；文件读不到就按 consumer 的默认值 etw。
+
+    只认 `[sampler]` 段下的 `key = value`（这份配置是我们自己写的，没有嵌套表与内联表）；
+    行内 `#` 之后当注释切掉，值里的引号去掉。不认识的 backend 值照原样返回，
+    由 consumer 报错，而不是在这里猜。
+    """
+    try:
+        text = config.read_text(encoding="utf-8")
+    except OSError:
+        return BACKEND_REQUIRING_ADMIN
+    section = ""
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            continue
+        if section != "sampler" or "=" not in line:
+            continue
+        key, value = (part.strip() for part in line.split("=", 1))
+        if key == "backend":
+            return value.strip("\"'") or BACKEND_REQUIRING_ADMIN
+    return BACKEND_REQUIRING_ADMIN
+
+
+def needs_elevation(backend: str, elevated: bool) -> bool:
+    """只有 etw 需要管理员；suspend 免管理员，提权只会白弹一次 UAC 还换掉控制台。"""
+    return backend == BACKEND_REQUIRING_ADMIN and not elevated
+
+
+def _shell_execute_runas(target: Path, parameters: str, directory: Path) -> int:
+    """ShellExecuteW("runas") 的薄壳：> 32 才算起来了（其余值是 SE_ERR_* 或 ERROR_CANCELLED）。"""
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteW.restype = ctypes.c_void_p  # 实际是 HINSTANCE
+    result = shell32.ShellExecuteW(
+        None, "runas", str(target), parameters, str(directory), 1  # 1 = SW_SHOWNORMAL
+    )
+    return int(result or 0)
+
+
+def maybe_relaunch(config: Path, arguments: list[str]) -> int | None:
+    """etw 且非管理员时用 runas 把自己重启一遍。
+
+    返回 None = 原地继续跑；返回 int = 原进程该以这个码退出（0 表示已经交给提权进程）。
+    参数用 `subprocess.list2cmdline` 拼（CRT 的引号规则）—— 含空格的路径不会被拆成两段。
+    """
+    if not needs_elevation(sampler_backend(config), is_elevated()):
+        return None
+    parameters = subprocess.list2cmdline([str(RUN_SCRIPT), *arguments])
+    print("→ etw 需要管理员：请求提权（UAC）…", flush=True)
+    result = _shell_execute_runas(Path(sys.executable), parameters, Path.cwd())
+    # 先判取消：ERROR_CANCELLED 是 1223，落在「> 32 就是成功」之上，单靠大小会当成成功。
+    if result in (0, SE_ERR_ACCESSDENIED, ERROR_CANCELLED):
+        print("✗ 已取消提权（或 UAC 拒绝）：etw 后端要开内核日志会话（SeSystemProfilePrivilege）",
+              file=sys.stderr)
+        return 1
+    if result <= SHELL_EXECUTE_MIN_SUCCESS:
+        print(f"✗ 提权重启失败：ShellExecuteW 返回 {result}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def read_sim_state() -> tuple[int | None, float]:
@@ -607,6 +742,13 @@ def main(argv: list[str] | None = None) -> int:
     opts = parse_args(argv)
     if opts.command == "clean":
         return clean_command(opts)
+
+    # 提权在 preflight 之前：非管理员的 etw 跑下去只会卡在开会话那一步。
+    relaunched = maybe_relaunch(
+        _resolve(opts.config), list(sys.argv[1:] if argv is None else argv)
+    )
+    if relaunched is not None:
+        return relaunched
 
     work_dir: Path | None = None
     try:

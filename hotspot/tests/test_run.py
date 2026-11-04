@@ -7,7 +7,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -106,6 +106,12 @@ class SampleStageTest(unittest.TestCase):
 
 
 class MainTest(unittest.TestCase):
+    def setUp(self):
+        # etw 提权会真弹 UAC 并真起一个进程：这些用例只验编排，把提权整体替掉。
+        patcher = mock.patch.object(run, "maybe_relaunch", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_preflight_failure_returns_one(self):
         with mock.patch.object(
             run,
@@ -207,6 +213,9 @@ class _MainHarness(unittest.TestCase):
         self.blob = self.tmp / "blob.bin"
         self.blob.write_bytes(b"artifact")
         self.run_dir = self.tmp / "run"
+        patcher = mock.patch.object(run, "maybe_relaunch", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def argv(self, *extra: str) -> list[str]:
         return ["--config", str(self.config), "--out", str(self.run_dir), *extra]
@@ -501,6 +510,120 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("没有缓存", out)
         self.assertNotIn("已删", out)
+
+
+class SamplerBackendTest(unittest.TestCase):
+    """提权判据要读 config.toml 的 sampler.backend；读不到就跟 consumer 一样当 etw。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+
+    def _write(self, text: str) -> Path:
+        path = self.tmp / "config.toml"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_missing_file_falls_back_to_etw(self):
+        self.assertEqual(run.sampler_backend(self.tmp / "no.toml"), "etw")
+
+    def test_reads_sampler_section(self):
+        path = self._write(
+            '[game]\nexe_name = "Turing Complete.exe"\n'
+            '[sampler]\nbackend = "suspend"      # 免管理员\n'
+        )
+        self.assertEqual(run.sampler_backend(path), "suspend")
+
+    def test_ignores_backend_in_other_sections(self):
+        path = self._write('[etw]\nbackend = "suspend"\n[sampler]\ninterval_ms = 1\n')
+        self.assertEqual(run.sampler_backend(path), "etw")
+
+
+class ElevationTest(unittest.TestCase):
+    """maybe_relaunch：etw + 非管理员才弹 UAC；suspend / 已是管理员一概不弹。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+
+    def _config(self, backend: str | None) -> Path:
+        path = self.tmp / "config.toml"
+        if backend is not None:
+            path.write_text(f'[sampler]\nbackend = "{backend}"\n', encoding="utf-8")
+        return path
+
+    def _relaunch(
+        self, backend: str | None, *, elevated: bool, shell_result: int = 33
+    ) -> tuple[int | None, list[tuple[Path, str, Path]], str]:
+        """跑一次 maybe_relaunch：(退出码, ShellExecuteW 的调用, stderr)。"""
+        calls: list[tuple[Path, str, Path]] = []
+
+        def fake_shell(target, parameters, directory):
+            calls.append((target, parameters, directory))
+            return shell_result
+
+        stderr = io.StringIO()
+        with mock.patch.object(run, "is_elevated", return_value=elevated), mock.patch.object(
+            run, "_shell_execute_runas", side_effect=fake_shell
+        ), redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+            code = run.maybe_relaunch(
+                self._config(backend), ["--window", "3", "--out", "my dir/run"]
+            )
+        return code, calls, stderr.getvalue()
+
+    def test_etw_without_admin_relaunches_with_args_and_cwd(self):
+        code, calls, _ = self._relaunch("etw", elevated=False)
+
+        self.assertEqual(code, 0)  # 已交给提权进程，原进程正常退出
+        self.assertEqual(len(calls), 1)
+        target, parameters, directory = calls[0]
+        self.assertEqual(target, Path(run.sys.executable))
+        self.assertEqual(directory, Path.cwd())
+        # 参数要原样带上（合空格的路径要被引号包住，不然会被拆成两段）
+        self.assertIn(str(run.RUN_SCRIPT), parameters)
+        self.assertIn("--window 3", parameters)
+        self.assertIn('"my dir/run"', parameters)
+
+    def test_suspend_without_admin_never_relaunches(self):
+        code, calls, _ = self._relaunch("suspend", elevated=False)
+
+        self.assertIsNone(code)
+        self.assertEqual(calls, [])
+
+    def test_admin_never_relaunches(self):
+        # consumer 已经是管理员：再提一次会多一个进程、还会把管道换成新控制台
+        for backend in ("etw", "suspend"):
+            code, calls, _ = self._relaunch(backend, elevated=True)
+            self.assertIsNone(code)
+            self.assertEqual(calls, [])
+
+    def test_missing_config_means_etw(self):
+        code, calls, _ = self._relaunch(None, elevated=False)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+
+    def test_cancelled_reports_and_returns_nonzero(self):
+        for shell_result in (0, run.SE_ERR_ACCESSDENIED, run.ERROR_CANCELLED):
+            code, _, stderr = self._relaunch(
+                "etw", elevated=False, shell_result=shell_result
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("已取消提权", stderr)
+
+    def test_other_failure_reports_the_code(self):
+        code, _, stderr = self._relaunch("etw", elevated=False, shell_result=31)
+
+        self.assertEqual(code, 1)
+        self.assertIn("31", stderr)
+
+    def test_main_stops_before_preflight_when_relaunching(self):
+        with mock.patch.object(run, "maybe_relaunch", return_value=0), mock.patch.object(
+            run, "preflight", side_effect=AssertionError("提权后不该接着跑")
+        ):
+            self.assertEqual(run.main(["--src", "x.si"]), 0)
 
 
 if __name__ == "__main__":

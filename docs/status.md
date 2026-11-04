@@ -28,7 +28,7 @@
 
 - **etw 自写已实现**：实时收、不落 ETL；解码单测 45 条通过；等管理员终端真机 smoke
 - 真机 smoke：`config.toml` 改 `backend = "etw"`，管理员终端跑 `open/window`；
-  非管理员/失败直接 assert
+  ETW 非管理员自动 UAC（consumer/run.py），suspend 不提权；真机 UAC 待验证
 
 ## 下一步
 

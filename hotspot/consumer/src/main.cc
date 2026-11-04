@@ -1,5 +1,6 @@
 // hotspot-consumer：常驻采样会话的入口（spec §4.6）。命令集见 commands.hh。
 #include "config.hh"
+#include "elevate.hh"
 #include "session.hh"
 
 #include <windows.h>
@@ -62,6 +63,22 @@ int main(int argc, char **argv)
     } else if (config_given) {
         std::cerr << "✗ 配置文件不存在：" << config_path.string() << "\n";
         return 2;
+    }
+
+    // 提权判据与时机：读完 config（后端才定得下来）、建 Session 之前（会话/锁都在 Session 里）。
+    if (hotspot::needs_elevation(config.backend, hotspot::is_elevated())) {
+        std::cout << "→ etw 后端需要管理员：请求提权（UAC）…" << std::endl;
+        std::string elevation_error;
+        switch (hotspot::relaunch_elevated(elevation_error)) {
+        case hotspot::RelaunchResult::started:
+            return 0;
+        case hotspot::RelaunchResult::cancelled:
+            std::cerr << "✗ 已取消提权：etw 后端要开内核日志会话（SeSystemProfilePrivilege）\n";
+            return 3;
+        case hotspot::RelaunchResult::failed:
+            std::cerr << "✗ 提权重启失败：" << elevation_error << "\n";
+            return 3;
+        }
     }
 
     std::cout << "hotspot-consumer：后端 " << hotspot::backend_name(config.backend) << "，间隔 "

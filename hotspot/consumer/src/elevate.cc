@@ -3,7 +3,9 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <iostream>
 
 namespace hotspot {
 namespace {
@@ -126,6 +128,51 @@ std::wstring build_command_line(const std::vector<std::wstring> &arguments)
     return line;
 }
 
+Arguments parse_arguments(const std::vector<std::string> &arguments)
+{
+    Arguments parsed;
+    for (std::size_t i = 0; i < arguments.size(); ++i) {
+        const std::string &argument = arguments[i];
+        if (argument == "--config") {
+            if (i + 1 >= arguments.size()) {
+                parsed.error = "--config 后面缺路径";
+                return parsed;
+            }
+            parsed.config_path = arguments[++i];
+            parsed.config_given = true;
+            continue;
+        }
+        if (argument == pause_on_exit_flag) {
+            parsed.pause_on_exit = true;
+            continue;
+        }
+        if (argument == "--help" || argument == "-h") {
+            parsed.help = true;
+            return parsed;
+        }
+        parsed.error = "不认识的参数：" + argument;
+        return parsed;
+    }
+    return parsed;
+}
+
+std::vector<std::wstring> relaunch_arguments(const std::vector<std::wstring> &arguments)
+{
+    std::vector<std::wstring> relaunch{arguments};
+    const std::wstring pause{pause_on_exit_flag.begin(), pause_on_exit_flag.end()};
+    if (std::find(relaunch.begin(), relaunch.end(), pause) == relaunch.end()) {
+        relaunch.push_back(pause);
+    }
+    return relaunch;
+}
+
+void wait_for_enter()
+{
+    std::cout << "按回车退出…" << std::flush;
+    std::string line;
+    std::getline(std::cin, line);
+}
+
 bool is_elevated()
 {
     HANDLE token = nullptr;
@@ -152,7 +199,8 @@ RelaunchResult relaunch_elevated(std::string &error)
         error = "取不到自己的可执行文件路径：" + win32_error_text(GetLastError());
         return RelaunchResult::failed;
     }
-    const std::wstring parameters = build_command_line(this_process_arguments());
+    const std::wstring parameters =
+        build_command_line(relaunch_arguments(this_process_arguments()));
     const std::wstring directory = current_directory();
 
     SHELLEXECUTEINFOW info{};

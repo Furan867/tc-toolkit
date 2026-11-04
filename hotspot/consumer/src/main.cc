@@ -10,46 +10,23 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
 void usage()
 {
-    std::cout << "用法：hotspot-consumer [--config <path>]\n"
-                 "  --config  默认 hotspot/config.toml（不存在则用 spec §10 的默认值）\n"
+    std::cout << "用法：hotspot-consumer [--config <path>] [--pause-on-exit]\n"
+                 "  --config        默认 hotspot/config.toml（不存在则用 spec §10 的默认值）\n"
+                 "  --pause-on-exit 退出前等一次回车（提权重启时自动加；stdin 非 TTY 不等）\n"
                  "命令：open <artifact> [--pid N] [--interval-ms <ms>] / window <sec> [save] /\n"
                  "      status / locate / save [dir] / quit\n";
 }
 
-} // namespace
-
-int main(int argc, char **argv)
+int run(const hotspot::Arguments &options, bool interactive)
 {
-    // 输出里有中文：控制台按 UTF-8 走，避免 GBK 代码页下变成乱码。
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-
-    std::filesystem::path config_path = "hotspot/config.toml";
-    bool config_given = false;
-    for (int i = 1; i < argc; ++i) {
-        const std::string argument = argv[i];
-        if (argument == "--config") {
-            if (i + 1 >= argc) {
-                std::cerr << "✗ --config 后面缺路径\n";
-                return 2;
-            }
-            config_path = argv[++i];
-            config_given = true;
-            continue;
-        }
-        if (argument == "--help" || argument == "-h") {
-            usage();
-            return 0;
-        }
-        std::cerr << "✗ 不认识的参数：" << argument << "\n";
-        usage();
-        return 2;
-    }
+    const std::filesystem::path config_path = options.config_path;
+    const bool config_given = options.config_given;
 
     hotspot::Config config;
     std::error_code error;
@@ -89,7 +66,6 @@ int main(int argc, char **argv)
               << "\n";
 
     hotspot::Session session(config);
-    const bool interactive = _isatty(_fileno(stdin)) != 0;
     std::string line;
     for (;;) {
         if (interactive) {
@@ -117,4 +93,33 @@ int main(int argc, char **argv)
         }
     }
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char **argv)
+{
+    // 输出里有中文：控制台按 UTF-8 走，避免 GBK 代码页下变成乱码。
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    const hotspot::Arguments options =
+        hotspot::parse_arguments(std::vector<std::string>(argv + 1, argv + argc));
+    if (options.error.has_value()) {
+        std::cerr << "✗ " << *options.error << "\n";
+        usage();
+        return 2;
+    }
+    if (options.help) {
+        usage();
+        return 0;
+    }
+
+    // stdin 是 TTY 才算有人守着窗口：管道调用（run.py / 单测）等到 EOF 就继续，等下去只会挂住。
+    const bool interactive = _isatty(_fileno(stdin)) != 0;
+    const int code = run(options, interactive);
+    if (options.pause_on_exit && interactive) {
+        hotspot::wait_for_enter();
+    }
+    return code;
 }

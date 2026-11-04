@@ -1,4 +1,4 @@
-// 提权链的纯函数：命令行拼接（CommandLineToArgvW 规则）与「该不该提权」的判据。
+// 提权链的纯函数：命令行拼接（CommandLineToArgvW 规则）、命令行解析与「该不该提权」的判据。
 // 真弹 UAC 的那一半（relaunch_elevated）不在这里 —— 单测不许弹框。
 #include "config.hh"
 #include "elevate.hh"
@@ -7,13 +7,17 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 using hotspot::Backend;
 using hotspot::build_command_line;
 using hotspot::needs_elevation;
+using hotspot::parse_arguments;
+using hotspot::pause_on_exit_flag;
 using hotspot::quote_argument;
+using hotspot::relaunch_arguments;
 
 namespace {
 
@@ -108,4 +112,52 @@ TEST_CASE(needs_elevation_only_for_etw_without_admin)
     // suspend 免管理员：提权只会白弹一次 UAC，还会把 stdin/stdout 换成新控制台。
     CHECK(!needs_elevation(Backend::suspend, false));
     CHECK(!needs_elevation(Backend::suspend, true));
+}
+
+TEST_CASE(parse_arguments_defaults)
+{
+    // 不给参数 = 默认配置路径 + 不暂停（管理员终端直接跑就不该停）。
+    const auto parsed = parse_arguments({});
+    CHECK_EQ(parsed.config_path, std::string{"hotspot/config.toml"});
+    CHECK(!parsed.config_given);
+    CHECK(!parsed.pause_on_exit);
+    CHECK(!parsed.help);
+    CHECK(!parsed.error.has_value());
+}
+
+TEST_CASE(parse_arguments_reads_config_and_pause_flag)
+{
+    const auto parsed = parse_arguments({"--config", "my dir/config.toml",
+                                         std::string{pause_on_exit_flag}});
+    CHECK_EQ(parsed.config_path, std::string{"my dir/config.toml"});
+    CHECK(parsed.config_given);
+    CHECK(parsed.pause_on_exit);
+    CHECK(!parsed.error.has_value());
+}
+
+TEST_CASE(parse_arguments_reports_bad_arguments)
+{
+    const auto missing_value = parse_arguments({"--config"});
+    CHECK(missing_value.error.has_value());
+    CHECK(missing_value.error->find("--config") != std::string::npos);
+
+    const auto unknown = parse_arguments({"--pause-on-exit", "--nope"});
+    CHECK(unknown.error.has_value());
+    CHECK(unknown.error->find("--nope") != std::string::npos);
+
+    const auto help = parse_arguments({"--help"});
+    CHECK(help.help);
+    CHECK(!help.error.has_value());
+}
+
+TEST_CASE(relaunch_arguments_add_pause_on_exit_once)
+{
+    // 新控制台跟着进程一起关：重启时得把这个参数带上，不给人看报错的时间就没了。
+    const std::vector<std::wstring> original{L"--config", L"a b/config.toml"};
+    const std::wstring pause{pause_on_exit_flag.begin(), pause_on_exit_flag.end()};
+    const std::vector<std::wstring> expected{L"--config", L"a b/config.toml", pause};
+    CHECK(relaunch_arguments(original) == expected);
+    // 原参数里已经带着就不重复加（重复出现在命令行上只会让人以为是两回事）。
+    CHECK(relaunch_arguments(expected) == expected);
+    CHECK_EQ(relaunch_arguments({}).size(), std::size_t{1});
 }

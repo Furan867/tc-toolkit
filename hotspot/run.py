@@ -6,15 +6,18 @@
 只在「是我们启动的」情况下才在结束时停（原本在跑的电路不去动）。
 `--artifact` + `--sidecar` 能拿现成产物跳过编译，拿它做同一份产物的重采/重算。
 config 里 `sampler.backend` 是 etw 且当前不是管理员时，先 UAC 提权重启自己（见 maybe_relaunch）；
-suspend 免管理员，不提权也不弹框。
+suspend 免管理员，不提权也不弹框。提权重启会在参数里加 `--pause-on-exit`：新控制台跟着
+进程一起关，不停一下的话结果和报错都看不到。
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,6 +40,9 @@ SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
 WORK_TMP = ROOT / "work/tmp/hotspot_run"
 RUNS_DIR = ROOT / "hotspot/workspace/runs"
 RUN_SCRIPT = Path(__file__).resolve()
+LOG_DIR = ROOT / "work/tmp"
+LOG_STAMP = "%Y-%m-%d_%H-%M-%S"
+LOG_FILE_OPTION = "--log-file"
 
 SIM_SPEED = re.compile(r"sim_speed\s+([0-9]+(?:\.[0-9]+)?)")
 GAME_PID = re.compile(r"\bPID\s+(\d+)")
@@ -90,6 +96,85 @@ def _resolve(value: str | Path) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
+# ------------------------------------------------------------------- 运行日志
+#
+# 一次运行一份日志，提权重启前后两个进程追加**同一个文件**（子进程靠 `--log-file` 拿到路径）。
+# 提权后新进程活在一个随退出就关掉的新控制台里，日志是事后唯一的现场，所以每个子进程调用
+# 的命令、输入、退出码、输出都要落下来 —— 报错时人只记得住「刚才那步失败了」。
+class RunLog:
+    """一次运行的日志文件；写入永远追加，写失败一律吞掉。
+
+    写失败不能带崩分析：磁盘满、路径被占、文件被别的程序锁住都可能发生，那时该丢的是
+    日志这一份旁证，而不是跑了一半的分析。
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def write(self, text: str) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(text)
+                if not text.endswith("\n"):
+                    handle.write("\n")
+        except OSError:
+            pass
+
+
+_LOG: RunLog | None = None
+
+
+def log_write(text: str) -> None:
+    """往本次运行的日志里追加一条记录（每行带时间戳）；没有日志时什么都不做。"""
+    if _LOG is None:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _LOG.write("\n".join(f"[{stamp}] {line}" for line in text.splitlines() or [""]))
+
+
+def log_block(label: str, body: str) -> None:
+    """多行内容缩进四格跟在 label 后面；空内容写 `（空）`，好区分「没输出」和「没记」。"""
+    lines = body.splitlines()
+    if not lines:
+        log_write(f"{label}（空）")
+        return
+    log_write(f"{label}\n" + "\n".join(f"    {line}" for line in lines))
+
+
+def _log_path(opts: argparse.Namespace) -> Path:
+    """日志路径：`--log-file` 优先，否则 `work/tmp/run_<时间戳>.log`。
+
+    同一秒内跑两次不能糊进一个文件：那样两次运行的输出交错，谁都读不出来。
+    """
+    if opts.log_file:
+        return _resolve(opts.log_file)
+    stamp = datetime.now().strftime(LOG_STAMP)
+    path = LOG_DIR / f"run_{stamp}.log"
+    serial = 2
+    while path.exists():
+        path = LOG_DIR / f"run_{stamp}-{serial}.log"
+        serial += 1
+    return path
+
+
+def open_run_log(opts: argparse.Namespace, arguments: list[str]) -> Path:
+    """开本次运行的日志并写下启动段，返回路径（提权重启要把它传给子进程）。"""
+    global _LOG
+    path = _log_path(opts)
+    _LOG = RunLog(path)
+    log_write("=" * 64)
+    log_write(
+        f"运行开始\n"
+        f"argv：{subprocess.list2cmdline([sys.executable, str(RUN_SCRIPT), *arguments])}\n"
+        f"cwd：{Path.cwd()}\n"
+        f"pid：{os.getpid()}\n"
+        f"backend：{sampler_backend(_resolve(opts.config))}\n"
+        f"log：{path}"
+    )
+    return path
+
+
 def _run(
     command: list[str | Path],
     *,
@@ -98,6 +183,9 @@ def _run(
     timeout: float = 120,
 ) -> str:
     parts = [str(part) for part in command]
+    log_write(f"[{stage}] 调用：{subprocess.list2cmdline(parts)}")
+    if input_text is not None:
+        log_block(f"[{stage}] 输入：", input_text)
     try:
         result = subprocess.run(
             parts,
@@ -110,9 +198,15 @@ def _run(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
+        log_write(f"[{stage}] 超时（{timeout:g} s）")
         raise StageError(stage, f"超时（{timeout:g} s）", parts) from exc
     except OSError as exc:
+        log_write(f"[{stage}] 启动失败：{exc}")
         raise StageError(stage, f"启动失败：{exc}", parts) from exc
+
+    log_write(f"[{stage}] 退出码 {result.returncode}")
+    log_block(f"[{stage}] stdout：", result.stdout or "")
+    log_block(f"[{stage}] stderr：", result.stderr or "")
 
     if result.returncode != 0:
         tail = (result.stderr or result.stdout or "").strip().splitlines()[-12:]
@@ -184,6 +278,8 @@ def _offsets_line_offset(path: Path) -> int:
 # consumer 继承管理员令牌，它自己那次判断看到「已是管理员」就直接过，不会二次 UAC。
 # suspend 免管理员：提权只会白弹一次框，所以判据里必须有后端。
 BACKEND_REQUIRING_ADMIN = "etw"
+# 提权重启打开的是一个新控制台，它跟着进程一起关：加这个参数让新进程退出前停一下。
+PAUSE_ON_EXIT = "--pause-on-exit"
 TOKEN_QUERY = 0x0008
 TOKEN_ELEVATION_CLASS = 20
 SHELL_EXECUTE_MIN_SUCCESS = 32  # ShellExecuteW 返回值 <= 32 都是 SE_ERR_* 或 ERROR_CANCELLED
@@ -285,15 +381,43 @@ def _shell_execute_runas(target: Path, parameters: str, directory: Path) -> int:
     return int(result or 0)
 
 
-def maybe_relaunch(config: Path, arguments: list[str]) -> int | None:
+def _with_log_file(arguments: list[str], log_file: Path) -> list[str]:
+    """参数里补上 `--log-file <路径>`，已有的（含 `--log-file=…` 形式）先删掉 —— 只留一个。
+
+    提权重启换了一个进程，日志要接着往同一份文件里写：不传这个参数，子进程会自己
+    按时间戳新建一份，原进程那半段就成了孤儿。
+    """
+    cleaned: list[str] = []
+    skip_value = False
+    for argument in arguments:
+        if skip_value:
+            skip_value = False
+        elif argument == LOG_FILE_OPTION:
+            skip_value = True
+        elif argument.startswith(f"{LOG_FILE_OPTION}="):
+            continue
+        else:
+            cleaned.append(argument)
+    return [*cleaned, LOG_FILE_OPTION, str(log_file)]
+
+
+def maybe_relaunch(
+    config: Path, arguments: list[str], *, log_file: Path | None = None
+) -> int | None:
     """etw 且非管理员时用 runas 把自己重启一遍。
 
     返回 None = 原地继续跑；返回 int = 原进程该以这个码退出（0 表示已经交给提权进程）。
     参数用 `subprocess.list2cmdline` 拼（CRT 的引号规则）—— 含空格的路径不会被拆成两段。
+    新进程那边自动带上 `--pause-on-exit`（已经给了就不重复加），以及 `log_file`（同一份日志）。
     """
     if not needs_elevation(sampler_backend(config), is_elevated()):
         return None
-    parameters = subprocess.list2cmdline([str(RUN_SCRIPT), *arguments])
+    relaunch_arguments = list(arguments)
+    if PAUSE_ON_EXIT not in relaunch_arguments:
+        relaunch_arguments.append(PAUSE_ON_EXIT)
+    if log_file is not None:
+        relaunch_arguments = _with_log_file(relaunch_arguments, log_file)
+    parameters = subprocess.list2cmdline([str(RUN_SCRIPT), *relaunch_arguments])
     print("→ etw 需要管理员：请求提权（UAC）…", flush=True)
     result = _shell_execute_runas(Path(sys.executable), parameters, Path.cwd())
     # 先判取消：ERROR_CANCELLED 是 1223，落在「> 32 就是成功」之上，单靠大小会当成成功。
@@ -305,6 +429,27 @@ def maybe_relaunch(config: Path, arguments: list[str]) -> int | None:
         print(f"✗ 提权重启失败：ShellExecuteW 返回 {result}", file=sys.stderr)
         return 1
     return 0
+
+
+def _stdin_is_tty() -> bool:
+    """stdin 是不是终端；被换掉/关掉的 stdin（管道、StringIO、None）一律当非 TTY。"""
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def pause_before_exit(opts: argparse.Namespace) -> None:
+    """提权后的进程活在一个随退出就关掉的新控制台里：不停一下，报错和结果一起没。
+
+    只看 `--pause-on-exit` 而不看「是不是提权过」：管理员终端直接跑不带它就不停。
+    管道调用（别的脚本调 run.py、单测）也不等 —— 等下去只会把调用方挂住。
+    """
+    if not opts.pause_on_exit or not _stdin_is_tty():
+        return
+    print("按回车退出…", end="", flush=True)
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdin.readline()
 
 
 def read_sim_state() -> tuple[int | None, float]:
@@ -700,6 +845,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="跳过 sim_speed 检查（离线/测试；也是「不启停」）",
     )
     parser.add_argument(
+        PAUSE_ON_EXIT,
+        dest="pause_on_exit",
+        action="store_true",
+        help="退出前等一次回车（提权重启时自动加；stdin 非 TTY 不等）",
+    )
+    parser.add_argument(
+        LOG_FILE_OPTION,
+        dest="log_file",
+        help="内部用：日志文件路径（默认 work/tmp/run_<时间戳>.log；提权重启时原样给子进程）",
+    )
+    parser.add_argument(
         "--runs",
         action="store_true",
         help="clean 时连 hotspot/workspace/runs 一起删（默认保留）",
@@ -728,6 +884,7 @@ def stop_stage(opts: argparse.Namespace) -> None:
     try:
         _run([sys.executable, SIMCTL, "stop"], stage="stop", timeout=30)
     except StageError as exc:
+        log_write(f"[{exc.stage}] 失败：{exc}")
         print(f"⚠ 停电路失败：{exc}", file=sys.stderr)
 
 
@@ -739,15 +896,29 @@ def _run_stem(opts: argparse.Namespace, target: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """跑一次分析（或 clean），结束前按需等一次回车。"""
     opts = parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    open_run_log(opts, arguments)
+    code = _pipeline(opts, arguments)
+    log_write(f"退出码 {code}")
+    pause_before_exit(opts)
+    return code
+
+
+def _pipeline(opts: argparse.Namespace, arguments: list[str]) -> int:
+    """main 的实体：clean 子命令、提权交接、四阶段流程各自给退出码。"""
     if opts.command == "clean":
         return clean_command(opts)
 
     # 提权在 preflight 之前：非管理员的 etw 跑下去只会卡在开会话那一步。
     relaunched = maybe_relaunch(
-        _resolve(opts.config), list(sys.argv[1:] if argv is None else argv)
+        _resolve(opts.config),
+        arguments,
+        log_file=_LOG.path if _LOG is not None else None,
     )
     if relaunched is not None:
+        log_write(f"已交给提权进程：原进程退出码 {relaunched}")
         return relaunched
 
     work_dir: Path | None = None
@@ -761,6 +932,7 @@ def main(argv: list[str] | None = None) -> int:
             if opts.out
             else RUNS_DIR / f"{stamp}_{stem}_t{opts.window}"
         )
+        log_write(f"preflight 通过：config={config}，目标={target}")
 
         if opts.artifact is not None:
             blob = target
@@ -769,10 +941,16 @@ def main(argv: list[str] | None = None) -> int:
             paths = compile_stage(opts, work_dir, target)
             sidecar = sidecar_stage(paths)
             blob = paths["blob"]
+        log_write(f"产物：blob={blob}，sidecar={sidecar}")
 
         stats = sample_stage(opts, config, blob, run_dir)
         html = report_stage(run_dir, sidecar)
     except StageError as exc:
+        log_write(f"[{exc.stage}] 失败：{exc}")
+        if exc.command:
+            log_write(f"[{exc.stage}] 命令：{subprocess.list2cmdline(exc.command)}")
+        if exc.output:
+            log_block(f"[{exc.stage}] 输出尾部：", exc.output)
         print(f"✗ [{exc.stage}] {exc}", file=sys.stderr)
         if exc.command:
             print("  命令：" + " ".join(exc.command), file=sys.stderr)
@@ -782,6 +960,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {line}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
+        log_write("中断（KeyboardInterrupt）")
         print("✗ 中断", file=sys.stderr)
         return 130
     finally:
@@ -789,6 +968,13 @@ def main(argv: list[str] | None = None) -> int:
             stop_stage(opts)
 
     share = 100 * stats["bucket0"] / stats["samples"] if stats["samples"] else 0.0
+    log_write(
+        f"完成：{run_dir}\n"
+        f"report：{html}\n"
+        f"样本 {stats['samples']}（bucket0 {stats['bucket0']} / "
+        f"bucket1 {stats['bucket1']} / bucket2 {stats['bucket2']}），"
+        f"bucket0 份额 {share:.1f}%"
+    )
     print(f"完成：{run_dir}")
     print(f"  report：{html}")
     print(

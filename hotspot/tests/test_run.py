@@ -5,9 +5,12 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -16,6 +19,15 @@ SPEC = importlib.util.spec_from_file_location("hotspot_run", HERE.parent / "run.
 assert SPEC and SPEC.loader
 run = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(run)
+
+
+def setUpModule() -> None:
+    """默认日志目录换成临时目录：调 main() 的用例不该往仓库 work/tmp 里写日志。"""
+    temp = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(temp.cleanup)
+    patcher = mock.patch.object(run, "LOG_DIR", Path(temp.name))
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 class ParseArgsTest(unittest.TestCase):
@@ -32,6 +44,13 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(opts.window, 3)
         self.assertEqual(opts.pid, 1)
         self.assertTrue(opts.clean)
+
+    def test_pause_on_exit_is_opt_in(self):
+        # 管理员终端直接跑不带它就不该停：等回车只能来自显式要求或提权重启那次自动加
+        self.assertFalse(run.parse_args(["--src", "x.si"]).pause_on_exit)
+        self.assertTrue(
+            run.parse_args(["--src", "x.si", "--pause-on-exit"]).pause_on_exit
+        )
 
 
 class GameRunningTest(unittest.TestCase):
@@ -555,7 +574,13 @@ class ElevationTest(unittest.TestCase):
         return path
 
     def _relaunch(
-        self, backend: str | None, *, elevated: bool, shell_result: int = 33
+        self,
+        backend: str | None,
+        *,
+        elevated: bool,
+        shell_result: int = 33,
+        arguments: list[str] | None = None,
+        log_file: Path | None = None,
     ) -> tuple[int | None, list[tuple[Path, str, Path]], str]:
         """跑一次 maybe_relaunch：(退出码, ShellExecuteW 的调用, stderr)。"""
         calls: list[tuple[Path, str, Path]] = []
@@ -569,7 +594,13 @@ class ElevationTest(unittest.TestCase):
             run, "_shell_execute_runas", side_effect=fake_shell
         ), redirect_stderr(stderr), redirect_stdout(io.StringIO()):
             code = run.maybe_relaunch(
-                self._config(backend), ["--window", "3", "--out", "my dir/run"]
+                self._config(backend),
+                (
+                    ["--window", "3", "--out", "my dir/run"]
+                    if arguments is None
+                    else arguments
+                ),
+                log_file=log_file,
             )
         return code, calls, stderr.getvalue()
 
@@ -591,6 +622,39 @@ class ElevationTest(unittest.TestCase):
 
         self.assertIsNone(code)
         self.assertEqual(calls, [])
+
+    def test_relaunch_arguments_carry_pause_on_exit(self):
+        # 提权重启换来一个新控制台，它跟着进程一起关：参数得带上让新进程停一下
+        _, calls, _ = self._relaunch("etw", elevated=False)
+
+        self.assertIn(run.PAUSE_ON_EXIT, calls[0][1].split())
+
+    def test_relaunch_does_not_duplicate_pause_on_exit(self):
+        _, calls, _ = self._relaunch(
+            "etw", elevated=False, arguments=["--window", "3", run.PAUSE_ON_EXIT]
+        )
+
+        self.assertEqual(calls[0][1].split().count(run.PAUSE_ON_EXIT), 1)
+
+    def test_relaunch_carries_log_file(self):
+        # 子进程要从原进程已经建好的那份日志接着写，不能自己再新建一份
+        log_file = self.tmp / "run.log"
+        _, calls, _ = self._relaunch("etw", elevated=False, log_file=log_file)
+
+        self.assertIn(run.LOG_FILE_OPTION, calls[0][1].split())
+        self.assertIn(str(log_file), calls[0][1])
+
+    def test_relaunch_does_not_duplicate_log_file(self):
+        log_file = self.tmp / "run.log"
+        for existing in (
+            [run.LOG_FILE_OPTION, "old.log"],
+            [f"{run.LOG_FILE_OPTION}=old.log"],
+        ):
+            _, calls, _ = self._relaunch(
+                "etw", elevated=False, arguments=existing, log_file=log_file
+            )
+            self.assertEqual(calls[0][1].split().count(run.LOG_FILE_OPTION), 1)
+            self.assertNotIn("old.log", calls[0][1])
 
     def test_admin_never_relaunches(self):
         # consumer 已经是管理员：再提一次会多一个进程、还会把管道换成新控制台
@@ -624,6 +688,296 @@ class ElevationTest(unittest.TestCase):
             run, "preflight", side_effect=AssertionError("提权后不该接着跑")
         ):
             self.assertEqual(run.main(["--src", "x.si"]), 0)
+
+
+class _FakeStdin(io.StringIO):
+    """假 stdin：`tty` 决定 isatty()，其余按 StringIO（能看读了多少）。"""
+
+    def __init__(self, text: str, tty: bool) -> None:
+        super().__init__(text)
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+class PauseOnExitTest(unittest.TestCase):
+    """提权后的进程活在一个随退出就关掉的新控制台里：要停一下，但管道调用不许停。"""
+
+    def test_tty_waits_for_one_enter(self):
+        stdin = _FakeStdin("\n剩下的\n", tty=True)
+        out = io.StringIO()
+        with mock.patch("sys.stdin", stdin), redirect_stdout(out):
+            run.pause_before_exit(run.parse_args(["--pause-on-exit"]))
+
+        self.assertIn("按回车退出", out.getvalue())
+        # 只吃一行：后面的内容还在（吃光会把调用方剩下的输入弄没）
+        self.assertEqual(stdin.readline(), "剩下的\n")
+
+    def test_non_tty_does_not_wait(self):
+        stdin = _FakeStdin("\n", tty=False)
+        out = io.StringIO()
+        with mock.patch("sys.stdin", stdin), redirect_stdout(out):
+            run.pause_before_exit(run.parse_args(["--pause-on-exit"]))
+
+        self.assertNotIn("按回车退出", out.getvalue())
+        self.assertEqual(stdin.tell(), 0)  # 一个字节都没读
+
+    def test_without_flag_never_waits(self):
+        stdin = _FakeStdin("\n", tty=True)
+        out = io.StringIO()
+        with mock.patch("sys.stdin", stdin), redirect_stdout(out):
+            run.pause_before_exit(run.parse_args([]))
+
+        self.assertNotIn("按回车退出", out.getvalue())
+        self.assertEqual(stdin.tell(), 0)
+
+    def test_main_waits_after_failure_when_flagged(self):
+        out = io.StringIO()
+        error = io.StringIO()
+        with (
+            mock.patch.object(run, "maybe_relaunch", return_value=None),
+            mock.patch.object(
+                run, "preflight", side_effect=run.StageError("preflight", "缺 config")
+            ),
+            mock.patch("sys.stdin", _FakeStdin("\n", tty=True)),
+            redirect_stdout(out),
+            redirect_stderr(error),
+        ):
+            code = run.main(["--src", "x.si", "--pause-on-exit"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("按回车退出", out.getvalue())
+        self.assertNotIn("按回车退出", error.getvalue())
+
+    def test_main_does_not_wait_when_handing_over_to_elevated_process(self):
+        # 原进程只是交活：该停的是新控制台里那个，这里停了等于白占一个窗口
+        stdin = _FakeStdin("\n", tty=True)
+        out = io.StringIO()
+        with mock.patch.object(run, "maybe_relaunch", return_value=0), mock.patch.object(
+            run, "preflight", side_effect=AssertionError("提权后不该接着跑")
+        ), mock.patch("sys.stdin", stdin), redirect_stdout(out):
+            self.assertEqual(run.main(["--src", "x.si"]), 0)
+
+        self.assertNotIn("按回车退出", out.getvalue())
+        self.assertEqual(stdin.tell(), 0)
+
+
+class RunLogTest(unittest.TestCase):
+    """每次子进程调用都要留下阶段、命令、输入、退出码、stdout、stderr。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.log_path = self.tmp / "run.log"
+        patcher = mock.patch.object(run, "_LOG", run.RunLog(self.log_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def log_text(self) -> str:
+        return self.log_path.read_text(encoding="utf-8")
+
+    def test_run_records_command_input_exit_code_and_outputs(self):
+        done = subprocess.CompletedProcess([], 0, "样本 100（bucket0 90）", "")
+        script = "open blob.bin\nwindow 5\nsave run\nquit\n"
+        with mock.patch.object(run.subprocess, "run", return_value=done):
+            output = run._run(
+                ["hotspot-consumer.exe", "--config", "config.toml"],
+                stage="sample",
+                input_text=script,
+            )
+
+        self.assertEqual(output, "样本 100（bucket0 90）")
+        text = self.log_text()
+        self.assertIn(
+            "[sample] 调用：hotspot-consumer.exe --config config.toml", text
+        )
+        self.assertIn("window 5", text)
+        self.assertIn("退出码 0", text)
+        self.assertIn("样本 100（bucket0 90）", text)
+        self.assertIn("[sample] stderr", text)
+
+    def test_failure_records_exit_code_and_stderr(self):
+        done = subprocess.CompletedProcess([], 3, "", "第一行\n第二行错误")
+        with mock.patch.object(
+            run.subprocess, "run", return_value=done
+        ), self.assertRaises(run.StageError) as caught:
+            run._run(["tools/x.py"], stage="compile")
+
+        self.assertEqual(caught.exception.stage, "compile")
+        text = self.log_text()
+        self.assertIn("退出码 3", text)
+        self.assertIn("第二行错误", text)
+
+    def test_timeout_is_recorded(self):
+        with mock.patch.object(
+            run.subprocess, "run", side_effect=subprocess.TimeoutExpired(["x"], 7)
+        ), self.assertRaises(run.StageError):
+            run._run(["tools/x.py"], stage="report", timeout=7)
+
+        self.assertIn("超时（7 s）", self.log_text())
+
+    def test_start_records_argv_cwd_pid_and_backend(self):
+        config = self.tmp / "config.toml"
+        config.write_text('[sampler]\nbackend = "suspend"\n', encoding="utf-8")
+        opts = run.parse_args(
+            ["--src", "x.si", "--config", str(config), run.LOG_FILE_OPTION,
+             str(self.log_path)]
+        )
+        path = run.open_run_log(opts, ["--src", "x.si"])
+
+        self.assertEqual(path, self.log_path)
+        text = self.log_text()
+        self.assertIn("argv：", text)
+        self.assertIn(self.tmp.name, text)  # argv 里带着原样的 --log-file 路径
+        self.assertIn(f"cwd：{Path.cwd()}", text)
+        self.assertIn(f"pid：{os.getpid()}", text)
+        self.assertIn("backend：suspend", text)
+
+    def test_stage_error_records_stage_command_and_error(self):
+        error = run.StageError(
+            "compile", "退出码 2", ["simplexc_cli.exe", "--src", "x.si"], "错误尾部"
+        )
+        with mock.patch.object(
+            run, "maybe_relaunch", return_value=None
+        ), mock.patch.object(run, "preflight", side_effect=error):
+            code = run.main([
+                "--src", "x.si", run.LOG_FILE_OPTION, str(self.log_path)
+            ])
+
+        self.assertEqual(code, 1)
+        text = self.log_text()
+        self.assertIn("[compile] 失败：退出码 2", text)
+        self.assertIn("[compile] 命令：simplexc_cli.exe --src x.si", text)
+        self.assertIn("错误尾部", text)
+        self.assertIn("退出码 1", text)  # 最终结果也在日志里
+
+    def test_success_records_final_result(self):
+        stats = {"samples": 10, "bucket0": 10, "bucket1": 0, "bucket2": 0}
+        with (
+            mock.patch.object(run, "maybe_relaunch", return_value=None),
+            mock.patch.object(
+                run, "preflight", return_value=(Path("cfg"), Path("x.si"))
+            ),
+            mock.patch.object(
+                run, "compile_stage", return_value={"blob": Path("blob.bin")}
+            ),
+            mock.patch.object(
+                run, "sidecar_stage", return_value=Path("sidecar.json")
+            ),
+            mock.patch.object(run, "sample_stage", return_value=stats),
+            mock.patch.object(
+                run, "report_stage", return_value=Path("report.html")
+            ),
+            mock.patch.object(run, "stop_stage"),
+        ):
+            code = run.main([
+                "--src", "x.si", run.LOG_FILE_OPTION, str(self.log_path)
+            ])
+
+        self.assertEqual(code, 0)
+        text = self.log_text()
+        self.assertIn("完成：", text)
+        self.assertIn("样本 10", text)
+        self.assertIn("退出码 0", text)
+
+    def test_write_failure_does_not_affect_the_run(self):
+        # 日志路径指向一个目录：写必然失败，但分析流程与退出码不能跟着变
+        directory = self.tmp / "as-dir"
+        directory.mkdir()
+        run.RunLog(directory).write("写不进去也不抛")
+        with mock.patch.object(
+            run, "maybe_relaunch", return_value=None
+        ), mock.patch.object(
+            run, "preflight", side_effect=run.StageError("preflight", "缺 config")
+        ):
+            code = run.main([
+                "--src", "x.si", run.LOG_FILE_OPTION, str(directory)
+            ])
+
+        self.assertEqual(code, 1)
+
+
+class _FixedNow:
+    """固定时间：默认日志名带时间戳，测试不能靠「刚好没跨秒」。"""
+
+    @staticmethod
+    def now() -> datetime:
+        return datetime(2030, 1, 2, 3, 4, 5)
+
+
+class LogPathTest(unittest.TestCase):
+    """默认路径 `work/tmp/run_<时间戳>.log`；`--log-file` 是内部参数，给什么用什么。"""
+
+    def test_log_file_defaults_to_none(self):
+        self.assertIsNone(run.parse_args(["--src", "x.si"]).log_file)
+        self.assertEqual(
+            run.parse_args([run.LOG_FILE_OPTION, "a.log"]).log_file, "a.log"
+        )
+
+    def test_default_path_is_work_tmp_run_timestamp(self):
+        with mock.patch.object(run, "datetime", _FixedNow):
+            path = run._log_path(run.parse_args([]))
+
+        self.assertEqual(path, run.LOG_DIR / "run_2030-01-02_03-04-05.log")
+
+    def test_explicit_path_wins_and_resolves_against_root(self):
+        with mock.patch.object(run, "datetime", _FixedNow):
+            path = run._log_path(
+                run.parse_args([run.LOG_FILE_OPTION, "work/x.log"])
+            )
+
+        self.assertEqual(path, run.ROOT / "work/x.log")
+
+    def test_second_run_in_the_same_second_gets_its_own_file(self):
+        # 同名就追加会把两次运行糊成一个文件，谁也读不出来
+        with mock.patch.object(run, "datetime", _FixedNow):
+            first = run._log_path(run.parse_args([]))
+            first.parent.mkdir(parents=True, exist_ok=True)
+            first.write_text("", encoding="utf-8")
+            second = run._log_path(run.parse_args([]))
+
+        self.assertEqual(first.name, "run_2030-01-02_03-04-05.log")
+        self.assertEqual(second.name, "run_2030-01-02_03-04-05-2.log")
+
+
+class RelaunchLogTest(unittest.TestCase):
+    """提权重启：原进程与提权子进程写同一份日志，子进程不再新建。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.log_path = self.tmp / "run.log"
+
+    def test_child_receives_the_file_parent_opened(self):
+        config = self.tmp / "config.toml"
+        config.write_text('[sampler]\nbackend = "etw"\n', encoding="utf-8")
+        calls: list[str] = []
+
+        def fake_shell(target, parameters, directory):
+            calls.append(parameters)
+            return 33
+
+        with (
+            mock.patch.object(run, "is_elevated", return_value=False),
+            mock.patch.object(run, "_shell_execute_runas", side_effect=fake_shell),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            code = run.main([
+                "--config", str(config), run.LOG_FILE_OPTION, str(self.log_path)
+            ])
+
+        self.assertEqual(code, 0)  # 已交给提权进程
+        self.assertEqual(len(calls), 1)
+        self.assertIn(run.LOG_FILE_OPTION, calls[0])
+        self.assertIn(str(self.log_path), calls[0])
+        # 原进程那半段在同一份文件里，子进程接着追加
+        text = self.log_path.read_text(encoding="utf-8")
+        self.assertIn("backend：etw", text)
+        self.assertIn("已交给提权进程", text)
 
 
 if __name__ == "__main__":

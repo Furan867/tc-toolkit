@@ -9,11 +9,13 @@
 
 #include "backend.hh"
 
+#include <array>
 #include <cstdint>
 #include <expected>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace hotspot {
 
@@ -34,6 +36,36 @@ enum class ProfileDecode {
 ProfileDecode decode_sampled_profile(std::uint8_t version,
                                      std::span<const std::uint8_t> user_data,
                                      SampledProfile &out);
+
+// EVENT_HEADER::ProviderId。ETW 头只留在 .cc，所以这里用与 GUID 同形的字段（Data1..Data4），
+// 由 .cc 转成 GUID 去比较；单测也能直接核对取值。
+struct EventProviderGuid {
+    std::uint32_t data1 = 0;
+    std::uint16_t data2 = 0;
+    std::uint16_t data3 = 0;
+    std::array<std::uint8_t, 8> data4{};
+};
+
+// SampledProfile 的 provider 是它所属的 MOF 事件类 PerfInfo 的类 GUID，不是会话控制 GUID
+// （{9e814aad-…} 那份只给 StartTraceW 的 Wnode.Guid 用，见 backend_etw.cc 的 kSystemTraceControlGuid）。
+// 出处：文档「PerfInfo class」页 `[Guid("{ce1dbfb4-137e-4da6-87b0-3f59aa102cbc}")] class PerfInfo`
+// 且「Event type value, 46」= sampled profile；「SampledProfile class」页 `class SampledProfile : PerfInfo`；
+// 「EVENT_TRACE_HEADER」页把 Guid 定义成「event trace class GUID」——ProviderId 就是它。
+inline constexpr EventProviderGuid kSampledProfileProviderGuid{
+    0xce1dbfb4, 0x137e, 0x4da6, {0x87, 0xb0, 0x3f, 0x59, 0xaa, 0x10, 0x2c, 0xbc}};
+inline constexpr std::uint16_t kSampledProfileEventId = 46;
+
+// abort 之前要把失败原因落盘：「为什么崩」只在终端上留不住（被 GUI 拉起、窗口一闪就没），
+// 崩溃后没有第二次机会。HOTSPOT_ETW_FAIL_LOG 覆盖路径给单测用。
+std::string etw_fail_log_path();
+
+// 一行失败记录：`<时间> etw：<what> 失败（code=<错误码> <系统错误文本>）`。
+std::string format_etw_fail_line(std::string_view timestamp, std::string_view what,
+                                 unsigned long code, std::string_view text);
+
+// 追加一行（换行由本函数加）；建目录、写文件失败一律忽略 —— 调用方马上要 abort，
+// 收尾路径上不能再抛失败。
+void append_etw_fail_log(const std::string &path, std::string_view line);
 
 struct EtwSession;
 

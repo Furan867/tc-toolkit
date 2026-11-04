@@ -1,13 +1,46 @@
 // SampledProfile 负载解码：固定字节 → (IP, TID)；未知版本与短负载一律丢弃，不猜布局。
+// 另外钉住两件纯逻辑：事件过滤用的 provider GUID 与失败日志（路径可 env 覆盖）。
 #include "backend_etw.hh"
 #include "test_support.hh"
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 using hotspot::decode_sampled_profile;
 using hotspot::ProfileDecode;
 using hotspot::SampledProfile;
+
+namespace {
+
+// _putenv 不拷贝字符串（缓冲区要活到环境变量被换掉），所以用 static 存赋值。
+void set_fail_log_override(const std::string &value)
+{
+    static std::string assignment;
+    assignment = "HOTSPOT_ETW_FAIL_LOG=" + value;
+    CHECK(_putenv(assignment.c_str()) == 0);
+}
+
+} // namespace
+
+TEST_CASE(etw_sampled_profile_filter_is_the_perfinfo_class_guid)
+{
+    // 出处：文档「PerfInfo class」页 [Guid("{ce1dbfb4-137e-4da6-87b0-3f59aa102cbc}")] class
+    // PerfInfo，且 Event type 46 = sampled profile；「SampledProfile class」页
+    // class SampledProfile : PerfInfo。会话控制 GUID（{9e814aad-…}）只给 StartTraceW 的
+    // Wnode.Guid 用，不当过滤条件。
+    const hotspot::EventProviderGuid &guid = hotspot::kSampledProfileProviderGuid;
+    CHECK_EQ(guid.data1, std::uint32_t{0xce1dbfb4});
+    CHECK_EQ(guid.data2, std::uint16_t{0x137e});
+    CHECK_EQ(guid.data3, std::uint16_t{0x4da6});
+    const std::array<std::uint8_t, 8> tail{0x87, 0xb0, 0x3f, 0x59, 0xaa, 0x10, 0x2c, 0xbc};
+    CHECK(guid.data4 == tail);
+    CHECK_EQ(hotspot::kSampledProfileEventId, std::uint16_t{46});
+}
 
 TEST_CASE(etw_decode_v1_reads_ip32_and_tid)
 {
@@ -58,4 +91,47 @@ TEST_CASE(etw_decode_short_payload_is_dropped)
     CHECK(decode_sampled_profile(2, payload, profile) == ProfileDecode::short_payload);
     CHECK(decode_sampled_profile(2, std::array<std::uint8_t, 0>{}, profile) ==
           ProfileDecode::short_payload);
+}
+
+TEST_CASE(etw_fail_log_path_defaults_under_work_tmp)
+{
+    set_fail_log_override("");
+    CHECK_EQ(hotspot::etw_fail_log_path(), std::string("work/tmp/etw_fail.log"));
+}
+
+TEST_CASE(etw_fail_log_path_follows_env_override)
+{
+    set_fail_log_override("work/tmp/custom/etw_fail.log");
+    CHECK_EQ(hotspot::etw_fail_log_path(), std::string("work/tmp/custom/etw_fail.log"));
+    set_fail_log_override("");
+}
+
+TEST_CASE(etw_fail_line_has_time_what_code_and_system_text)
+{
+    CHECK_EQ(hotspot::format_etw_fail_line("2026-11-05T10:00:00", "启用 SeSystemProfilePrivilege",
+                                           1300, "客户端没有所需的特权。"),
+             std::string("2026-11-05T10:00:00 etw：启用 SeSystemProfilePrivilege 失败"
+                         "（code=1300 客户端没有所需的特权。）"));
+    // 系统文本取不到时不留多余空格。
+    CHECK_EQ(hotspot::format_etw_fail_line("t", "StartTraceW", 5, ""),
+             std::string("t etw：StartTraceW 失败（code=5）"));
+}
+
+TEST_CASE(etw_fail_log_appends_lines_and_creates_directory)
+{
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "hotspot_etw_fail_log";
+    std::filesystem::remove_all(root);
+    const std::filesystem::path file = root / "nested" / "etw_fail.log";
+
+    hotspot::append_etw_fail_log(file.string(), "first");
+    hotspot::append_etw_fail_log(file.string(), "second");
+    {
+        std::ifstream in(file);
+        CHECK(in.good());
+        std::ostringstream text;
+        text << in.rdbuf();
+        CHECK_EQ(text.str(), std::string("first\nsecond\n"));
+    }
+    std::filesystem::remove_all(root);
 }

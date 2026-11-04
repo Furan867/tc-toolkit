@@ -126,7 +126,7 @@ samples.tsv v1 契约（§4.4）不变；「换后端」是 consumer 内部战�
   匹配 SampledProfile（GUID 与 ID 由探针实测钉死，§13）；`EventHeader.ThreadId` 即
   采样时线程；负载 v1 = IP(4)+TID(4)、v2 = IP(8)+TID(4)，未知版本丢弃并计数，不猜；
 - 提权：开内核日志会话需管理员令牌；ETW 非管理员时弹 UAC 重启自身，取消则退出；
-  suspend 不提权；
+  启动前显式启用 `SeSystemProfilePrivilege`，失败写日志后终止；suspend 不提权；
 - 会话生命周期：整个 REPL 只建一次会话，多次 `window` 复用；`quit`/EOF 时停止并
   关闭，退出后不持有会话；改间隔重建会话（`open --interval-ms`，§4.6）；
 - 进程过滤：ETW 事件全系统可见 → 窗口起点与终点各做一次目标进程全部 TID 枚举快照，

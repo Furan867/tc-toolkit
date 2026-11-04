@@ -1,5 +1,6 @@
 #include "backend_etw.hh"
 
+#include "run_dir.hh"
 #include "win_process.hh"
 
 // evntrace.h/evntcons.h 要求先有 windows.h；Win7 是这批 API（实时模式 + 事件回调）的下限。
@@ -21,6 +22,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <span>
 #include <sstream>
@@ -31,16 +34,74 @@
 #include <vector>
 
 namespace hotspot {
+
+std::string etw_fail_log_path()
+{
+    const char *override_path = std::getenv("HOTSPOT_ETW_FAIL_LOG");
+    if (override_path != nullptr && *override_path != '\0') {
+        return override_path;
+    }
+    return "work/tmp/etw_fail.log";
+}
+
+std::string format_etw_fail_line(std::string_view timestamp, std::string_view what,
+                                 unsigned long code, std::string_view text)
+{
+    std::string line;
+    line.reserve(timestamp.size() + what.size() + text.size() + 32);
+    line.append(timestamp)
+        .append(" etw：")
+        .append(what)
+        .append(" 失败（code=")
+        .append(std::to_string(code));
+    if (!text.empty()) {
+        line.append(" ").append(text);
+    }
+    line.append("）");
+    return line;
+}
+
+void append_etw_fail_log(const std::string &path, std::string_view line)
+{
+    const std::filesystem::path file{path};
+    if (file.has_parent_path()) {
+        // 目录已有/建不了都往下走：写不进去就只当日志丢了，不能挡住 abort。
+        std::error_code ignored;
+        std::filesystem::create_directories(file.parent_path(), ignored);
+    }
+    std::ofstream out(file, std::ios::app | std::ios::binary);
+    if (!out) {
+        return;
+    }
+    out << line << '\n';
+}
+
 namespace {
 
-// SystemTraceProvider 的 GUID（探针实测，spec §4.1）。SDK 用 DEFINE_GUID 把它声明成 extern，
-// 不定义 INITGUID 就得自己给一份常量。
-constexpr GUID kSystemTraceProviderGuid = {0x9e814aad,
-                                           0x3204,
-                                           0x11d2,
-                                           {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
-constexpr USHORT kSampledProfileId = 46;
+// StartTraceW 的 EVENT_TRACE_PROPERTIES.Wnode.Guid：NT Kernel Logger 这个**会话**的控制 GUID
+// （文档「NT Kernel Logger Constants」：SystemTraceControlGuid）。事件过滤不用它——内核事件头里
+// 的 ProviderId 是逐个事件类（MOF 类）的 GUID，SampledProfile 属 PerfInfo 类，见
+// kSampledProfileProviderGuid。
+constexpr GUID kSystemTraceControlGuid = {0x9e814aad,
+                                          0x3204,
+                                          0x11d2,
+                                          {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 
+GUID to_guid(const EventProviderGuid &source)
+{
+    return GUID{source.data1,
+                source.data2,
+                source.data3,
+                {source.data4[0], source.data4[1], source.data4[2], source.data4[3], source.data4[4],
+                 source.data4[5], source.data4[6], source.data4[7]}};
+}
+
+bool is_sampled_profile(const EVENT_RECORD &record)
+{
+    static const GUID provider = to_guid(kSampledProfileProviderGuid);
+    return IsEqualGUID(record.EventHeader.ProviderId, provider) &&
+           record.EventHeader.EventDescriptor.Id == kSampledProfileEventId;
+}
 
 std::uint32_t read_le32(const std::uint8_t *bytes)
 {
@@ -87,13 +148,15 @@ std::string win32_error_text(DWORD code)
 }
 
 // 失败直接终止（spec §4.1：开发期 assert，不做自动回退）——但错误码必须带系统文本，
-// 光看 87 分不清是「参数不对」还是「环境不对」。
+// 光看 87 分不清是「参数不对」还是「环境不对」。abort 之前先落一行日志：崩溃现场只有一次。
 [[noreturn]] void fail_fast(const std::string &what, DWORD code)
 {
     const std::string text = win32_error_text(code);
     std::fprintf(stderr, "✗ etw：%s 失败（code=%lu%s%s）\n", what.c_str(),
                  static_cast<unsigned long>(code), text.empty() ? "" : " ", text.c_str());
     std::fflush(stderr);
+    append_etw_fail_log(etw_fail_log_path(),
+                        format_etw_fail_line(iso_timestamp_now(), what, code, text));
     std::abort();
 }
 
@@ -114,6 +177,41 @@ std::string trace_start_hint(ULONG status)
         return "（NT Kernel Logger 已被占用，先 `logman stop \"NT Kernel Logger\" -ets`）";
     }
     return {};
+}
+
+// SeSystemProfilePrivilege 默认是「已禁用」的，不显式启用的话 StartTraceW 开 NT Kernel Logger
+// 会拿到 ERROR_ACCESS_DENIED。AdjustTokenPrivileges 在特权没分配时也返回 TRUE，真正的结论在
+// GetLastError() == ERROR_NOT_ALL_ASSIGNED（非提升进程就在这里停住，别再往下走）。
+void enable_system_profile_privilege()
+{
+    HANDLE token = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token) == 0) {
+        fail_fast("OpenProcessToken", GetLastError());
+    }
+
+    LUID luid{};
+    // 不能用 SE_SYSTEM_PROFILE_NAME：它是 TEXT()，本项目不定义 UNICODE，展开成窄字符对不上 W 版接口。
+    if (LookupPrivilegeValueW(nullptr, L"SeSystemProfilePrivilege", &luid) == 0) {
+        const DWORD code = GetLastError();
+        CloseHandle(token);
+        fail_fast("LookupPrivilegeValueW(SeSystemProfilePrivilege)", code);
+    }
+
+    TOKEN_PRIVILEGES privileges{};
+    privileges.PrivilegeCount = 1;
+    privileges.Privileges[0].Luid = luid;
+    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr) == 0) {
+        const DWORD code = GetLastError();
+        CloseHandle(token);
+        fail_fast("AdjustTokenPrivileges(SeSystemProfilePrivilege)", code);
+    }
+    // 必须在 CloseHandle 之前读：后面的调用会把 last error 覆盖掉。
+    const DWORD status = GetLastError();
+    CloseHandle(token);
+    if (status != ERROR_SUCCESS) {
+        fail_fast("启用 SeSystemProfilePrivilege", status);
+    }
 }
 
 // EVENT_TRACE_PROPERTIES 后面必须跟日志器名，且 Wnode.BufferSize 要覆盖整块；
@@ -222,11 +320,14 @@ struct EtwSession {
 
 void EtwSession::start(int interval_ms)
 {
+    // 先启特权再开会话：少了它 StartTraceW 只会给一个 code=5，看不出是权限没启用还是没分配。
+    enable_system_profile_privilege();
+
     std::vector<std::byte> buffer = make_properties_buffer();
     auto *properties = reinterpret_cast<EVENT_TRACE_PROPERTIES *>(buffer.data());
     properties->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
     properties->Wnode.ClientContext = 1; // QPC 时间戳
-    properties->Wnode.Guid = kSystemTraceProviderGuid;
+    properties->Wnode.Guid = kSystemTraceControlGuid;
     properties->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
     properties->FlushTimer = 1;
     properties->EnableFlags = EVENT_TRACE_FLAG_PROFILE;
@@ -352,8 +453,7 @@ void EtwSession::handle_event(const EVENT_RECORD &record)
 {
     // 只开了 EVENT_TRACE_FLAG_PROFILE，理论上只该来 SampledProfile；来了别的就计数，
     // 不静默当成样本（别的 id 的负载布局不同）。
-    if (!IsEqualGUID(record.EventHeader.ProviderId, kSystemTraceProviderGuid) ||
-        record.EventHeader.EventDescriptor.Id != kSampledProfileId) {
+    if (!is_sampled_profile(record)) {
         const std::lock_guard lock(mutex);
         ++counts.ignored_events;
         return;

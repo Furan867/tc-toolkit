@@ -17,14 +17,14 @@ ctest --test-dir hotspot/consumer/build --output-on-failure
 ## 用法
 
 ```text
-hotspot-consumer [--config hotspot/config.toml]
+hotspot-consumer [--config hotspot/config.ini]
 > open work/hook/all/hook_out_001.bin [--pid N] [--interval-ms 1]
-> window 10 save          # 采 10 s 并落 run 目录（samples.tsv + run.toml）
+> window 10 save          # 采 10 s 并落 run 目录（samples.tsv + run.ini）
 > status / locate / save [dir] / quit
 ```
 
 `open` 之后定位/枚举只做一次，多窗口复用；`window` 开头轻量校验线程集合。
-`save` 建 `runs/<ts>_<产物名>_t<秒>/`，写 `samples.tsv` + `run.toml`，读两次 freq
+`save` 建 `runs/<ts>_<产物名>_t<秒>/`，写 `samples.tsv` + `run.ini`，读两次 freq
 （`freq.command`，超时 `freq.timeout_sec`）填入 `freq.start_hz/end_hz`。
 无游戏、无 PID、产物不存在都只报错，REPL 不退出（`quit`/EOF 才退）。
 

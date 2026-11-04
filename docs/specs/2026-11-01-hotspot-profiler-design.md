@@ -30,7 +30,7 @@
   线程数秒；一次性调用器形态作废）；
 - 归因链不依赖 MSVC/PDB；归因数据全部来自**编译时产出的侧车文件**，运行时零现场
   解析（除内存定位）；
-- 无硬编码路径：一切外部路径走命令行参数或单一 config 文件（`hotspot/config.toml`，
+- 无硬编码路径：一切外部路径走命令行参数或单一 config 文件（`hotspot/config.ini`，
   键清单见 §10）。
 
 **非目标 / 范围外**（正文即规范）：
@@ -91,7 +91,7 @@
 ```
 tc-toolkit/hotspot/
   consumer/     # C++23：采样后端×2（etw 主）+ 共享聚合层 + 常驻 REPL → samples.tsv
-  tools/        # ours join 脚本（侧车生成，W3；只读装配器产物）+ config.toml
+  tools/        # ours join 脚本（侧车生成，W3；只读装配器产物）+ config.ini
   analysis/     # Python（标准库）：归因引擎 + 四张热度表 + G3′/G4 基线
   workspace/    # 运行期工作目录（产物引用、run 归档、baseline），.gitignore（§10）
 ```
@@ -206,8 +206,8 @@ v1 语义。
 - 线程集合在 `window` 开头轻量校验（线程数/存活变化则重枚举，毫秒级代价）；
 - 最小命令集：`open <artifact> [--pid N] [--interval-ms <ms>]` 定位并缓存 /
   `window <sec> [save]` 采一个窗口 / `status` / `locate` 重跑定位 / `save [dir]` 落
-  run 目录（建目录、写 samples.tsv+run.toml、调外部 freq 命令取首尾读数）/ `quit`；
-- run 目录的创建与 `run.toml` 初写归 `save`（W2 范围）；analysis 只回写 buckets 与
+  run 目录（建目录、写 samples.tsv+run.ini、调外部 freq 命令取首尾读数）/ `quit`；
+- run 目录的创建与 `run.ini` 初写归 `save`（W2 范围）；analysis 只回写 buckets 与
   baseline（§10）；
 - 外部频率读数（§9）经 config 给出的外部命令调用，路径不硬编码（§10）；
 - etw 后端在同一 REPL 内保持会话存活（管理员锁一次）；改间隔需重建会话（§4.1），
@@ -400,7 +400,7 @@ store 魔数 → 机器码搜立即数锚点 → 「标记恒 17 字节」坐标
 | G2 | 侧车正确性三方抽查 | 抽样总体 = sidecar `segments` 均匀取 N 段（N 默认 20，可调）；对每段：`objdump --dwarf=decodedline <obj>` 输出 / sidecar 行 / `objdump -dl <obj>` 该段首指令行注，三方对齐（坐标按 §2；⚠️ llvm-dwarfdump 不在 `.deps/llvm/bin`——备选：W3 前置 `tools/fetch_llvm.py --extra` 拉一份，或全程 objdump） | ours Provider 构建后 |
 | G3′ | 重复性 | 同一产物同参数背靠背两个 run；top-5 **按 (type,id) 集合重合数**（阈值验收时由负责人现场定；不比顺序）；同一脚本对两份 report 计算 | 每份产物首测 |
 | G3″ | 回归对照 | ours 与 ref 各编同电路各采一次，热点分配显著差异人工审定 | 依赖 ref Provider（不在范围，暂缓） |
-| G4 | 覆盖水位 | 三桶份额写入 run.toml（analysis 回写）；基线 = `workspace/baseline.json`（首跑建）：bucket=0 份额低于基线（阈值验收时由负责人现场定）→ 告警；etw 侧途中新开线程**样本丢失不可计数**，告警信号 = bucket 份额下降 + 首尾快照差集非空（§4.1） | 每次报表附带 |
+| G4 | 覆盖水位 | 三桶份额写入 run.ini（analysis 回写）；基线 = `workspace/baseline.json`（首跑建）：bucket=0 份额低于基线（阈值验收时由负责人现场定）→ 告警；etw 侧途中新开线程**样本丢失不可计数**，告警信号 = bucket 份额下降 + 首尾快照差集非空（§4.1） | 每次报表附带 |
 
 aliasing 怀疑的处理路径：缩短间隔复跑比一份（§4.2）——G3′ 的变体用法。
 
@@ -419,12 +419,12 @@ aliasing 怀疑的处理路径：缩短间隔复跑比一份（§4.2）——G3�
 
 ```
 tc-toolkit/hotspot/
-  config.example.toml  # 入库的默认/示例 config（键见下）
-  config.toml          # 运行时配置，不入库（.gitignore）：artifact 目录、freq 外部命令、
+  config.example.ini  # 入库的默认/示例 config（键见下）
+  config.ini          # 运行时配置，不入库（.gitignore）：artifact 目录、freq 外部命令、
                        # 游戏进程名、ETW 会话名、锁目录（game.lock 协议）、workspace 路径
   workspace/
     runs/<ts>_<artname>_t<sec>/     # profile bundle = 一个 run
-       run.toml    # consumer `save` 初写（产物引用 path+sha256——**引用而不拷贝** hook 的
+       run.ini    # consumer `save` 初写（产物引用 path+sha256——**引用而不拷贝** hook 的
                    # .bin；采样参数；freq_start/freq_end），analysis 补写 buckets{}
        samples.tsv
        sidecar.json（同产物多 run 可引用共享侧车；亦允许拷入以便离线）
@@ -434,7 +434,8 @@ tc-toolkit/hotspot/
   <产物库同步>                   # hook 落盘的 .si/.bin 依旧在 work/hook/，工具**只读**
 ```
 
-**`config.toml` 键（默认值；W2 冻结；运行时配置不入库，仓库只放 `config.example.toml`）**：
+**`config.ini` 键（默认值；W2 冻结；运行时配置不入库，仓库只放 `config.example.ini`）**：
+键名写作 `[section] key`；值用 JSON 编码（字符串带引号，布尔/数字裸写）。
 
 | 键 | 类型 | 默认 | 语义 |
 |---|---|---|---|
@@ -450,14 +451,16 @@ tc-toolkit/hotspot/
 | `freq.command` | str | `python tools/read_freq.py --samples 1` | 外部频率读数命令 |
 | `freq.timeout_sec` | float | `5` | 单次读数超时 |
 
-**`run.toml` 键（consumer 初写，analysis 只回写 `buckets`）**：
+**`run.ini` 键（consumer 初写，analysis 只回写 `buckets`）**：
+`schema`/`created_at`/`backend` 在 `[run]` 段；其余在 artifact/locate/window/freq/buckets 段；
+列表与字符串用 JSON 编码；`artifact.num` 缺失时省略该键。
 
 | 键 | 类型 | 语义 |
 |---|---|---|
 | `schema` | int | run 格式版本（=1） |
 | `created_at` | str(ISO) | 落盘时刻 |
 | `artifact.path` / `artifact.sha256` / `artifact.file_len` / `artifact.code_len` | str/int | 产物引用（**不拷贝**；sha 含 8 字节头；code_len = file_len-8） |
-| `artifact.num` | str\|null | hook 编译点编号（三位） |
+| `artifact.num` | str | hook 编译点编号（三位；缺失时省略该键） |
 | `locate.bases` | list[str] | 全部整段校验通过的副本基址（hex） |
 | `locate.feature_off` | int | 特征窗偏移（默认 `0x400`） |
 | `window.sec` / `window.interval_ms` / `window.sample_count` | num | 实际窗口参数与样本数 |
@@ -467,8 +470,8 @@ tc-toolkit/hotspot/
 | `buckets` | map | analysis 回写三桶份额 |
 | `tick.start` / `tick.end` | int\|null | 精确 tick（待实验，未定） |
 
-- runs/ 与 `config.toml` 不进 git（.gitignore）；仓库只放 `config.example.toml`；
-- 全部路径（产物、freq 命令、游戏进程名、会话名）走命令行参数或 `config.toml`
+- runs/ 与 `config.ini` 不进 git（.gitignore）；仓库只放 `config.example.ini`；
+- 全部路径（产物、freq 命令、游戏进程名、会话名）走命令行参数或 `config.ini`
  键（上表），**工具内无硬编码路径**；路径 layout 迁移只改参数、不改代码。
 
 ## 11. 使用方式（人工流程与 CLI 形状；命令参数名待负责人过目）
@@ -487,7 +490,7 @@ python hotspot/tools/make_sidecar.py --blob c.bin --obj c.obj \
 # (2) 常驻采样会话（W2）——持 work/tmp/locks/game.lock；识别/定位一次，多窗口复用
 hotspot-consumer                        # 进入 REPL（准确参数形状以 W2 落地为准）
 > open c.bin [--pid N] [--interval-ms 1]  # 定位 + 枚举线程并缓存
-> window 10 save                        # 采 10 s 并落 run 目录（samples.tsv+run.toml）
+> window 10 save                        # 采 10 s 并落 run 目录（samples.tsv+run.ini）
 > window 10 save                        # 再采一次（G3′ 重复性 = 两次 save 对比，§8）
 > quit
 
@@ -510,7 +513,7 @@ python hotspot/analysis/report.py --run workspace/runs/<run目录>
 | 步 | 内容 | 检收 |
 |---|---|---|
 | W1 | 调试信息实现（C API）：DIBuilder 基建（module flag 关键：Debug Info Version=3、**Dwarf Version=4 显式置位**）/ DebugLoc 行号 / 元件表 el.tsv（源文件原文解析，每注释段一行；`--elements-out`）/ `--debug-info` flag / 装配器吐 `<blob>.offsets`（`--offsets-out`）/ G1 挂判据 | G1 绿 + 元件表抽查 |
-| W2 | consumer：共享聚合层 / suspend 后端（已落地）/ etw 自写（实时，§4.1）/ 常驻 REPL（open/window/save，含 `open --interval-ms`）+ 外部 freq 命令进 run.toml + 单样本暂停时长实测回填（§4.0） | 编译跑通；解码单测（固定字节→IP/TID）+ 事件注入单测（合成 (IP,TID) 序列喂聚合/分桶函数）；探针确认真实事件；真样本冒烟需持 `work/tmp/locks/game.lock` |
+| W2 | consumer：共享聚合层 / suspend 后端（已落地）/ etw 自写（实时，§4.1）/ 常驻 REPL（open/window/save，含 `open --interval-ms`）+ 外部 freq 命令进 run.ini + 单样本暂停时长实测回填（§4.0） | 编译跑通；解码单测（固定字节→IP/TID）+ 事件注入单测（合成 (IP,TID) 序列喂聚合/分桶函数）；探针确认真实事件；真样本冒烟需持 `work/tmp/locks/game.lock` |
 | W3 | ours join 脚本（读 obj × el.tsv × `.offsets`，产 lines/segments/stubs/meta；**只读装配器产物**）+ G2 抽查（objdump decodedline 优先） | G2 绿 |
 | W4 | 归因 + report.md / report.html（四表交互页 + 对比页，页面集草案待负责人过目）+ workspace index.html + G3′/G4 + baseline.json | G3′ 重合数由负责人现场定 + 四表人工抽认 |
 

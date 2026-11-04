@@ -22,7 +22,7 @@
   sidecar 按 sha 缓存在 `hotspot/workspace/cache/sidecar/`
 - `python hotspot/run.py clean`：清 sidecar 缓存 + `work/tmp/hotspot_run`；`--runs`
   清历史 run；`--dry-run` 只列不删
-- 配置：`config.toml` 移出仓库，`config.example.toml` 入库
+- 配置：`config.ini` 移出仓库，`config.example.ini` 入库
 
 ## 当前
 

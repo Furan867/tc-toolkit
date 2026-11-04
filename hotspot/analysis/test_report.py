@@ -8,14 +8,15 @@ testdata 全部由本文件按下面的台账**程序生成**（`ELEMENTS` / `SE
 """
 from __future__ import annotations
 
+import configparser
 import copy
 import json
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 REPORT = HERE / "report.py"
@@ -97,9 +98,12 @@ FUNCTIONS = [
      "file": "hook_src_009.si", "tag": "subprogram", "depth": 1, "origin": None},
 ]
 
-RUN_TOML = """\
+RUN_INI = """\
+; consumer 初写；analysis 只回写 [buckets]（spec §10）
+[run]
 schema = 1
 created_at = "2026-11-03T10:00:00+08:00"
+backend = "etw"
 
 [artifact]
 path = "work/hook/c001.bin"
@@ -143,13 +147,29 @@ def sidecar_doc() -> dict:
     }
 
 
+def read_ini(path: Path) -> dict[str, dict[str, Any]]:
+    """按冻结的 INI 子集读回（值都是 JSON 编码）；断言用它看回写结果。"""
+    parser = configparser.ConfigParser(
+        delimiters=("=",),
+        interpolation=None,
+        comment_prefixes=("#", ";"),
+        inline_comment_prefixes=("#", ";"),
+    )
+    try:
+        parser.read_string(path.read_text(encoding="utf-8"))
+    except (OSError, configparser.Error) as exc:
+        raise AssertionError(f"读不了 {path}：{exc}") from exc
+    return {section: {key: json.loads(raw) for key, raw in parser.items(section, raw=True)}
+            for section in parser.sections()}
+
+
 def write_run(root: Path, name: str, samples: list[tuple[int, int, int, int]],
               sidecar: dict | None = None, sample_count: int | None = None) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
     total = sample_count if sample_count is not None else sum(s[3] for s in samples)
-    (run_dir / "run.toml").write_text(
-        RUN_TOML.format(sha=SHA256, file_len=FILE_LEN, code_len=CODE_LEN, sample_count=total),
+    (run_dir / "run.ini").write_text(
+        RUN_INI.format(sha=SHA256, file_len=FILE_LEN, code_len=CODE_LEN, sample_count=total),
         encoding="utf-8")
     rows = ["# samples.tsv v1", "bucket\tblob_offset\tthread_id\tcount"]
     rows += [f"{b}\t{o}\t{t}\t{c}" for b, o, t, c in samples]
@@ -262,7 +282,7 @@ class ReportCase(unittest.TestCase):
         self.assertEqual(buckets[6][1:], ["30", "16.5%"])      # bucket1
         self.assertEqual(buckets[7][1:], ["20", "11.0%"])      # bucket2
 
-        doc = tomllib.loads((self.run_a / "run.toml").read_text(encoding="utf-8"))
+        doc = read_ini(self.run_a / "run.ini")
         self.assertEqual(doc["buckets"]["total"], 182)
         self.assertEqual(doc["buckets"]["bucket0"], 132)
         self.assertEqual(doc["buckets"]["bucket0_attributed"], 112)
@@ -270,8 +290,8 @@ class ReportCase(unittest.TestCase):
         self.assertEqual(doc["buckets"]["bucket0_root"], 15)
         self.assertAlmostEqual(doc["buckets"]["bucket0_share"], 132 / 182, places=6)
         self.assertAlmostEqual(doc["buckets"]["bucket2_share"], 20 / 182, places=6)
-        # 回写只碰 buckets：其余键原样还在
-        self.assertEqual(doc["schema"], 1)
+        # 回写只碰 buckets：其余 section 与键原样还在
+        self.assertEqual(doc["run"]["schema"], 1)
         self.assertEqual(doc["artifact"]["code_len"], CODE_LEN)
         self.assertEqual(doc["window"]["sample_count"], 182)
 
@@ -436,7 +456,7 @@ class ReportCase(unittest.TestCase):
 
         missing = self.workspace / "runs" / "no_samples"
         missing.mkdir(parents=True)
-        (missing / "run.toml").write_text(RUN_TOML.format(
+        (missing / "run.ini").write_text(RUN_INI.format(
             sha=SHA256, file_len=FILE_LEN, code_len=CODE_LEN, sample_count=0), encoding="utf-8")
         (missing / "sidecar.json").write_text(json.dumps(sidecar_doc()), encoding="utf-8")
         cases.append((missing, "samples.tsv", "缺文件"))
@@ -458,6 +478,10 @@ class ReportCase(unittest.TestCase):
             ("bad_coord", lambda d: (d / "sidecar.json").write_text(
                 json.dumps({**sidecar_doc(), "segments": [
                     {"start": 0, "end": 4096, "id": 1}]}), encoding="utf-8"), "坐标越界"),
+            # 冻结格式要求值都是 JSON 编码：裸写一个字符串/带单位的数字必须报错，不能猜
+            ("bad_value", lambda d: (d / "run.ini").write_text(
+                "[run]\nschema = 1\n\n[artifact]\nfile_len = 4096 oops\n", encoding="utf-8"),
+             "不是 JSON 编码"),
         ]:
             run_dir = write_run(self.workspace / "runs", name, SAMPLES_A)
             mutate(run_dir)
@@ -469,11 +493,11 @@ class ReportCase(unittest.TestCase):
             self.assertIn(needle, proc.stderr, f"{label}: {proc.stderr}")
             self.assertFalse((run_dir / "report.md").exists(), f"{label} 不该产出报告")
 
-        no_toml = self.workspace / "runs" / "no_toml"
-        no_toml.mkdir(parents=True)
-        proc = run_cli("--run", str(no_toml))
+        no_ini = self.workspace / "runs" / "no_ini"
+        no_ini.mkdir(parents=True)
+        proc = run_cli("--run", str(no_ini))
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("缺 run.toml", proc.stderr)
+        self.assertIn("缺 run.ini", proc.stderr)
 
 
 if __name__ == "__main__":

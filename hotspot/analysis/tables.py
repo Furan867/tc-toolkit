@@ -233,7 +233,7 @@ def freq_note(meta: RunMeta) -> str:
     """近似口径（spec §9）：频率是游戏 UI 主频读数，被平滑、1 s 更新。"""
     start, end = meta.freq_start_hz, meta.freq_end_hz
     if not start and not end:
-        return "频率读数缺失（run.toml 没有 freq.start_hz / freq.end_hz），tick 估算不可用"
+        return "频率读数缺失（run.ini 没有 freq.start_hz / freq.end_hz），tick 估算不可用"
     head = "近似口径（游戏 UI 主频显示值，被平滑、1 s 更新；非精确 tick）："
     parts = []
     if start:
@@ -253,7 +253,7 @@ def _notes(meta: RunMeta, attribution: Attribution) -> tuple[str, ...]:
     notes = [confidence_note(attribution.attributed), freq_note(meta)]
     if meta.sample_count and meta.sample_count != attribution.total:
         notes.append(
-            f"run.toml 的 window.sample_count={meta.sample_count} 与 samples.tsv 合计 "
+            f"run.ini 的 window.sample_count={meta.sample_count} 与 samples.tsv 合计 "
             f"{attribution.total} 不一致（采样中途截断或回写前参数变了？）")
     if meta.bases:
         notes.append(f"内存中整段校验通过的产物副本 {len(meta.bases)} 处（多副本已折算到同一坐标）")

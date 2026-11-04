@@ -12,6 +12,7 @@ suspend 免管理员，不提权也不弹框。提权重启会在参数里加 `-
 from __future__ import annotations
 
 import argparse
+import configparser
 import contextlib
 import ctypes
 import hashlib
@@ -35,7 +36,7 @@ MAKE_SIDECAR = ROOT / "hotspot/tools/make_sidecar.py"
 REPORT = ROOT / "hotspot/analysis/report.py"
 READ_FREQ = ROOT / "tools/read_freq.py"
 SIMCTL = ROOT / "tools/simctl.py"
-DEFAULT_CONFIG = ROOT / "hotspot/config.toml"
+DEFAULT_CONFIG = ROOT / "hotspot/config.ini"
 SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
 WORK_TMP = ROOT / "work/tmp/hotspot_run"
 RUNS_DIR = ROOT / "hotspot/workspace/runs"
@@ -340,30 +341,24 @@ def is_elevated() -> bool:
 
 
 def sampler_backend(config: Path) -> str:
-    """config.toml 里的 `sampler.backend`；文件读不到就按 consumer 的默认值 etw。
+    """config.ini 里的 `sampler.backend`；文件读不到就按 consumer 的默认值 etw。
 
-    只认 `[sampler]` 段下的 `key = value`（这份配置是我们自己写的，没有嵌套表与内联表）；
-    行内 `#` 之后当注释切掉，值里的引号去掉。不认识的 backend 值照原样返回，
-    由 consumer 报错，而不是在这里猜。
+    值按冻结的 INI 子集解：字符串是 JSON 编码的（`backend = "suspend"`），解析不了就当没写。
+    不认识的 backend 值照原样返回，由 consumer 报错，而不是在这里猜。
     """
+    parser = configparser.ConfigParser(
+        delimiters=("=",),
+        interpolation=None,
+        comment_prefixes=("#", ";"),
+        inline_comment_prefixes=("#", ";"),
+    )
     try:
-        text = config.read_text(encoding="utf-8")
-    except OSError:
+        with config.open(encoding="utf-8-sig") as handle:
+            parser.read_file(handle)
+        value = json.loads(parser.get("sampler", "backend", raw=True))
+    except (OSError, UnicodeDecodeError, configparser.Error, json.JSONDecodeError):
         return BACKEND_REQUIRING_ADMIN
-    section = ""
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1].strip()
-            continue
-        if section != "sampler" or "=" not in line:
-            continue
-        key, value = (part.strip() for part in line.split("=", 1))
-        if key == "backend":
-            return value.strip("\"'") or BACKEND_REQUIRING_ADMIN
-    return BACKEND_REQUIRING_ADMIN
+    return value if isinstance(value, str) and value else BACKEND_REQUIRING_ADMIN
 
 
 def needs_elevation(backend: str, elevated: bool) -> bool:
@@ -561,7 +556,7 @@ def preflight(opts: argparse.Namespace) -> tuple[Path, Path]:
     if not config.is_file():
         raise StageError(
             "preflight",
-            f'找不到 {config}；复制 hotspot/config.example.toml 并把 sampler.backend 改成 "suspend"',
+            f'找不到 {config}；复制 hotspot/config.example.ini 并把 sampler.backend 改成 "suspend"',
         )
 
     for name, path in (("simplexc_cli", SIMPLEXC), ("hotspot-consumer", CONSUMER)):
@@ -704,7 +699,7 @@ def sample_stage(
         timeout=opts.window + 90,
     )
 
-    for name in ("run.toml", "samples.tsv"):
+    for name in ("run.ini", "samples.tsv"):
         if not (run_dir / name).is_file():
             raise StageError("sample", f"save 没有写出 {name}", output=output[-800:])
 
@@ -827,7 +822,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--out",
         help="run 目录（默认 hotspot/workspace/runs/<ts>_<name>_t<秒>）",
     )
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="config.toml 路径")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="config.ini 路径")
     parser.add_argument("--clean", action="store_true", help="成功后删除中间产物")
     parser.add_argument(
         "--keep-running",

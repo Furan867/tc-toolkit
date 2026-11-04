@@ -26,14 +26,14 @@ std::string_view strip_comment(std::string_view line)
         const char c = line[i];
         if (c == '"' && (i == 0 || line[i - 1] != '\\')) {
             in_string = !in_string;
-        } else if (c == '#' && !in_string) {
+        } else if ((c == '#' || c == ';') && !in_string) {
             return line.substr(0, i);
         }
     }
     return line;
 }
 
-std::expected<TomlTable::Value, std::string> parse_value(std::string_view text)
+std::expected<IniTable::Value, std::string> parse_value(std::string_view text)
 {
     text = trim(text);
     if (text.empty()) {
@@ -68,13 +68,13 @@ std::expected<TomlTable::Value, std::string> parse_value(std::string_view text)
             }
             out.push_back(c);
         }
-        return TomlTable::Value{std::move(out)};
+        return IniTable::Value{std::move(out)};
     }
     if (text == "true") {
-        return TomlTable::Value{true};
+        return IniTable::Value{true};
     }
     if (text == "false") {
-        return TomlTable::Value{false};
+        return IniTable::Value{false};
     }
     // 整数优先；带 . 或 e 的走浮点。
     if (text.find_first_of(".eE") != std::string_view::npos) {
@@ -83,19 +83,19 @@ std::expected<TomlTable::Value, std::string> parse_value(std::string_view text)
         if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
             return std::unexpected("无法解析的浮点数");
         }
-        return TomlTable::Value{value};
+        return IniTable::Value{value};
     }
     std::int64_t value = 0;
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
     if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
         return std::unexpected("无法解析的整数");
     }
-    return TomlTable::Value{value};
+    return IniTable::Value{value};
 }
 
 } // namespace
 
-std::optional<std::string> TomlTable::parse(std::string_view text)
+std::optional<std::string> IniTable::parse(std::string_view text)
 {
     std::string prefix;
     std::size_t line_no = 0;
@@ -111,7 +111,7 @@ std::optional<std::string> TomlTable::parse(std::string_view text)
         }
         const auto fail = [line_no](std::string_view what) {
             std::ostringstream out;
-            out << "config.toml:" << line_no << ": " << what;
+            out << "config.ini:" << line_no << ": " << what;
             return out.str();
         };
 
@@ -148,12 +148,12 @@ std::optional<std::string> TomlTable::parse(std::string_view text)
     return std::nullopt;
 }
 
-void TomlTable::set(const std::string &key, Value value)
+void IniTable::set(const std::string &key, Value value)
 {
     values_.insert_or_assign(key, std::move(value));
 }
 
-std::optional<TomlTable::Value> TomlTable::get(std::string_view key) const
+std::optional<IniTable::Value> IniTable::get(std::string_view key) const
 {
     const auto it = values_.find(key);
     if (it == values_.end()) {
@@ -180,9 +180,9 @@ const char *backend_name(Backend backend)
     return backend == Backend::etw ? "etw" : "suspend";
 }
 
-std::expected<Config, std::string> config_from_toml(std::string_view text)
+std::expected<Config, std::string> config_from_ini(std::string_view text)
 {
-    TomlTable table;
+    IniTable table;
     if (auto problem = table.parse(text); problem.has_value()) {
         return std::unexpected(*problem);
     }
@@ -273,7 +273,7 @@ std::expected<Config, std::string> config_from_toml(std::string_view text)
             }
         } else {
             // 拼错的键必须报出来：写错一个字母就静默用默认值 = 采到的参数不是想采的。
-            return std::unexpected("config.toml 有未知键 " + key);
+            return std::unexpected("config.ini 有未知键 " + key);
         }
     }
     return config;
@@ -291,7 +291,7 @@ std::expected<Config, std::string> load_config(const std::filesystem::path &path
     }
     std::ostringstream buffer;
     buffer << in.rdbuf();
-    return config_from_toml(buffer.str());
+    return config_from_ini(buffer.str());
 }
 
 } // namespace hotspot

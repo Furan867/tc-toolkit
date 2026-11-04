@@ -1,5 +1,5 @@
-// `save`：把当前聚合结果落成一个 run 目录（run.toml + samples.tsv），
-// 并调用 config 里的外部 freq 命令取读数（spec §10 run.toml 键表）。
+// `save`：把当前聚合结果落成一个 run 目录（run.ini + samples.tsv），
+// 并调用 config 里的外部 freq 命令取读数（spec §10 run.ini 键表）。
 #pragma once
 
 #include "config.hh"
@@ -46,7 +46,7 @@ std::string iso_timestamp_now();
 std::string make_run_dir_name(const std::filesystem::path &artifact_path,
                               const std::string &timestamp, int window_sec);
 
-std::string render_run_toml(const RunRecord &record);
+std::string render_run_ini(const RunRecord &record);
 
 struct CommandResult {
     int exit_code = 0;
@@ -61,7 +61,7 @@ std::expected<CommandResult, std::string> run_command(std::string_view command_l
 // read_freq.py 的输出里取 sim_speed 的 Hz；读不到（游戏没跑/偏移过时）返回 nullopt。
 std::optional<double> parse_sim_speed_hz(std::string_view output);
 
-// 建 run 目录、写 samples.tsv 与 run.toml。目录已存在则报错（同名 run = 撞了）。
+// 建 run 目录、写 samples.tsv 与 run.ini。目录已存在则报错（同名 run = 撞了）。
 std::expected<std::filesystem::path, std::string>
 write_run_dir(const std::filesystem::path &run_dir, const RunRecord &record,
               const SampleTable &samples);

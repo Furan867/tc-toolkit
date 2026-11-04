@@ -1,6 +1,10 @@
-"""run.py 的编排单测：不启动游戏、不编译、不采样。"""
+"""hotspot 脚本的单测：run.py 的编排 + tools/migrate_toml_to_ini.py 的迁移。
+
+不启动游戏、不编译、不采样、不弹 UAC。
+"""
 from __future__ import annotations
 
+import configparser
 import hashlib
 import importlib.util
 import io
@@ -12,6 +16,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -19,6 +24,26 @@ SPEC = importlib.util.spec_from_file_location("hotspot_run", HERE.parent / "run.
 assert SPEC and SPEC.loader
 run = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(run)
+
+MIGRATE_SPEC = importlib.util.spec_from_file_location(
+    "hotspot_migrate_toml_to_ini", HERE.parent / "tools" / "migrate_toml_to_ini.py"
+)
+assert MIGRATE_SPEC and MIGRATE_SPEC.loader
+migrate = importlib.util.module_from_spec(MIGRATE_SPEC)
+MIGRATE_SPEC.loader.exec_module(migrate)
+
+
+def read_ini(path: Path) -> dict[str, dict[str, Any]]:
+    """按冻结的 INI 子集读回（值都是 JSON 编码）。"""
+    parser = configparser.ConfigParser(
+        delimiters=("=",),
+        interpolation=None,
+        comment_prefixes=("#", ";"),
+        inline_comment_prefixes=("#", ";"),
+    )
+    parser.read_string(path.read_text(encoding="utf-8"))
+    return {section: {key: json.loads(raw) for key, raw in parser.items(section, raw=True)}
+            for section in parser.sections()}
 
 
 def setUpModule() -> None:
@@ -69,7 +94,7 @@ class PreflightTest(unittest.TestCase):
     def test_missing_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             opts = run.parse_args(
-                ["--src", "x.si", "--config", str(Path(tmp) / "no.toml")]
+                ["--src", "x.si", "--config", str(Path(tmp) / "no.ini")]
             )
             with self.assertRaises(run.StageError) as caught:
                 run.preflight(opts)
@@ -93,7 +118,7 @@ class SampleStageTest(unittest.TestCase):
             )
             run_dir = Path(save_line.split(" ", 1)[1])
             run_dir.mkdir(parents=True)
-            (run_dir / "run.toml").write_text("")
+            (run_dir / "run.ini").write_text("")
             (run_dir / "samples.tsv").write_text("")
             return output
 
@@ -101,7 +126,7 @@ class SampleStageTest(unittest.TestCase):
             run, "_run", side_effect=fake_run
         ):
             stats = run.sample_stage(
-                opts, Path("cfg.toml"), Path(tmp) / "blob.bin", Path(tmp) / "run"
+                opts, Path("cfg.ini"), Path(tmp) / "blob.bin", Path(tmp) / "run"
             )
             text = captured[0]
             self.assertIn("open", text)
@@ -119,7 +144,7 @@ class SampleStageTest(unittest.TestCase):
         ):
             with self.assertRaises(run.StageError) as caught:
                 run.sample_stage(
-                    opts, Path("cfg.toml"), Path(tmp) / "b", Path(tmp) / "r"
+                    opts, Path("cfg.ini"), Path(tmp) / "b", Path(tmp) / "r"
                 )
             self.assertEqual(caught.exception.stage, "sample")
 
@@ -219,7 +244,7 @@ class _MainHarness(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.tmp = Path(temp.name)
-        self.config = self.tmp / "config.toml"
+        self.config = self.tmp / "config.ini"
         self.config.write_text("", encoding="utf-8")
         self.src = self.tmp / "circuit.si"
         self.src.write_text("", encoding="utf-8")
@@ -532,7 +557,7 @@ class CleanTest(unittest.TestCase):
 
 
 class SamplerBackendTest(unittest.TestCase):
-    """提权判据要读 config.toml 的 sampler.backend；读不到就跟 consumer 一样当 etw。"""
+    """提权判据要读 config.ini 的 sampler.backend；读不到就跟 consumer 一样当 etw。"""
 
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -540,12 +565,12 @@ class SamplerBackendTest(unittest.TestCase):
         self.tmp = Path(temp.name)
 
     def _write(self, text: str) -> Path:
-        path = self.tmp / "config.toml"
+        path = self.tmp / "config.ini"
         path.write_text(text, encoding="utf-8")
         return path
 
     def test_missing_file_falls_back_to_etw(self):
-        self.assertEqual(run.sampler_backend(self.tmp / "no.toml"), "etw")
+        self.assertEqual(run.sampler_backend(self.tmp / "no.ini"), "etw")
 
     def test_reads_sampler_section(self):
         path = self._write(
@@ -568,7 +593,7 @@ class ElevationTest(unittest.TestCase):
         self.tmp = Path(temp.name)
 
     def _config(self, backend: str | None) -> Path:
-        path = self.tmp / "config.toml"
+        path = self.tmp / "config.ini"
         if backend is not None:
             path.write_text(f'[sampler]\nbackend = "{backend}"\n', encoding="utf-8")
         return path
@@ -783,7 +808,7 @@ class RunLogTest(unittest.TestCase):
         script = "open blob.bin\nwindow 5\nsave run\nquit\n"
         with mock.patch.object(run.subprocess, "run", return_value=done):
             output = run._run(
-                ["hotspot-consumer.exe", "--config", "config.toml"],
+                ["hotspot-consumer.exe", "--config", "config.ini"],
                 stage="sample",
                 input_text=script,
             )
@@ -791,7 +816,7 @@ class RunLogTest(unittest.TestCase):
         self.assertEqual(output, "样本 100（bucket0 90）")
         text = self.log_text()
         self.assertIn(
-            "[sample] 调用：hotspot-consumer.exe --config config.toml", text
+            "[sample] 调用：hotspot-consumer.exe --config config.ini", text
         )
         self.assertIn("window 5", text)
         self.assertIn("退出码 0", text)
@@ -819,7 +844,7 @@ class RunLogTest(unittest.TestCase):
         self.assertIn("超时（7 s）", self.log_text())
 
     def test_start_records_argv_cwd_pid_and_backend(self):
-        config = self.tmp / "config.toml"
+        config = self.tmp / "config.ini"
         config.write_text('[sampler]\nbackend = "suspend"\n', encoding="utf-8")
         opts = run.parse_args(
             ["--src", "x.si", "--config", str(config), run.LOG_FILE_OPTION,
@@ -952,7 +977,7 @@ class RelaunchLogTest(unittest.TestCase):
         self.log_path = self.tmp / "run.log"
 
     def test_child_receives_the_file_parent_opened(self):
-        config = self.tmp / "config.toml"
+        config = self.tmp / "config.ini"
         config.write_text('[sampler]\nbackend = "etw"\n', encoding="utf-8")
         calls: list[str] = []
 
@@ -978,6 +1003,100 @@ class RelaunchLogTest(unittest.TestCase):
         text = self.log_path.read_text(encoding="utf-8")
         self.assertIn("backend：etw", text)
         self.assertIn("已交给提权进程", text)
+
+
+class MigrateTomlToIniTest(unittest.TestCase):
+    """TOML → INI 子集迁移：临时目录里造一份 config.toml + 一个 run.toml，只看文件结果。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        config = self.root / "hotspot" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            '# hotspot 的唯一配置（spec §10）\n'
+            '[sampler]\n'
+            'backend = "suspend"\n'
+            'interval_ms = 1\n'
+            '\n'
+            '[freq]\n'
+            'command = "python tools/read_freq.py --samples 1"\n'
+            'timeout_sec = 5.0\n',
+            encoding="utf-8")
+        self.run_toml = self.root / "hotspot" / "workspace" / "runs" / "r1" / "run.toml"
+        self.run_toml.parent.mkdir(parents=True)
+        self.run_toml.write_text(
+            'schema = 1\n'
+            'created_at = "2026-11-04T20:13:30"\n'
+            'backend = "etw"\n'
+            '\n'
+            '[artifact]\n'
+            'path = "work/hook/c001.bin"\n'
+            'file_len = 29052\n'
+            'num = ""\n'
+            '\n'
+            '[locate]\n'
+            'bases = ["0x2104da10000"]\n'
+            '\n'
+            '[window]\n'
+            'sec = 5\n'
+            'tids = [1956, 3448]\n',
+            encoding="utf-8")
+        self.config_ini = config.with_suffix(".ini")
+        self.run_ini = self.run_toml.with_suffix(".ini")
+
+    def test_migrates_config_and_run_and_keeps_a_backup(self):
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(migrate.main(["--root", str(self.root)]), 0)
+
+        self.assertFalse((self.root / "hotspot" / "config.toml").exists())
+        self.assertFalse(self.run_toml.exists())
+        config = read_ini(self.config_ini)
+        self.assertEqual(config["sampler"]["backend"], "suspend")
+        self.assertEqual(config["freq"]["command"], "python tools/read_freq.py --samples 1")
+        self.assertEqual(config["freq"]["timeout_sec"], 5.0)
+        run_doc = read_ini(self.run_ini)
+        self.assertEqual(run_doc["run"]["schema"], 1)            # 顶层键进 [run] section
+        self.assertEqual(run_doc["run"]["created_at"], "2026-11-04T20:13:30")
+        self.assertEqual(run_doc["artifact"]["path"], "work/hook/c001.bin")
+        self.assertEqual(run_doc["locate"]["bases"], ["0x2104da10000"])   # 列表是 JSON
+        self.assertEqual(run_doc["window"]["tids"], [1956, 3448])
+        backup = self.root / migrate.BACKUP_SUBDIR / "hotspot/workspace/runs/r1/run.toml"
+        self.assertTrue(backup.is_file())
+        self.assertIn("schema = 1", backup.read_text(encoding="utf-8"))
+
+    def test_dry_run_reports_and_changes_nothing(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = migrate.main(["--root", str(self.root), "--dry-run"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("[dry-run]", stdout.getvalue())
+        self.assertIn("r1/run.ini", stdout.getvalue().replace("\\", "/"))
+        self.assertTrue(self.run_toml.is_file())
+        self.assertFalse(self.run_ini.exists())
+        self.assertFalse((self.root / "work").exists())     # 连备份目录都不建
+
+    def test_existing_ini_is_not_overwritten(self):
+        self.run_ini.write_text("[run]\nschema = 1\n", encoding="utf-8")
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = migrate.main(["--root", str(self.root)])
+
+        self.assertEqual(code, 1)
+        self.assertIn("已存在", stderr.getvalue())
+        self.assertTrue(self.run_toml.is_file())
+        # 一个文件失败不影响另一个：config.toml 照样迁完
+        self.assertTrue(self.config_ini.is_file())
+
+    def test_tree_without_toml_is_a_no_op(self):
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as empty, redirect_stdout(stdout):
+            code = migrate.main(["--root", empty])
+
+        self.assertEqual(code, 0)
+        self.assertIn("没有要迁移的文件", stdout.getvalue())
 
 
 if __name__ == "__main__":

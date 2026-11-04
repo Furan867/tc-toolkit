@@ -17,7 +17,7 @@ namespace {
 void usage()
 {
     std::cout << "用法：hotspot-consumer [--config <path>] [--pause-on-exit]\n"
-                 "  --config        默认 hotspot/config.toml（不存在则用 spec §10 的默认值）\n"
+                 "  --config        默认 hotspot/config.ini（不存在则用 spec §10 的默认值）\n"
                  "  --pause-on-exit 退出前等一次回车（提权重启时自动加；stdin 非 TTY 不等）\n"
                  "命令：open <artifact> [--pid N] [--interval-ms <ms>] / window <sec> [save] /\n"
                  "      status / locate / save [dir] / quit\n";

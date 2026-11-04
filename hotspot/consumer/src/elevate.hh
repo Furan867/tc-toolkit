@@ -29,7 +29,7 @@ std::vector<std::wstring> relaunch_arguments(const std::vector<std::wstring> &ar
 
 // main.cc 的命令行解析抽成纯函数：main.cc 不在单测目标里，解析规则得能被测。
 struct Arguments {
-    std::string config_path = "hotspot/config.toml";
+    std::string config_path = "hotspot/config.ini";
     bool config_given = false;
     bool pause_on_exit = false;
     bool help = false;

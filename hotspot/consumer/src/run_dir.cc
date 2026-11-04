@@ -11,7 +11,7 @@
 namespace hotspot {
 namespace {
 
-std::string toml_string(std::string_view text)
+std::string json_string(std::string_view text)
 {
     std::string out = "\"";
     for (const char c : text) {
@@ -29,7 +29,7 @@ std::string toml_string(std::string_view text)
             out += "\\t";
             break;
         default:
-            // 反斜杠路径在 TOML 里是转义，必须成对写出（上面已处理）。
+            // 反斜杠路径在 JSON 字符串里是转义，必须成对写出（上面已处理）。
             out.push_back(c);
         }
     }
@@ -37,7 +37,7 @@ std::string toml_string(std::string_view text)
     return out;
 }
 
-std::string toml_number(double value)
+std::string json_number(double value)
 {
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "%.6g", value);
@@ -82,23 +82,23 @@ std::string make_run_dir_name(const std::filesystem::path &artifact_path,
     return name;
 }
 
-std::string render_run_toml(const RunRecord &record)
+std::string render_run_ini(const RunRecord &record)
 {
     std::ostringstream out;
     out << "# consumer 初写；analysis 只回写 [buckets]（spec §10）\n";
+    out << "\n[run]\n";
     out << "schema = 1\n";
-    out << "created_at = " << toml_string(record.created_at) << "\n";
-    out << "backend = " << toml_string(backend_name(record.backend)) << "\n";
+    out << "created_at = " << json_string(record.created_at) << "\n";
+    out << "backend = " << json_string(backend_name(record.backend)) << "\n";
 
     out << "\n[artifact]\n";
-    out << "path = " << toml_string(record.artifact_path.generic_string()) << "\n";
-    out << "sha256 = " << toml_string(record.artifact_sha256) << "\n";
+    out << "path = " << json_string(record.artifact_path.generic_string()) << "\n";
+    out << "sha256 = " << json_string(record.artifact_sha256) << "\n";
     out << "file_len = " << record.artifact_file_len << "\n";
     out << "code_len = " << record.artifact_code_len << "\n";
+    // 产物名里没编号就不写这个键：null 不进 INI，读的一方按缺失处理。
     if (record.artifact_num.has_value()) {
-        out << "num = " << toml_string(*record.artifact_num) << "\n";
-    } else {
-        out << "num = \"\"\n";
+        out << "num = " << json_string(*record.artifact_num) << "\n";
     }
 
     out << "\n[locate]\n";
@@ -107,7 +107,7 @@ std::string render_run_toml(const RunRecord &record)
         char buffer[32];
         std::snprintf(buffer, sizeof(buffer), "0x%llx",
                       static_cast<unsigned long long>(record.bases[i]));
-        out << (i == 0 ? "" : ", ") << toml_string(buffer);
+        out << (i == 0 ? "" : ", ") << json_string(buffer);
     }
     out << "]\n";
     out << "feature_off = " << record.feature_off << "\n";
@@ -123,20 +123,20 @@ std::string render_run_toml(const RunRecord &record)
     out << "]\n";
 
     out << "\n[freq]\n";
-    out << "interval_sec = " << toml_number(record.freq_interval_sec) << "\n";
+    out << "interval_sec = " << json_number(record.freq_interval_sec) << "\n";
     if (record.freq_start.hz.has_value()) {
-        out << "start_hz = " << toml_number(*record.freq_start.hz) << "\n";
-        out << "start_at = " << toml_string(record.freq_start.at) << "\n";
+        out << "start_hz = " << json_number(*record.freq_start.hz) << "\n";
+        out << "start_at = " << json_string(record.freq_start.at) << "\n";
     } else {
         out << "start_hz = 0.0\n";
-        out << "start_error = " << toml_string(record.freq_start.error) << "\n";
+        out << "start_error = " << json_string(record.freq_start.error) << "\n";
     }
     if (record.freq_end.hz.has_value()) {
-        out << "end_hz = " << toml_number(*record.freq_end.hz) << "\n";
-        out << "end_at = " << toml_string(record.freq_end.at) << "\n";
+        out << "end_hz = " << json_number(*record.freq_end.hz) << "\n";
+        out << "end_at = " << json_string(record.freq_end.at) << "\n";
     } else {
         out << "end_hz = 0.0\n";
-        out << "end_error = " << toml_string(record.freq_end.error) << "\n";
+        out << "end_error = " << json_string(record.freq_end.error) << "\n";
     }
 
     out << "\n# 三桶份额（analysis 回写，consumer 不填）\n[buckets]\n";
@@ -283,14 +283,14 @@ write_run_dir(const std::filesystem::path &run_dir, const RunRecord &record,
         }
     }
     {
-        std::ofstream toml_out(run_dir / "run.toml", std::ios::binary);
-        if (!toml_out) {
-            return std::unexpected("写 run.toml 失败：" + (run_dir / "run.toml").string());
+        std::ofstream ini_out(run_dir / "run.ini", std::ios::binary);
+        if (!ini_out) {
+            return std::unexpected("写 run.ini 失败：" + (run_dir / "run.ini").string());
         }
-        toml_out << render_run_toml(record);
-        toml_out.flush();
-        if (!toml_out) {
-            return std::unexpected("写 run.toml 失败：" + (run_dir / "run.toml").string());
+        ini_out << render_run_ini(record);
+        ini_out.flush();
+        if (!ini_out) {
+            return std::unexpected("写 run.ini 失败：" + (run_dir / "run.ini").string());
         }
     }
     return run_dir;

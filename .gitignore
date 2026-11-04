@@ -13,11 +13,11 @@
 !/tools/
 !/hotspot/
 
-# hotspot：源码与 config.example.toml 入库；config.toml 是运行时配置，不入库
+# hotspot：源码与 config.example.ini 入库；config.ini 是运行时配置，不入库
 /hotspot/workspace/
 /hotspot/consumer/build/
 /hotspot/consumer/compile_commands.json
-/hotspot/config.toml
+/hotspot/config.ini
 
 # 各层通用的系统 / Python 垃圾
 **/__pycache__/

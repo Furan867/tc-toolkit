@@ -1,4 +1,4 @@
-// 命令解析 / config.toml / SampledProfile 负载解码 / freq 读数解析 —— 全是纯函数。
+// 命令解析 / config.ini / SampledProfile 负载解码 / freq 读数解析 —— 全是纯函数。
 #include "commands.hh"
 #include "config.hh"
 #include "run_dir.hh"
@@ -9,7 +9,7 @@
 
 using hotspot::Backend;
 using hotspot::Command;
-using hotspot::config_from_toml;
+using hotspot::config_from_ini;
 using hotspot::parse_command;
 using hotspot::parse_sim_speed_hz;
 
@@ -80,8 +80,9 @@ TEST_CASE(parse_quoted_path_with_spaces)
 
 TEST_CASE(config_defaults_and_overrides)
 {
-    const auto config = config_from_toml(R"(
+    const auto config = config_from_ini(R"(
 # 注释行
+; 另一种注释
 [game]
 exe_name = "Turing Complete.exe"
 
@@ -119,20 +120,27 @@ timeout_sec = 2.5
 
 TEST_CASE(config_rejects_unknown_key_and_wrong_type)
 {
-    const auto unknown = config_from_toml("[sampler]\nintervl_ms = 3\n");
+    const auto unknown = config_from_ini("[sampler]\nintervl_ms = 3\n");
     CHECK(!unknown.has_value());
     CHECK(unknown.error().find("未知键") != std::string::npos);
 
-    const auto wrong_type = config_from_toml("[sampler]\nbackend = 3\n");
+    const auto wrong_type = config_from_ini("[sampler]\nbackend = 3\n");
     CHECK(!wrong_type.has_value());
 
-    const auto bad_backend = config_from_toml("[sampler]\nbackend = \"pmi\"\n");
+    const auto bad_backend = config_from_ini("[sampler]\nbackend = \"pmi\"\n");
     CHECK(!bad_backend.has_value());
     CHECK(bad_backend.error().find("etw") != std::string::npos);
 
-    const auto duplicate = config_from_toml("[sampler]\ninterval_ms = 1\ninterval_ms = 2\n");
+    const auto duplicate = config_from_ini("[sampler]\ninterval_ms = 1\ninterval_ms = 2\n");
     CHECK(!duplicate.has_value());
     CHECK(duplicate.error().find("重复") != std::string::npos);
+}
+
+TEST_CASE(config_comments_only_outside_quotes)
+{
+    const auto config = config_from_ini("[lock]\ndir = \"work/a#b;c\"  ; 尾注释\n");
+    CHECK(config.has_value());
+    CHECK_EQ(config->lock_dir, std::string{"work/a#b;c"});
 }
 
 

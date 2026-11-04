@@ -269,7 +269,7 @@ def render_markdown(t: Tables) -> str:
                    "所以各行占比加起来不等于 100%")
         out.append("")
 
-    out.append("> 生成：hotspot/analysis/report.py（analysis 只回写 run.toml 的 `buckets`）")
+    out.append("> 生成：hotspot/analysis/report.py（analysis 只回写 run.ini 的 `buckets`）")
     out.append("")
     return "\n".join(out)
 
@@ -347,7 +347,7 @@ def render_html(t: Tables) -> str:
         out.append("</section>")
 
     out.append('<footer>生成：hotspot/analysis/report.py · 单文件自包含（无外链、无 CDN）·'
-               " analysis 只回写 run.toml 的 <code>buckets</code></footer>")
+               " analysis 只回写 run.ini 的 <code>buckets</code></footer>")
     out.append(f"<script>{JS}</script>")
     out.append("</body>")
     out.append("</html>")

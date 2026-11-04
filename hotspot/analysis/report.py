@@ -4,16 +4,16 @@
     python hotspot/analysis/report.py --compare <runA> <runB>
 
 退出码：0 正常；1 G3′ 判负（重合不足）；2 输入问题（缺文件 / 坏 schema / 坐标越界）。
-对同一 run 幂等：除 run.toml 的 `[buckets]` 与 workspace/baseline.json（首跑建）外不改别的文件。
+对同一 run 幂等：除 run.ini 的 `[buckets]` 与 workspace/baseline.json（首跑建）外不改别的文件。
 """
 from __future__ import annotations
 
 import argparse
+import configparser
 import contextlib
 import datetime
 import json
 import sys
-import tomllib
 from pathlib import Path
 
 import attribution
@@ -26,7 +26,11 @@ BUCKET_PRECISION = 6
 _MISSING = object()
 
 
-# ------------------------------------------------------------ run.toml 读取
+# ------------------------------------------------------------ run.ini 读取
+#
+# run.ini 是本项目冻结的 INI 子集：`[section]` + `key = value`，`;` / `#` 注释，
+# 每个值都是 JSON 编码（`path = "x"`、`bases = ["0x1"]`、`tids = [1,2]`、`null`）。
+# 所以值一律过一遍 json.loads，不在这里按类型二次解析 —— 下游拿到的就是 str / 数字 / 列表。
 
 
 def _lookup(doc: dict, dotted: str):
@@ -42,10 +46,10 @@ def _number(doc: dict, dotted: str, path: str, required: bool) -> float | None:
     value = _lookup(doc, dotted)
     if value is _MISSING or value is None:
         if required:
-            raise attribution.AnalysisError(path, f"缺少 run.toml 键 {dotted}（consumer save 应初写）")
+            raise attribution.AnalysisError(path, f"缺少 run.ini 键 {dotted}（consumer save 应初写）")
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise attribution.AnalysisError(path, f"run.toml 键 {dotted} 必须是数字（实测 {value!r}）")
+        raise attribution.AnalysisError(path, f"run.ini 键 {dotted} 必须是数字（实测 {value!r}）")
     return value
 
 
@@ -54,7 +58,7 @@ def _integer(doc: dict, dotted: str, path: str) -> int | None:
     if value is _MISSING or value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise attribution.AnalysisError(path, f"run.toml 键 {dotted} 必须是整数（实测 {value!r}）")
+        raise attribution.AnalysisError(path, f"run.ini 键 {dotted} 必须是整数（实测 {value!r}）")
     return value
 
 
@@ -62,23 +66,45 @@ def _text(doc: dict, dotted: str, path: str, required: bool) -> str:
     value = _lookup(doc, dotted)
     if value is _MISSING or value is None:
         if required:
-            raise attribution.AnalysisError(path, f"缺少 run.toml 键 {dotted}（consumer save 应初写）")
+            raise attribution.AnalysisError(path, f"缺少 run.ini 键 {dotted}（consumer save 应初写）")
         return ""
     if not isinstance(value, str):
-        raise attribution.AnalysisError(path, f"run.toml 键 {dotted} 必须是字符串（实测 {value!r}）")
+        raise attribution.AnalysisError(path, f"run.ini 键 {dotted} 必须是字符串（实测 {value!r}）")
     return value
 
 
-def _read_toml(path: Path) -> dict:
+def _parse_ini(text: str, path: str) -> dict[str, dict[str, object]]:
+    # 键名由 configparser 折成小写，查表的键也全是小写 —— 大小写差异不会变成「键找不到」。
+    parser = configparser.ConfigParser(
+        delimiters=("=",),
+        interpolation=None,
+        comment_prefixes=("#", ";"),
+        inline_comment_prefixes=("#", ";"),
+    )
+    try:
+        parser.read_string(text)
+    except configparser.Error as exc:
+        raise attribution.AnalysisError(path, f"不是合法 INI：{exc}") from exc
+
+    doc: dict[str, dict[str, object]] = {}
+    for section in parser.sections():
+        values: dict[str, object] = {}
+        for key, raw in parser.items(section, raw=True):
+            try:
+                values[key] = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise attribution.AnalysisError(
+                    path, f"[{section}] {key} 的值不是 JSON 编码（实测 {raw!r}）：{exc.msg}") from exc
+        doc[section] = values
+    return doc
+
+
+def _read_ini(path: Path) -> dict[str, dict[str, object]]:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise attribution.AnalysisError(str(path), f"读不了（{exc.strerror or exc}）") from exc
-    try:
-        doc = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
-        raise attribution.AnalysisError(str(path), f"不是合法 TOML：{exc}") from exc
-    return doc
+    return _parse_ini(text, str(path))
 
 
 def find_sidecar(run_dir: Path, artifact_path: str, explicit: str | None) -> Path:
@@ -101,43 +127,44 @@ def find_sidecar(run_dir: Path, artifact_path: str, explicit: str | None) -> Pat
 
 
 def load_run(run_dir: Path, sidecar_path: str | None = None) -> tuple[tables.RunMeta, attribution.Samples, attribution.Sidecar]:
-    run_toml = run_dir / "run.toml"
-    if not run_toml.exists():
-        raise attribution.AnalysisError(str(run_dir), "不是 run 目录：缺 run.toml")
-    doc = _read_toml(run_toml)
-    schema = _integer(doc, "schema", str(run_toml))
+    run_ini = run_dir / "run.ini"
+    if not run_ini.exists():
+        raise attribution.AnalysisError(str(run_dir), "不是 run 目录：缺 run.ini")
+    path = str(run_ini)
+    doc = _read_ini(run_ini)
+    schema = _integer(doc, "run.schema", path)
     if schema is not None and schema != RUN_SCHEMA:
-        raise attribution.AnalysisError(str(run_toml), f"schema={schema}，本工具只认 {RUN_SCHEMA}")
+        raise attribution.AnalysisError(path, f"schema={schema}，本工具只认 {RUN_SCHEMA}")
 
-    file_len = _integer(doc, "artifact.file_len", str(run_toml))
-    code_len = _integer(doc, "artifact.code_len", str(run_toml))
+    file_len = _integer(doc, "artifact.file_len", path)
+    code_len = _integer(doc, "artifact.code_len", path)
     if code_len is None and file_len is not None:
         code_len = file_len - 8  # 产物文件前 8 字节是长度头（spec §2）
 
-    artifact_path = _text(doc, "artifact.path", str(run_toml), required=False)
+    artifact_path = _text(doc, "artifact.path", path, required=False)
     sidecar_file = find_sidecar(run_dir, artifact_path, sidecar_path)
     sidecar = attribution.load_sidecar(str(sidecar_file), code_len=code_len)
     samples = attribution.load_samples(str(run_dir / "samples.tsv"))
 
     bases_raw = _lookup(doc, "locate.bases")
     bases = tuple(str(b) for b in bases_raw) if isinstance(bases_raw, list) else ()
-    sample_count = _integer(doc, "window.sample_count", str(run_toml))
+    sample_count = _integer(doc, "window.sample_count", path)
 
     meta = tables.RunMeta(
         run_name=run_dir.name,
         run_path=str(run_dir),
-        created_at=_text(doc, "created_at", str(run_toml), required=False) or "（未记录）",
+        created_at=_text(doc, "run.created_at", path, required=False) or "（未记录）",
         artifact_path=artifact_path or "（未记录）",
-        artifact_sha256=_text(doc, "artifact.sha256", str(run_toml), required=False) or "（未记录）",
+        artifact_sha256=_text(doc, "artifact.sha256", path, required=False) or "（未记录）",
         artifact_file_len=file_len,
         artifact_code_len=code_len,
-        artifact_num=_text(doc, "artifact.num", str(run_toml), required=False),
-        window_sec=_number(doc, "window.sec", str(run_toml), required=False),
-        interval_ms=_number(doc, "window.interval_ms", str(run_toml), required=False),
+        artifact_num=_text(doc, "artifact.num", path, required=False),
+        window_sec=_number(doc, "window.sec", path, required=False),
+        interval_ms=_number(doc, "window.interval_ms", path, required=False),
         sample_count=sample_count if sample_count is not None else 0,
         bases=bases,
-        freq_start_hz=_number(doc, "freq.start_hz", str(run_toml), required=False),
-        freq_end_hz=_number(doc, "freq.end_hz", str(run_toml), required=False),
+        freq_start_hz=_number(doc, "freq.start_hz", path, required=False),
+        freq_end_hz=_number(doc, "freq.end_hz", path, required=False),
     )
     return meta, samples, sidecar
 
@@ -173,9 +200,9 @@ def _buckets_section(buckets: dict[str, float]) -> list[str]:
     return lines
 
 
-def write_buckets(run_toml: Path, buckets: dict[str, float]) -> None:
-    """只重写 `[buckets]` 整张表，其余键逐字保留（spec §10：analysis 只回写 buckets）。"""
-    text = run_toml.read_text(encoding="utf-8-sig")
+def write_buckets(run_ini: Path, buckets: dict[str, float]) -> None:
+    """只重写 `[buckets]` 整张表，其余 section 与键逐字保留（spec §10：analysis 只回写 buckets）。"""
+    text = run_ini.read_text(encoding="utf-8-sig")
     lines = text.splitlines()
     section = _buckets_section(buckets)
     start = next((i for i, line in enumerate(lines) if line.strip() == "[buckets]"), None)
@@ -188,13 +215,14 @@ def write_buckets(run_toml: Path, buckets: dict[str, float]) -> None:
                     if lines[j].lstrip().startswith("[")), len(lines))
         candidate = "\n".join(lines[:start] + section + lines[end:]) + "\n"
 
-    expected = tomllib.loads(text)
-    expected["buckets"] = tomllib.loads("\n".join(section))["buckets"]
-    actual = tomllib.loads(candidate)
+    path = str(run_ini)
+    expected = _parse_ini(text, path)
+    expected["buckets"] = _parse_ini("\n".join(section), path)["buckets"]
+    actual = _parse_ini(candidate, path)
     if actual != expected:
         raise attribution.AnalysisError(
-            str(run_toml), "回写 buckets 后自校验失败（buckets 以外的键被改动了，请检查 run.toml 格式）")
-    run_toml.write_text(candidate, encoding="utf-8")
+            path, "回写 buckets 后自校验失败（buckets 以外的键被改动了，请检查 run.ini 格式）")
+    run_ini.write_text(candidate, encoding="utf-8")
 
 
 # ---------------------------------------------------------------- baseline
@@ -243,30 +271,30 @@ def update_baseline(workspace: Path, run_name: str, buckets: dict[str, float],
 def update_index(workspace: Path) -> tuple[Path, int]:
     entries: list[render.IndexEntry] = []
     runs_dir = workspace / "runs"
-    for run_toml in sorted(runs_dir.glob("*/run.toml")):
+    for run_ini in sorted(runs_dir.glob("*/run.ini")):
         try:
-            doc = _read_toml(run_toml)
+            doc = _read_ini(run_ini)
         except attribution.AnalysisError as exc:
-            print(f"跳过 {run_toml.parent.name}：{exc}", file=sys.stderr)
+            print(f"跳过 {run_ini.parent.name}：{exc}", file=sys.stderr)
             continue
         buckets_raw = doc.get("buckets")
-        share = None
-        if isinstance(buckets_raw, dict) and isinstance(buckets_raw.get("bucket0_share"), (int, float)):
-            share = buckets_raw["bucket0_share"]
+        share_raw = buckets_raw.get("bucket0_share") if isinstance(buckets_raw, dict) else None
+        share = (float(share_raw) if isinstance(share_raw, (int, float))
+                 and not isinstance(share_raw, bool) else None)
         start = _lookup(doc, "freq.start_hz")
         end = _lookup(doc, "freq.end_hz")
         freqs = [f"{v / 1e6:.3f} MHz" for v in (start, end)
                  if isinstance(v, (int, float)) and not isinstance(v, bool) and v]
-        report = runs_dir / run_toml.parent.name / "report.html"
+        report = runs_dir / run_ini.parent.name / "report.html"
         entries.append(render.IndexEntry(
-            run_name=run_toml.parent.name,
-            created_at=str(_lookup(doc, "created_at") if _lookup(doc, "created_at") is not _MISSING
+            run_name=run_ini.parent.name,
+            created_at=str(_lookup(doc, "run.created_at") if _lookup(doc, "run.created_at") is not _MISSING
                             else "（未记录）"),
             artifact=Path(str(_lookup(doc, "artifact.path") if _lookup(doc, "artifact.path") is not _MISSING
                                else "（未记录）")).name,
             freq_note=" / ".join(freqs) if freqs else "（无）",
             bucket0_share=share,
-            report=f"runs/{run_toml.parent.name}/report.html" if report.exists() else "",
+            report=f"runs/{run_ini.parent.name}/report.html" if report.exists() else "",
         ))
     entries.sort(key=lambda e: (e.created_at, e.run_name), reverse=True)
     path = workspace / "index.html"
@@ -325,7 +353,7 @@ def run_report(args: argparse.Namespace) -> int:
 
     (run_dir / "report.md").write_text(render.render_markdown(table_set), encoding="utf-8")
     (run_dir / "report.html").write_text(render.render_html(table_set), encoding="utf-8")
-    write_buckets(run_dir / "run.toml", buckets)
+    write_buckets(run_dir / "run.ini", buckets)
     index_path, run_count = update_index(workspace)
 
     attributed_share = 100 * att.attributed / att.total if att.total else 0.0
@@ -335,7 +363,7 @@ def run_report(args: argparse.Namespace) -> int:
           f" / 未归属分桶 {len(table_set.buckets)} 行")
     if table_set.functions:
         print(f"  函数热度 {len(table_set.functions)} 行（bucket0 全部样本按最内层函数归因）")
-    print(f"  buckets 已回写 {run_dir / 'run.toml'}")
+    print(f"  buckets 已回写 {run_dir / 'run.ini'}")
     print(f"  报告 {run_dir / 'report.md'} + {run_dir / 'report.html'}")
     print(f"  index {index_path}（{run_count} 个 run）")
     if watermark:
@@ -363,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
         description="热点报表：run 目录 → report.md + report.html（+ G3′ 对比）",
         epilog="退出码：0 正常；1 G3′ 判负；2 输入问题（缺文件 / 坏 schema / 坐标越界）")
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--run", help="run 目录（含 run.toml / samples.tsv / sidecar.json）")
+    mode.add_argument("--run", help="run 目录（含 run.ini / samples.tsv / sidecar.json）")
     mode.add_argument("--compare", nargs=2, metavar=("RUN_A", "RUN_B"), help="G3′：两个 run 的 top-N 重合")
     parser.add_argument("--sidecar", help="侧车路径（默认 run 目录下 sidecar.json，或产物旁的 .sidecar.json）")
     parser.add_argument("--workspace", help="workspace 根（默认 run 目录的上一级；在 runs/ 下则再上一级）")

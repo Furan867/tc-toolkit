@@ -1,4 +1,4 @@
-// SHA-256（FIPS 180-4）。run.toml 的 artifact.sha256 需要它，而本工程不引第三方库。
+// SHA-256（FIPS 180-4）。run.ini 的 artifact.sha256 需要它，而本工程不引第三方库。
 #pragma once
 
 #include <cstddef>

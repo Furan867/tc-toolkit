@@ -1,4 +1,4 @@
-// hotspot/config.toml 的读取。键与默认值见 spec §10；本文件不解码未知键以外的东西，
+// hotspot/config.ini 的读取。键与默认值见 spec §10；本文件不解码未知键以外的东西，
 // 也不接受「键在但类型不对」——静默回落到默认值会让采错的参数看起来是对的。
 #pragma once
 
@@ -30,9 +30,10 @@ struct Config {
     double freq_timeout_sec = 5.0;
 };
 
-// TOML 子集：`[a.b]` 段头、`key = value`（可带点号）、字符串/整数/浮点/布尔、`#` 注释。
-// 不做的就是不支持的（数组、多行字符串、日期），遇到直接报错而不是忽略。
-class TomlTable {
+// INI 子集：`[section]` 段头、`key = value`、`;` 与 `#` 注释（引号外）。
+// 值与 Python 侧同一套 JSON 编码：字符串带引号、true/false、数字裸写。
+// 不做的就是不支持的（数组、多行字符串、null），遇到直接报错而不是忽略。
+class IniTable {
   public:
     using Value = std::variant<std::string, std::int64_t, double, bool>;
 
@@ -55,6 +56,6 @@ const char *backend_name(Backend backend);
 
 // 只覆盖配置里出现的键；不存在 / 不是普通文件时用默认值。
 std::expected<Config, std::string> load_config(const std::filesystem::path &path);
-std::expected<Config, std::string> config_from_toml(std::string_view text);
+std::expected<Config, std::string> config_from_ini(std::string_view text);
 
 } // namespace hotspot

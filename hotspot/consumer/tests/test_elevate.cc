@@ -55,7 +55,7 @@ std::vector<std::string> parse_back(const std::wstring &command_line)
 TEST_CASE(quote_argument_leaves_plain_argument_alone)
 {
     CHECK_EQ(to_utf8(quote_argument(L"--config")), std::string{"--config"});
-    CHECK_EQ(to_utf8(quote_argument(L"hotspot/config.toml")), std::string{"hotspot/config.toml"});
+    CHECK_EQ(to_utf8(quote_argument(L"hotspot/config.ini")), std::string{"hotspot/config.ini"});
 }
 
 TEST_CASE(quote_argument_wraps_whitespace)
@@ -79,9 +79,9 @@ TEST_CASE(quote_argument_escapes_quote_and_backslash)
 
 TEST_CASE(build_command_line_joins_arguments)
 {
-    const std::vector<std::wstring> arguments{L"--config", L"my dir/config.toml"};
+    const std::vector<std::wstring> arguments{L"--config", L"my dir/config.ini"};
     CHECK_EQ(to_utf8(build_command_line(arguments)),
-             std::string{"--config \"my dir/config.toml\""});
+             std::string{"--config \"my dir/config.ini\""});
     CHECK_EQ(to_utf8(build_command_line({})), std::string{});
 }
 
@@ -89,14 +89,14 @@ TEST_CASE(build_command_line_round_trips_through_command_line_to_argv)
 {
     // argv[0] 的引号规则与其余参数不同，所以拿一个不含特殊字符的假程序名打底。
     const std::vector<std::wstring> arguments{
-        L"--config", L"C:\\Users\\a b\\hotspot\\config.toml", L"--out", L"",
+        L"--config", L"C:\\Users\\a b\\hotspot\\config.ini", L"--out", L"",
         L"带引号\"的\"参数", L"trailing\\", L"a\\\\\"b",
     };
     const std::wstring command_line = L"hotspot-consumer.exe " + build_command_line(arguments);
 
     const std::vector<std::string> expected{to_utf8(L"hotspot-consumer.exe"),
                                             to_utf8(L"--config"),
-                                            to_utf8(L"C:\\Users\\a b\\hotspot\\config.toml"),
+                                            to_utf8(L"C:\\Users\\a b\\hotspot\\config.ini"),
                                             to_utf8(L"--out"),
                                             std::string{},
                                             to_utf8(L"带引号\"的\"参数"),
@@ -118,7 +118,7 @@ TEST_CASE(parse_arguments_defaults)
 {
     // 不给参数 = 默认配置路径 + 不暂停（管理员终端直接跑就不该停）。
     const auto parsed = parse_arguments({});
-    CHECK_EQ(parsed.config_path, std::string{"hotspot/config.toml"});
+    CHECK_EQ(parsed.config_path, std::string{"hotspot/config.ini"});
     CHECK(!parsed.config_given);
     CHECK(!parsed.pause_on_exit);
     CHECK(!parsed.help);
@@ -127,9 +127,9 @@ TEST_CASE(parse_arguments_defaults)
 
 TEST_CASE(parse_arguments_reads_config_and_pause_flag)
 {
-    const auto parsed = parse_arguments({"--config", "my dir/config.toml",
+    const auto parsed = parse_arguments({"--config", "my dir/config.ini",
                                          std::string{pause_on_exit_flag}});
-    CHECK_EQ(parsed.config_path, std::string{"my dir/config.toml"});
+    CHECK_EQ(parsed.config_path, std::string{"my dir/config.ini"});
     CHECK(parsed.config_given);
     CHECK(parsed.pause_on_exit);
     CHECK(!parsed.error.has_value());
@@ -153,9 +153,9 @@ TEST_CASE(parse_arguments_reports_bad_arguments)
 TEST_CASE(relaunch_arguments_add_pause_on_exit_once)
 {
     // 新控制台跟着进程一起关：重启时得把这个参数带上，不给人看报错的时间就没了。
-    const std::vector<std::wstring> original{L"--config", L"a b/config.toml"};
+    const std::vector<std::wstring> original{L"--config", L"a b/config.ini"};
     const std::wstring pause{pause_on_exit_flag.begin(), pause_on_exit_flag.end()};
-    const std::vector<std::wstring> expected{L"--config", L"a b/config.toml", pause};
+    const std::vector<std::wstring> expected{L"--config", L"a b/config.ini", pause};
     CHECK(relaunch_arguments(original) == expected);
     // 原参数里已经带着就不重复加（重复出现在命令行上只会让人以为是两回事）。
     CHECK(relaunch_arguments(expected) == expected);

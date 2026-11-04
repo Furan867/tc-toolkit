@@ -92,6 +92,9 @@ FUNCTIONS = [
      "file": "stdlib_prefix.si", "tag": "subprogram", "depth": 1, "origin": None},
     {"func_id": 3, "ranges": [[800, 860]], "name": "reset_sim", "decl_line": 42,
      "file": "stdlib_prefix.si", "tag": "subprogram", "depth": 1, "origin": None},
+    # 元件机器段 [0,200) 在某个函数的区间里：表 5 分母是 bucket0 全部样本，这些也要算进来
+    {"func_id": 4, "ranges": [[0, 200]], "name": "run_circuit", "decl_line": 210,
+     "file": "hook_src_009.si", "tag": "subprogram", "depth": 1, "origin": None},
 ]
 
 RUN_TOML = """\
@@ -322,7 +325,7 @@ class ReportCase(unittest.TestCase):
         self.assertEqual(page.count("<button class=\"tab"), 4)
 
     def test_function_table_splits_root_and_ranks_functions(self) -> None:
-        """表 4 的公共根按函数拆成 stdlib/source/无函数信息，表 5 按函数排名（带 file:line）。"""
+        """表 4 的公共根按函数拆成 stdlib/source/无函数信息，表 5 按函数排名（分母 = bucket0 全部）。"""
         run_dir = write_run(self.workspace / "runs", "run_func", SAMPLES_F,
                             sidecar=source_bound_doc(FUNCTIONS))
 
@@ -338,17 +341,22 @@ class ReportCase(unittest.TestCase):
         self.assertEqual(buckets["└ 无函数信息"], ["4", "16.7%（占该桶）"])
         self.assertNotIn("└ 有行号信息", markdown)     # 函数表在时不再按行号信息拆
 
+        # 表 5 分母 = bucket0 全部 141：元件段 90（run_circuit）+ 公共根 20，31 个样本不在任何函数区间里
+        self.assertIn("## 表 5 函数热度（分母 = bucket0 全部 141 样本）", markdown)
         functions = table_rows(markdown, "表 5")
-        self.assertEqual([row[0] for row in functions], ["mode_run", "memcpy", "reset_sim"])
-        self.assertEqual(functions[0][1:], ["hook_src_009.si:99", "12", "50.0%"])
+        self.assertEqual([row[0] for row in functions],
+                         ["run_circuit", "mode_run", "memcpy", "reset_sim"])
+        self.assertEqual(functions[0][1:], ["hook_src_009.si:210", "90", "63.8%", "source"])
+        self.assertEqual(functions[1][1:], ["hook_src_009.si:99", "12", "8.5%", "source"])
         # 两段 memcpy（内联块自己 + 抽象实例）按 name/file/line 合并；行号已拆回文件内行
-        self.assertEqual(functions[1][1:], ["stdlib_prefix.si:120", "5", "20.8%"])
-        self.assertEqual(functions[2][1:], ["stdlib_prefix.si:42", "3", "12.5%"])
+        self.assertEqual(functions[2][1:], ["stdlib_prefix.si:120", "5", "3.5%", "stdlib"])
+        self.assertEqual(functions[3][1:], ["stdlib_prefix.si:42", "3", "2.1%", "stdlib"])
 
         page = (run_dir / "report.html").read_text(encoding="utf-8")
         self.assertEqual(page.count('<button class="tab'), 5)
         self.assertIn('id="panel-functions"', page)
         self.assertIn('id="table-functions"', page)
+        self.assertIn("bucket0 全部 141 样本", page)
         self.assertIn("stdlib_prefix.si:120", page)
 
     def test_old_sidecar_has_no_function_table(self) -> None:

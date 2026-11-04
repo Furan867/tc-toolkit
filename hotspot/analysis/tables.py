@@ -1,6 +1,6 @@
 """热度表的数据结构（数字口径只在这里算，渲染层只管排版）。
 
-分母：表 1–3 = bucket0 已归属样本；表 4 = 全样本；表 5 = bucket0 未归属样本（公共/根代码），
+分母：表 1–3 = bucket0 已归属样本；表 4 = 全样本；表 5 = bucket0 全部样本，
 只在侧车带 `functions` 时才有（`docs/specs/2026-11-01-hotspot-profiler-design.md` §7.2）。
 表 1 按侧车台账列**全部**类型（含零值），旧工具只列采到的类型，导致零采样类型整行消失
 （`tools/analyze_sim_hotspot.py:205` 的教训）。
@@ -70,12 +70,16 @@ class BucketRow:
 
 @dataclass(frozen=True)
 class FuncRow:
-    """一个源码函数的未归属样本热度（同一个函数的内联实例按 name/file/line 合并）。"""
+    """一个函数的样本热度（同一个函数的内联实例按 name/file/line 合并）。
+
+    口径是 bucket0 全部样本：元件段的机器码也挂在某个函数下，和元件表并行算，互不扣除。
+    """
     name: str
     file: str | None
     line: int | None
     samples: int
     share: float
+    origin: str        # 声明文件的角色：stdlib / source（同表 4 的划法）
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,7 @@ class Tables:
     meta: RunMeta
     total_samples: int
     attributed_samples: int
+    bucket0_samples: int          # 表 5 分母
     types: tuple[TypeRow, ...]
     instances: tuple[InstRow, ...]
     buckets: tuple[BucketRow, ...]
@@ -125,6 +130,7 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
             src_file=sidecar.source_file))
 
     total = attribution.total
+    bucket0 = attribution.bucket_totals.get(0, 0)
     stub_detail = tuple(
         (name, n, _share(n, attribution.stub_samples))
         for name, n in sorted(attribution.stub_totals.items(), key=lambda kv: (-kv[1], kv[0])))
@@ -132,7 +138,8 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
         root_detail = _root_by_lines(attribution)
         function_rows: tuple[FuncRow, ...] = ()
     else:
-        root_detail, function_rows = _root_by_function(attribution, sidecar, top_n)
+        root_detail = _root_by_function(attribution, sidecar)
+        function_rows = _function_rows(attribution, sidecar, bucket0, top_n)
     buckets = (
         BucketRow(key="bucket0_attributed", label="bucket0 已归属（落在元件机器段里）",
                   samples=attributed, share=_share(attributed, total)),
@@ -151,7 +158,7 @@ def build_tables(meta: RunMeta, attribution: Attribution, sidecar: Sidecar,
     )
 
     return Tables(
-        meta=meta, total_samples=total, attributed_samples=attributed,
+        meta=meta, total_samples=total, attributed_samples=attributed, bucket0_samples=bucket0,
         types=type_rows, instances=tuple(inst_rows), buckets=buckets,
         functions=function_rows, notes=_notes(meta, attribution), watermark=watermark)
 
@@ -172,33 +179,43 @@ def _root_by_lines(attribution: Attribution) -> tuple[tuple[str, int, float], ..
     return tuple(detail)
 
 
-def _root_by_function(attribution: Attribution, sidecar: Sidecar,
-                      top_n: int) -> tuple[tuple[tuple[str, int, float], ...], tuple[FuncRow, ...]]:
-    """公共根 → stdlib 函数 / 源文件函数 / 无函数信息；顺手算表 5 的函数热度。
+def _root_by_function(attribution: Attribution, sidecar: Sidecar) -> tuple[tuple[str, int, float], ...]:
+    """公共根 → stdlib 函数 / 源文件函数 / 无函数信息（表 4；元件样本不在公共根里）。
 
     角色看函数的**声明文件**（`meta.sources` 划出的 stdlib 与源文件），不看行号：行号属哪段
     是行表的结论，而函数本身可能跨段；先按行号划会把跨段函数的样本标错。
     """
-    stdlib = sidecar.stdlib_file
     by_role: Counter = Counter()
-    by_function: Counter = Counter()
     for func_id, samples in attribution.root_function_samples.items():
         info = sidecar.function_info[func_id]
-        by_role["stdlib" if stdlib is not None and info.file == stdlib else "source"] += samples
-        by_function[(info.name, info.file, info.line)] += samples
+        by_role[_origin(sidecar.stdlib_file, info.file)] += samples
 
     root = attribution.root_samples
-    detail = tuple(
+    return tuple(
         (label, samples, _share(samples, root))
         for label, samples in (("stdlib 函数", by_role["stdlib"]),
                                ("source 函数", by_role["source"]),
                                ("无函数信息", attribution.root_no_function)))
+
+
+def _function_rows(attribution: Attribution, sidecar: Sidecar, bucket0: int,
+                   top_n: int) -> tuple[FuncRow, ...]:
+    """表 5：bucket0 全部样本按最内层函数排名（元件段与公共/根的样本各算各的）。"""
+    by_function: Counter = Counter()
+    for func_id, samples in attribution.function_samples.items():
+        info = sidecar.function_info[func_id]
+        by_function[(info.name, info.file, info.line)] += samples
     ranked = sorted(by_function.items(),
                     key=lambda kv: (-kv[1], kv[0][0] or "", kv[0][1] or "", kv[0][2] or 0))
-    rows = tuple(
-        FuncRow(name=name or "（无名）", file=file, line=line, samples=n, share=_share(n, root))
+    return tuple(
+        FuncRow(name=name or "（无名）", file=file, line=line, samples=n,
+                share=_share(n, bucket0), origin=_origin(sidecar.stdlib_file, file))
         for (name, file, line), n in ranked[:max(1, top_n)])
-    return detail, rows
+
+
+def _origin(stdlib_file: str | None, file: str | None) -> str:
+    """函数角色看声明文件；侧车没带 stdlib 台账（无 `--stdlib`）时全算 source。"""
+    return "stdlib" if stdlib_file is not None and file == stdlib_file else "source"
 
 
 def confidence_note(samples: int) -> str:

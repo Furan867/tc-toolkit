@@ -205,7 +205,7 @@ def render_markdown(t: Tables) -> str:
         out.append(f"- {note}")
     out.append("- 表 1–3 分母 = bucket0 已归属样本；表 4 分母 = 全样本")
     if t.functions:
-        out.append("- 表 5 分母 = bucket0 未归属样本（公共/根代码），函数取最内层 DIE")
+        out.append("- 表 5 分母 = bucket0 全部样本，函数取最内层 DIE")
     if t.watermark:
         out.append("")
         out.append(f"**G4 覆盖水位告警**：{t.watermark}")
@@ -257,16 +257,16 @@ def render_markdown(t: Tables) -> str:
     out.append("")
 
     if t.functions:
-        root = next(b.samples for b in t.buckets if b.key == "bucket0_root")
-        out.append(f"## 表 5 未归属样本的函数热度（分母 = 公共/根代码 {root} 样本）")
+        out.append(f"## 表 5 函数热度（分母 = bucket0 全部 {t.bucket0_samples} 样本）")
         out.append("")
-        out.append("| 函数 | 声明位置 | 样本数 | 占比 |")
-        out.append("|---|---|---:|---:|")
+        out.append("| 函数 | 声明位置 | 样本数 | 占比 | origin |")
+        out.append("|---|---|---:|---:|---|")
         for row in t.functions:
             out.append(f"| {row.name} | {_line_label(row.file, row.line)} "
-                       f"| {row.samples} | {_pct(row.share)} |")
+                       f"| {row.samples} | {_pct(row.share)} | {row.origin} |")
         out.append("")
-        out.append("> 函数取最内层：元件机器段（表 1–3）不进这张表，它们已经归到元件了")
+        out.append("> 分母是 bucket0 全部样本；不在任何函数区间里的样本不进这张表，"
+                   "所以各行占比加起来不等于 100%")
         out.append("")
 
     out.append("> 生成：hotspot/analysis/report.py（analysis 只回写 run.toml 的 `buckets`）")
@@ -321,7 +321,7 @@ def render_html(t: Tables) -> str:
             out.append(f"<li>{html.escape(note)}</li>")
         out.append('<li>表 1–3 分母 = bucket0 已归属样本；表 4 分母 = 全样本</li>')
         if t.functions:
-            out.append("<li>表 5 分母 = bucket0 未归属样本（公共/根代码），函数取最内层 DIE</li>")
+            out.append("<li>表 5 分母 = bucket0 全部样本，函数取最内层 DIE</li>")
         out.append("</ul>")
     if t.watermark:
         out.append(f'<div class="alert" id="watermark">G4 覆盖水位告警：'
@@ -460,14 +460,13 @@ def _bucket_row(bucket: BucketRow, css: str, depth: int) -> str:
 
 
 def _panel_functions(t: Tables) -> str:
-    root = next(bucket.samples for bucket in t.buckets if bucket.key == "bucket0_root")
-    out = [f'<p class="dim toolbar">公共/根代码 {root} 样本按函数拆 · 函数取最内层 DIE'
-           "（元件机器段不进这张表，它们已经归到元件了）</p>",
+    out = [f'<p class="dim toolbar">bucket0 全部 {t.bucket0_samples} 样本按最内层函数排名'
+           "（元件机器段与公共/根代码的样本都在里面）</p>",
            '<p class="toolbar"><input class="filter" data-table="table-functions"'
-           ' placeholder="筛选函数 / 文件 / 行号"></p>',
+           ' placeholder="筛选函数 / 文件 / 行号 / origin"></p>',
            '<table class="grid" id="table-functions">',
            "<thead><tr><th>函数</th><th>声明位置</th>"
-           '<th class="num">样本数</th><th class="num">占比</th></tr></thead>',
+           '<th class="num">样本数</th><th class="num">占比</th><th>origin</th></tr></thead>',
            "<tbody>"]
     for row in t.functions:
         out.append(
@@ -475,7 +474,8 @@ def _panel_functions(t: Tables) -> str:
             f'<td class="mono" data-v="{row.line or 0}">'
             f"{html.escape(_line_label(row.file, row.line))}</td>"
             f'<td class="num" data-v="{row.samples}">{row.samples}</td>'
-            f"{_share_cell(row.share)}</tr>")
+            f"{_share_cell(row.share)}"
+            f'<td class="mono">{html.escape(row.origin)}</td></tr>')
     out.append("</tbody></table>")
     return "\n".join(out)
 

@@ -14,7 +14,7 @@
 - W3：sidecar join 与 G2 抽查（20/20、80/80）
 - W4：四表 + `report.md` / `report.html` + G3′/G4 + baseline；7 条 analysis 单测通过
 - 函数级归因：sidecar `functions[]`（304 条，多段 ranges）+ `func_id`；表 4 拆
-  stdlib/source/无函数信息，表 5 函数热度；覆盖 99.97%
+  stdlib/source/无函数信息，表 5 函数热度（分母 = bucket0 全部样本）；覆盖 99.97%
 - 行号绑定来源文件：`el.tsv` 用源文件行、`offsets` 带 `line_offset/sources`、
   `sidecar.lines[].file`；缓存键含 `line_offset`
 - 一键入口 `python hotspot/run.py`：无参取 `work/hook` 最新产物，有参 `--src` /

@@ -2,15 +2,18 @@
 
 口径（沿用旧工具 `tools/analyze_sim_hotspot.py:190` 的 `in_jit` 分母）：
 - 表 1–3 的分母 = bucket=0 且命中 `segments` 的样本数；
-- 表 4 的分母 = 全样本。
+- 表 4 的分母 = 全样本；
+- 表 5 的分母 = bucket=0 的全部样本（元件段的样本也在里面）。
 
 bucket=0 未归属的二分按 `docs/specs/2026-11-01-hotspot-profiler-design.md` §7.1
 （「有 stubs 切桩 / 剩余为公共根」）。§6 的查询顺序写的是 segments → lines → stubs，
 但 `lines` 只提供行号明细、不参与这里的两分：若先判 `lines`，落进桩里又有行号信息
 的样本会被算成公共根，表 4 的两个子桶就失真。
 
-公共根再按侧车的 `functions` 归到函数（新 sidecar 才有），且**只在这时才看函数**：
-函数区间是嵌套 DIE 切出来的最内层区间，先按元件切才能不把元件机器码重复算进函数热度。
+`functions`（新 sidecar 才有）在两处用，且都按**最内层**区间查（嵌套 DIE 已切好）：
+表 4 只拆公共根（元件样本已经在表 1–3 里了）；表 5 按函数给 bucket0 全部样本排名 ——
+元件机器码也落在某个函数区间里，表 5 要回答的是「这些热度挂在哪个函数下」，
+所以函数归因与元件归因并行做，互不扣除。
 """
 from __future__ import annotations
 
@@ -421,8 +424,9 @@ class Attribution:
     root_samples: int = 0
     root_with_line: int = 0                                         # 公共根里带行号信息的样本
     root_line_files: Counter = field(default_factory=Counter)       # 公共根里带行号的样本按文件分
-    root_function_samples: Counter = field(default_factory=Counter)  # 公共根按 func_id 分（新 sidecar）
+    root_function_samples: Counter = field(default_factory=Counter)  # 公共根按 func_id 分（表 4）
     root_no_function: int = 0                                       # 公共根里没函数信息的样本
+    function_samples: Counter = field(default_factory=Counter)      # bucket0 全部样本按 func_id 分（表 5）
 
 
 def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -> Attribution:
@@ -436,6 +440,9 @@ def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -
                 samples.path,
                 f"第 {row.lineno} 行 bucket=0 的 blob_offset={row.offset} 超出代码长度 {code_len}"
                 f"（坐标越界：采样与侧车不是同一份产物？）")
+        func_id = sidecar.functions.find(row.offset) if sidecar.functions is not None else None
+        if func_id is not None:
+            result.function_samples[func_id] += row.count
         eid = sidecar.segments.find(row.offset)
         if eid is not None:
             element = sidecar.elements[eid]
@@ -460,7 +467,6 @@ def attribute(samples: Samples, sidecar: Sidecar, code_len: int | None = None) -
             if ref.file:
                 result.root_line_files[ref.file] += row.count
         if sidecar.functions is not None:
-            func_id = sidecar.functions.find(row.offset)
             if func_id is None:
                 result.root_no_function += row.count
             else:

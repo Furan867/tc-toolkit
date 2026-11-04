@@ -122,8 +122,9 @@ samples.tsv v1 契约（§4.4）不变；「换后端」是 consumer 内部战�
   `TraceSetInformation(TraceSampledProfileIntervalInfo)` 设间隔（100 ns 单位，
   1 ms=10000；下限实测回填，§13）→ `EnableTraceEx2` 开 `EVENT_TRACE_FLAG_PROFILE` →
   `OpenTraceW`（实时模式）+ `ProcessTrace` 在专用线程收事件；
-- 事件过滤：`EventHeader.ProviderId` 匹配 SystemTraceProvider、`EventDescriptor.Id`
-  匹配 SampledProfile（GUID 与 ID 由探针实测钉死，§13）；`EventHeader.ThreadId` 即
+- 事件过滤：`EventHeader.ProviderId` 匹配 PerfInfo class GUID
+  `{ce1dbfb4-…}`、`EventDescriptor.Opcode == 46`（classic 事件 `Id` 恒 0，46 是 MOF
+  Class.Type → Opcode）；`EventHeader.ThreadId` 即
   采样时线程；负载 v1 = IP(4)+TID(4)、v2 = IP(8)+TID(4)，未知版本丢弃并计数，不猜；
 - 提权：开内核日志会话需管理员令牌；ETW 非管理员时弹 UAC 重启自身，取消则退出；
   启动前显式启用 `SeSystemProfilePrivilege`，失败写日志后终止；suspend 不提权；

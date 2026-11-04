@@ -1,5 +1,6 @@
 #include "session.hh"
 
+#include "backend_etw.hh"
 
 #include <sstream>
 
@@ -119,13 +120,21 @@ std::expected<void, std::string> Session::create_backend()
     if (!artifact_.has_value() || !located_.has_value() || !pid_.has_value()) {
         return std::unexpected("还没有 open 成功");
     }
-    const auto copies = blob_copies();
-    if (config_.backend == Backend::suspend) {
+    if (config_.backend == Backend::etw) {
         suspend_view_ = nullptr;
-        backend_ = std::make_unique<SuspendBackend>(*pid_, copies, config_.suspend_probe_rounds);
-        suspend_view_ = static_cast<SuspendBackend *>(backend_.get());
+        // 内核日志会话在 REPL 生命周期内只建一次（管理员锁一次就够）。间隔钉在建会话那一刻，
+        // 所以同一目标 + 同一间隔就复用；换目标或换间隔才重建（spec §4.1）。
+        auto *existing = static_cast<EtwBackend *>(backend_.get());
+        if (existing != nullptr && existing->pid() == *pid_ &&
+            existing->interval_ms() == interval_ms_) {
+            return {};
+        }
+        backend_ = std::make_unique<EtwBackend>(*pid_, interval_ms_);
     } else {
-        return std::unexpected("etw 后端未实现（当前只有 suspend）");
+        suspend_view_ = nullptr;
+        backend_ = std::make_unique<SuspendBackend>(*pid_, blob_copies(),
+                                                    config_.suspend_probe_rounds);
+        suspend_view_ = static_cast<SuspendBackend *>(backend_.get());
     }
     auto prepared = backend_->prepare();
     if (!prepared.has_value()) {

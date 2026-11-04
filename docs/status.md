@@ -26,9 +26,9 @@
 
 ## 当前
 
-- **etw 自写**：spec v9 已改；只解析 SampledProfile，实时收，不落 ETL；失败 assert
-- 探针 `work/tmp/etw_probe/etw_probe.exe` 已编译，等管理员终端验证
-  Provider GUID / Event ID / 负载布局
+- **etw 自写已实现**：实时收、不落 ETL；解码单测 45 条通过；等管理员终端真机 smoke
+- 真机 smoke：`config.toml` 改 `backend = "etw"`，管理员终端跑 `open/window`；
+  非管理员/失败直接 assert
 
 ## 下一步
 

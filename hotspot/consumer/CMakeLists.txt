@@ -23,6 +23,7 @@ target_compile_options(hotspot_flags INTERFACE -Wall -Werror)
 # ------------------------------------------------------------------------ 共享聚合层 + REPL
 add_library(hotspot_core STATIC
     src/artifact.cc
+    src/backend_etw.cc
     src/backend_suspend.cc
     src/commands.cc
     src/config.cc
@@ -34,7 +35,8 @@ add_library(hotspot_core STATIC
     src/sha256.cc
     src/win_process.cc)
 target_include_directories(hotspot_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(hotspot_core PRIVATE hotspot_flags)
+# advapi32：StartTraceW/TraceSetInformation/OpenTraceW/ProcessTrace/ControlTraceW/CloseTrace。
+target_link_libraries(hotspot_core PRIVATE hotspot_flags advapi32)
 
 add_executable(hotspot-consumer src/main.cc)
 target_link_libraries(hotspot-consumer PRIVATE hotspot_core hotspot_flags)
@@ -44,6 +46,7 @@ enable_testing()
 
 add_executable(hotspot_tests
     tests/main.cc
+    tests/test_backend_etw.cc
     tests/test_commands.cc
     tests/test_features.cc
     tests/test_run_dir.cc

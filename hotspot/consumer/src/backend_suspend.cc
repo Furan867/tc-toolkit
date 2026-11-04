@@ -1,12 +1,75 @@
 #include "backend_suspend.hh"
 
 #include <windows.h>
+// timeapi.h 是 timeBeginPeriod/timeEndPeriod 的声明处，它依赖 windows.h 先到位。
+#include <timeapi.h>
 
 #include <algorithm>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
 namespace hotspot {
+
+namespace {
+
+// 1 ms —— timeBeginPeriod 取的就是这个值。
+constexpr UINT kTimerPeriodMs = 1;
+
+// timeEndPeriod 不认「谁调的」：嵌套计数只能自己的账本记，否则内层析构会把外层想要的
+// 精度一起丢掉。
+struct TimerResolutionState {
+    std::mutex mutex;
+    int depth = 0;
+};
+
+TimerResolutionState &timer_resolution_state()
+{
+    static TimerResolutionState state;
+    return state;
+}
+
+// 自旋的粒度上限：先按 500 µs 试，实际周期够不够 1 ms 看 run.ini 的 pause_*_us / 样本数。
+constexpr std::chrono::microseconds kSpinMargin{500};
+
+} // namespace
+
+TimerResolutionGuard::TimerResolutionGuard()
+{
+    TimerResolutionState &state = timer_resolution_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.depth++ == 0) {
+        // 失败（TIMERR_NOCANDO）只是精度没提升，退回原来的 15.625 ms 周期，不当作错误。
+        timeBeginPeriod(kTimerPeriodMs);
+    }
+}
+
+TimerResolutionGuard::~TimerResolutionGuard()
+{
+    TimerResolutionState &state = timer_resolution_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (--state.depth == 0) {
+        timeEndPeriod(kTimerPeriodMs);
+    }
+}
+
+int TimerResolutionGuard::depth()
+{
+    TimerResolutionState &state = timer_resolution_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.depth;
+}
+
+void wait_until(std::chrono::steady_clock::time_point target, std::chrono::microseconds spin_margin)
+{
+    const auto spin_start = target - spin_margin;
+    if (std::chrono::steady_clock::now() < spin_start) {
+        std::this_thread::sleep_until(spin_start);
+    }
+    while (std::chrono::steady_clock::now() < target) {
+        std::this_thread::yield();
+    }
+}
 
 SuspendBackend::SuspendBackend(std::uint32_t pid, std::vector<BlobCopy> copies, int probe_rounds)
     : pid_(pid)
@@ -87,18 +150,22 @@ std::expected<std::string, std::string> SuspendBackend::prepare()
     // 粗采锁定仿真线程：命中一次就锁定。未命中说明这段时间电路没在跑（停着/在 UI），
     // 退回全线程采样并告警 —— 样本的归因没错，只是多出非仿真线程的 IMAGE 样本。
     std::unordered_map<std::uint32_t, int> hits;
-    for (int round = 0; round < probe_rounds_; ++round) {
-        for (std::size_t i = 0; i < handles_.size(); ++i) {
-            const auto sample = sample_once(handles_[i]);
-            if (!sample.has_value()) {
-                continue;
+    // 粗采也是 1 ms 间隔的 sleep：不提升精度的话实际周期被量化到 ~7.8 ms。
+    {
+        TimerResolutionGuard timer_resolution;
+        for (int round = 0; round < probe_rounds_; ++round) {
+            for (std::size_t i = 0; i < handles_.size(); ++i) {
+                const auto sample = sample_once(handles_[i]);
+                if (!sample.has_value()) {
+                    continue;
+                }
+                max_pause_ = std::max(max_pause_, sample->second);
+                if (in_blob(sample->first)) {
+                    ++hits[thread_ids_[i]];
+                }
             }
-            max_pause_ = std::max(max_pause_, sample->second);
-            if (in_blob(sample->first)) {
-                ++hits[thread_ids_[i]];
-            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     if (hits.empty()) {
@@ -158,30 +225,39 @@ std::expected<WindowStats, std::string> SuspendBackend::run_window(std::chrono::
 
     WindowStats stats;
     stats.thread_ids = thread_ids_;
+    // 暂停统计按窗口算：prepare 的粗采与上一个窗口的上界都不能带进来。
+    max_pause_ = std::chrono::microseconds{0};
+    std::uint64_t pause_total_us = 0;
     const auto start = std::chrono::steady_clock::now();
     const auto deadline = start + duration;
     auto next_round = start;
-    while (std::chrono::steady_clock::now() < deadline) {
-        for (std::size_t i = 0; i < handles_.size(); ++i) {
-            const auto sample = sample_once(handles_[i]);
-            if (!sample.has_value()) {
-                continue;
+    {
+        TimerResolutionGuard timer_resolution;
+        while (std::chrono::steady_clock::now() < deadline) {
+            for (std::size_t i = 0; i < handles_.size(); ++i) {
+                const auto sample = sample_once(handles_[i]);
+                if (!sample.has_value()) {
+                    continue;
+                }
+                pause_total_us += static_cast<std::uint64_t>(sample->second.count());
+                max_pause_ = std::max(max_pause_, sample->second);
+                sink(sample->first, thread_ids_[i]);
+                ++stats.samples;
             }
-            max_pause_ = std::max(max_pause_, sample->second);
-            stats.max_pause = max_pause_;
-            sink(sample->first, thread_ids_[i]);
-            ++stats.samples;
-        }
-        next_round += interval;
-        const auto now = std::chrono::steady_clock::now();
-        if (next_round > now) {
-            std::this_thread::sleep_until(next_round);
-        } else {
-            next_round = now; // 采样本身超了间隔：不追补，直接从现在起算
+            next_round += interval;
+            // 落后（采样本身超过了间隔）就不追补也不重置：立即采下一轮，欠账由后续轮自己还上。
+            // 把 next_round 重置成 now 等于把每轮周期硬拉长成「采样耗时 + 完整间隔」，
+            // 10 s / 1 ms 的样本数会被一路拉低。
+            wait_until(next_round, kSpinMargin);
         }
     }
     stats.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
+    stats.pause_total_us = pause_total_us;
+    stats.pause_max_us = static_cast<std::uint64_t>(max_pause_.count());
+    if (stats.samples > 0) {
+        stats.pause_avg_us = pause_total_us / stats.samples;
+    }
     if (!locked_) {
         stats.note = "全线程采样（未锁定仿真线程）";
     }

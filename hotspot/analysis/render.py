@@ -181,6 +181,15 @@ def _window_text(t: Tables) -> str:
     return f"{window}，采样间隔 {interval}"
 
 
+def _pause_text(t: Tables) -> str:
+    """暂停开销：平均 / 最大 / 合计。缺键显示「未知」—— 当 0 读会把「没记录」说成「零暂停」。"""
+    m = t.meta
+    parts = [f"{label} " + ("未知" if value is None else f"{value} µs")
+             for label, value in (("平均", m.pause_avg_us), ("最大", m.pause_max_us),
+                                  ("合计", m.pause_total_us))]
+    return "，".join(parts)
+
+
 # ------------------------------------------------------------------ report.md
 
 
@@ -196,6 +205,7 @@ def render_markdown(t: Tables) -> str:
     out.append(f"| 总样本数 | {t.total_samples} |")
     out.append(f"| bucket0 已归属（表 1–3 分母） | {t.attributed_samples} |")
     out.append(f"| 窗口 | {_window_text(t)} |")
+    out.append(f"| 暂停开销 | {_pause_text(t)} |")
     out.append(f"| 产物 | {_artifact_text(t)} |")
     out.append(f"| 产物编号 | {m.artifact_num} |")
     out.append(f"| 落盘时刻 | {m.created_at} |")
@@ -307,6 +317,7 @@ def render_html(t: Tables) -> str:
         ("总样本数", f"{t.total_samples}"),
         ("表 1–3 分母", f"bucket0 已归属 {t.attributed_samples}"),
         ("窗口", _window_text(t)),
+        ("暂停开销", _pause_text(t)),
         ("产物", _artifact_text(t)),
         ("产物编号", m.artifact_num or "（无）"),
         ("落盘时刻", m.created_at),

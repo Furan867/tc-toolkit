@@ -39,7 +39,8 @@ target_include_directories(hotspot_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # advapi32：StartTraceW/TraceSetInformation/OpenTraceW/ProcessTrace/ControlTraceW/CloseTrace、
 #           OpenProcessToken/GetTokenInformation（提权判断）。
 # shell32：ShellExecuteExW（提权重启自己）。
-target_link_libraries(hotspot_core PRIVATE hotspot_flags advapi32 shell32)
+# winmm：timeBeginPeriod/timeEndPeriod（suspend 采样的 1 ms 精度）。
+target_link_libraries(hotspot_core PRIVATE hotspot_flags advapi32 shell32 winmm)
 
 add_executable(hotspot-consumer src/main.cc)
 target_link_libraries(hotspot-consumer PRIVATE hotspot_core hotspot_flags)
@@ -50,6 +51,7 @@ enable_testing()
 add_executable(hotspot_tests
     tests/main.cc
     tests/test_backend_etw.cc
+    tests/test_backend_suspend.cc
     tests/test_commands.cc
     tests/test_elevate.cc
     tests/test_features.cc

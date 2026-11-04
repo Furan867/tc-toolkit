@@ -465,6 +465,7 @@ tc-toolkit/hotspot/
 | `locate.feature_off` | int | 特征窗偏移（默认 `0x400`） |
 | `window.sec` / `window.interval_ms` / `window.sample_count` | num | 实际窗口参数与样本数 |
 | `window.tids` | list[int] | etw 首尾快照并集 |
+| `window.avg_pause_us` / `max_pause_us` / `total_pause_us` | num | suspend 暂停统计（etw 为 0；旧 run.ini 缺省） |
 | `freq.start_hz` / `freq.end_hz` / `freq.start_at` / `freq.end_at` | float | 窗口首尾各一次读数与时刻 |
 | `freq.interval_sec` | float | 两次读数间隔基准（默认 1.0） |
 | `buckets` | map | analysis 回写三桶份额 |

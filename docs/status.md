@@ -29,12 +29,14 @@
 - **etw 真机可用**：5 s 窗口样本 5851（bucket0 4361 / bucket1 1 / bucket2 1254）；
   按 `ProviderId={ce1dbfb4…} + Opcode 46` 过滤；非 SP 4 个、TID 快照外 8941 个丢弃
 - UAC 仅 etw 触发；提权进程退出前暂停；运行日志 `work/tmp/run_*.log`
+- **suspend 节拍修复**：10 s / 1 ms 采到 10000；暂停平均 17 µs / 最大 304 µs /
+  合计 1.8%（主频不跌）
 - 已知：窗口统计与 `samples.tsv` 分桶和差 235（未分类内核 IP）；计数跨窗口累计未归零
 
 ## 下一步
 
-- 跑探针，钉死 GUID/ID/布局与事件率
-- 重写 `backend_etw`，接聚合层；真机 ETW vs suspend 对比
+- 真机对比 ETW vs suspend 的 bucket0/热点差异
+- ref Provider / G3″ 与精确 tick 仍暂缓
 - 验收阈值由负责人现场定（spec §8/§12 已不留默认数字）
 
 ## 其它线

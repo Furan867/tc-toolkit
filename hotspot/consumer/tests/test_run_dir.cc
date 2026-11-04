@@ -35,6 +35,9 @@ RunRecord sample_record()
     record.window_sec = 10;
     record.interval_ms = 1;
     record.sample_count = 3;
+    record.pause_total_us = 1234;
+    record.pause_avg_us = 123;
+    record.pause_max_us = 456;
     record.tids = {11, 12};
     record.freq_start.hz = 1.0e8;
     record.freq_start.at = "2026-11-05T10:00:00";
@@ -66,6 +69,9 @@ TEST_CASE(run_ini_has_the_spec_keys)
                             "sec = 10",
                             "interval_ms = 1",
                             "sample_count = 3",
+                            "avg_pause_us = 123",
+                            "max_pause_us = 456",
+                            "total_pause_us = 1234",
                             "tids = [11, 12]",
                             "[freq]",
                             "interval_sec = 1",
@@ -73,6 +79,22 @@ TEST_CASE(run_ini_has_the_spec_keys)
                             "end_hz = 1.01e+08",
                             "start_at = \"2026-11-05T10:00:00\"",
                             "[buckets]"}) {
+        if (text.find(key) == std::string::npos) {
+            ::testing_support::fail(__FILE__, __LINE__, std::string("run.ini 缺少 ") + key);
+        }
+    }
+}
+
+TEST_CASE(run_ini_writes_zero_pause_keys_for_etw)
+{
+    RunRecord record = sample_record();
+    record.backend = hotspot::Backend::etw;
+    record.pause_total_us = 0;
+    record.pause_avg_us = 0;
+    record.pause_max_us = 0;
+    const std::string text = hotspot::render_run_ini(record);
+    // etw 每样本零暂停：三个键照写 0（不省略）。省掉的键会被读的一侧当成「旧 run 的未知」。
+    for (const char *key : {"avg_pause_us = 0", "max_pause_us = 0", "total_pause_us = 0"}) {
         if (text.find(key) == std::string::npos) {
             ::testing_support::fail(__FILE__, __LINE__, std::string("run.ini 缺少 ") + key);
         }

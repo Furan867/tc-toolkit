@@ -15,7 +15,11 @@ using SampleSink = std::function<void(std::uintptr_t ip, std::uint32_t thread_id
 struct WindowStats {
     std::uint64_t samples = 0;
     std::chrono::milliseconds elapsed{0};
-    std::chrono::microseconds max_pause{0}; // suspend 后端的单样本暂停时长上界实测值
+    // 暂停开销：只统计本窗口（etw 零暂停，三个值恒 0）。total 是窗口内全部样本的暂停时长之和，
+    // avg 由 total / 成功样本数得来 —— 三者一起才看得出「样本数没凑满」是间隔没跟上还是暂停太贵。
+    std::uint64_t pause_total_us = 0;
+    std::uint64_t pause_avg_us = 0;
+    std::uint64_t pause_max_us = 0;
     std::vector<std::uint32_t> thread_ids;
     std::string note;
 };

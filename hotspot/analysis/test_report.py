@@ -41,6 +41,9 @@ SEGMENTS = [(0, 100, 1), (100, 200, 2), (200, 300, 3), (300, 400, 4),
 LINES = [(0, 50, 10), (50, 100, 11), (100, 200, 20), (600, 700, 99)]
 STUBS = [(900, 912, "stub", "kernel32.VirtualAlloc")]
 SHA256 = "0123456789abcdef" * 4
+# 暂停开销：[window] 的三个 *_pause_us。`write_run(pause=False)` 造旧的 run.ini（没有这三个键），
+# 用来验报告里显示的是「未知」而不是 0。
+PAUSE_US = {"avg_pause_us": 12, "max_pause_us": 30, "total_pause_us": 1234}
 
 # run A：覆盖 bucket0 已归属 / 桩 / 公共根（有行号 + 无行号）/ bucket1 / bucket2 / 零值类型
 SAMPLES_A = [
@@ -164,13 +167,17 @@ def read_ini(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def write_run(root: Path, name: str, samples: list[tuple[int, int, int, int]],
-              sidecar: dict | None = None, sample_count: int | None = None) -> Path:
+              sidecar: dict | None = None, sample_count: int | None = None,
+              pause: bool = True) -> Path:
+    """造一个 run 目录；`pause=False` 造旧 run.ini（[window] 里没有三个 *_pause_us 键）。"""
     run_dir = root / name
     run_dir.mkdir(parents=True)
     total = sample_count if sample_count is not None else sum(s[3] for s in samples)
-    (run_dir / "run.ini").write_text(
-        RUN_INI.format(sha=SHA256, file_len=FILE_LEN, code_len=CODE_LEN, sample_count=total),
-        encoding="utf-8")
+    ini = RUN_INI.format(sha=SHA256, file_len=FILE_LEN, code_len=CODE_LEN, sample_count=total)
+    if pause:
+        block = "".join(f"{key} = {value}\n" for key, value in PAUSE_US.items())
+        ini = ini.replace("tids = [100, 101]", block + "tids = [100, 101]")
+    (run_dir / "run.ini").write_text(ini, encoding="utf-8")
     rows = ["# samples.tsv v1", "bucket\tblob_offset\tthread_id\tcount"]
     rows += [f"{b}\t{o}\t{t}\t{c}" for b, o, t, c in samples]
     (run_dir / "samples.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -329,6 +336,25 @@ class ReportCase(unittest.TestCase):
         self.assertIn("| 窗口 | 10 s，采样间隔 1 ms |", markdown)
         self.assertIn("近似口径", markdown)          # spec §9 的精度口径必须标注
         self.assertIn("10 s ≈", markdown)            # 粗 tick 估算
+
+    def test_meta_shows_pause_overhead(self) -> None:
+        """[window] 的三个暂停键进元数据：平均/最大/合计。"""
+        proc = run_cli("--run", str(self.run_a))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        markdown = (self.run_a / "report.md").read_text(encoding="utf-8")
+        expected = (f"| 暂停开销 | 平均 {PAUSE_US['avg_pause_us']} µs，"
+                    f"最大 {PAUSE_US['max_pause_us']} µs，合计 {PAUSE_US['total_pause_us']} µs |")
+        self.assertIn(expected, markdown)
+        page = (self.run_a / "report.html").read_text(encoding="utf-8")
+        self.assertIn("暂停开销", page)
+
+    def test_old_run_ini_without_pause_keys_shows_unknown(self) -> None:
+        """旧 run.ini 缺三个键：显示未知。当 0 读会把「没记录」说成「零暂停」。"""
+        run_dir = write_run(self.workspace / "runs", "run_old", SAMPLES_A, pause=False)
+        proc = run_cli("--run", str(run_dir))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        markdown = (run_dir / "report.md").read_text(encoding="utf-8")
+        self.assertIn("| 暂停开销 | 平均 未知，最大 未知，合计 未知 |", markdown)
 
     def test_html_self_contained(self) -> None:
         proc = run_cli("--run", str(self.run_a))

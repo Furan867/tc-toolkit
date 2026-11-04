@@ -27,6 +27,10 @@ class RunMeta:
     window_sec: float | None
     interval_ms: float | None
     sample_count: int
+    # 暂停开销（`[window]` 的三个 `*_pause_us`）；旧 run.ini 没这三个键 → None，显示为未知。
+    pause_avg_us: int | None
+    pause_max_us: int | None
+    pause_total_us: int | None
     bases: tuple[str, ...]
     freq_start_hz: float | None
     freq_end_hz: float | None

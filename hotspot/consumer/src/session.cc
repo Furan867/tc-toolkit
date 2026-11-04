@@ -211,8 +211,9 @@ std::expected<std::string, std::string> Session::do_window(int seconds, bool sav
         << samples_.count_in(Bucket::blob) << " / bucket1 " << samples_.count_in(Bucket::other_exec)
         << " / bucket2 " << samples_.count_in(Bucket::image) << "），实际 " << stats->elapsed.count()
         << " ms";
-    if (stats->max_pause.count() > 0) {
-        out << "，单样本暂停上界 " << stats->max_pause.count() << " µs";
+    if (stats->pause_max_us > 0) {
+        out << "，暂停 平均 " << stats->pause_avg_us << " µs / 最大 " << stats->pause_max_us
+            << " µs / 合计 " << stats->pause_total_us << " µs";
     }
     if (!stats->note.empty()) {
         out << "\n注意：" << stats->note;
@@ -260,6 +261,9 @@ Session::write_run(const std::optional<std::filesystem::path> &dir, const FreqRe
     record.sample_count = samples_.total();
     if (last_window_.has_value()) {
         record.tids = last_window_->thread_ids;
+        record.pause_total_us = last_window_->pause_total_us;
+        record.pause_avg_us = last_window_->pause_avg_us;
+        record.pause_max_us = last_window_->pause_max_us;
     }
     record.freq_start = window_start_freq_;
     record.freq_end = freq_end;
@@ -323,7 +327,7 @@ std::string Session::do_status() const
     if (suspend_view_ != nullptr) {
         out << "线程 " << suspend_view_->thread_ids().size() << " 个"
             << (suspend_view_->simulation_thread_locked() ? "（已锁定仿真线程）" : "（未锁定，全线程）")
-            << "，单样本暂停上界 " << suspend_view_->max_pause().count() << " µs\n";
+            << "，单样本暂停上界 " << suspend_view_->max_pause().count() << " µs（最近一次窗口）\n";
     } else if (last_window_.has_value()) {
         out << "窗口 TID 并集：" << join_thread_ids(last_window_->thread_ids) << "\n";
     }

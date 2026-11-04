@@ -34,6 +34,11 @@ struct RunRecord {
     int window_sec = 0;
     int interval_ms = 0;
     std::uint64_t sample_count = 0;
+    // 暂停开销（suspend 后端才有真数，etw 零暂停恒 0）。旧 run.ini 没有这三个键，
+    // 读的一侧按缺失处理（不能当 0 读：0 的意思是「没暂停」）。
+    std::uint64_t pause_total_us = 0;
+    std::uint64_t pause_avg_us = 0;
+    std::uint64_t pause_max_us = 0;
     std::vector<std::uint32_t> tids;
     FreqReading freq_start;
     FreqReading freq_end;

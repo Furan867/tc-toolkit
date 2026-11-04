@@ -1,5 +1,5 @@
-// suspend 后端：SuspendThread → GetThreadContext(RIP) → ResumeThread。
-// 免管理员，代价是每个样本一次暂停（上界实测值回填进 WindowStats::max_pause）。
+// suspend 后端：SuspendThread × GetThreadContext(RIP) → ResumeThread。
+// 免管理员，代价是每个样本一次暂停（真实暂停消耗按窗口累计进 WindowStats::pause_*_us）。
 #pragma once
 
 #include "backend.hh"
@@ -15,6 +15,27 @@
 #include <vector>
 
 namespace hotspot {
+
+// 1 ms 定时器精度守卫（timeBeginPeriod / timeEndPeriod，见 backend_suspend.cc）。
+// 精度是进程级全局状态，所以只包住采样循环本身；析构即恢复，提前 return / 异常都走析构。
+// 可嵌套：timeEndPeriod 不认调用者，成对计数只能自己记，只有最外层真正调 Win32。
+class TimerResolutionGuard {
+  public:
+    TimerResolutionGuard();
+    ~TimerResolutionGuard();
+    TimerResolutionGuard(const TimerResolutionGuard &) = delete;
+    TimerResolutionGuard &operator=(const TimerResolutionGuard &) = delete;
+    TimerResolutionGuard(TimerResolutionGuard &&) = delete;
+    TimerResolutionGuard &operator=(TimerResolutionGuard &&) = delete;
+
+    // 当前嵌套层数（测试用它验证成对与嵌套时序）。
+    static int depth();
+};
+
+// 睡到 target：先 sleep_until(target - spin_margin)，剩下的自旋到目标。
+// 只 sleep 的话，Windows 的唤醒按 timeBeginPeriod 的周期对齐，实际周期比 interval 长零点几毫秒
+// —— 10 s / 1 ms 就只有五六千个样本而不是 10000 个。target 已经过去时立即返回（落后不补睡）。
+void wait_until(std::chrono::steady_clock::time_point target, std::chrono::microseconds spin_margin);
 
 class SuspendBackend : public SamplerBackend {
   public:

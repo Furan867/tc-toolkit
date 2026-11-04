@@ -116,6 +116,9 @@ std::string render_run_ini(const RunRecord &record)
     out << "sec = " << record.window_sec << "\n";
     out << "interval_ms = " << record.interval_ms << "\n";
     out << "sample_count = " << record.sample_count << "\n";
+    out << "avg_pause_us = " << record.pause_avg_us << "\n";
+    out << "max_pause_us = " << record.pause_max_us << "\n";
+    out << "total_pause_us = " << record.pause_total_us << "\n";
     out << "tids = [";
     for (std::size_t i = 0; i < record.tids.size(); ++i) {
         out << (i == 0 ? "" : ", ") << record.tids[i];

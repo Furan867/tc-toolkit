@@ -70,6 +70,28 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(opts.pid, 1)
         self.assertTrue(opts.clean)
 
+    def test_short_flags(self):
+        opts = run.parse_args(
+            [
+                "-s", "x.si", "-l", "lib.si", "-w", "3", "-p", "1",
+                "-i", "2", "-o", "out", "-c", "cfg.ini", "-C", "-k",
+                "-n", "-g", "-P", "-L", "log.txt",
+            ]
+        )
+        self.assertEqual(opts.src, "x.si")
+        self.assertEqual(opts.stdlib, "lib.si")
+        self.assertEqual(opts.window, 3)
+        self.assertEqual(opts.pid, 1)
+        self.assertEqual(opts.interval_ms, 2)
+        self.assertEqual(opts.out, "out")
+        self.assertEqual(opts.config, "cfg.ini")
+        self.assertTrue(opts.clean)
+        self.assertTrue(opts.keep_running)
+        self.assertTrue(opts.no_sim_control)
+        self.assertTrue(opts.skip_game_check)
+        self.assertTrue(opts.pause_on_exit)
+        self.assertEqual(opts.log_file, "log.txt")
+
     def test_pause_on_exit_is_opt_in(self):
         # 管理员终端直接跑不带它就不该停：等回车只能来自显式要求或提权重启那次自动加
         self.assertFalse(run.parse_args(["--src", "x.si"]).pause_on_exit)
@@ -903,7 +925,7 @@ class RunLogTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         text = self.log_text()
-        self.assertIn("完成：", text)
+        self.assertIn("report：", text)
         self.assertIn("样本 10", text)
         self.assertIn("退出码 0", text)
 

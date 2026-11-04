@@ -527,7 +527,7 @@ def _pick_hook_src(opts: argparse.Namespace) -> Path:
     opts.hook_num = product.num
     if product.stdlib:
         opts.stdlib = ROOT / "work/hook/all/stdlib_prefix.si"
-    print(f"→ 用 hook 产物 {product.num}：{product.src}")
+    print(f"→ 用 hook 产物 {product.num}")
     return product.src
 
 
@@ -806,56 +806,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="clean：删 sidecar 缓存与 work/tmp/hotspot_run（不跑分析）",
     )
     parser.add_argument(
+        "-s",
         "--src",
         help="源文件 .si（不给就取 work/hook 里最近一次编译 hook 的源）",
     )
-    parser.add_argument("--stdlib", help="stdlib 前缀 .si（复现 hook 产物时用）")
+    parser.add_argument("-l", "--stdlib", help="stdlib 前缀 .si（复现 hook 产物时用）")
     parser.add_argument(
+        "-a",
         "--artifact",
         help="现成的产物 .bin（配合 --sidecar，跳过编译与 sidecar 生成）",
     )
-    parser.add_argument("--sidecar", help="--artifact 对应的 sidecar.json")
-    parser.add_argument("--window", type=int, default=10, help="采样窗口秒数（默认 10）")
-    parser.add_argument("--pid", type=int, help="游戏 PID（默认按进程名找）")
-    parser.add_argument("--interval-ms", type=int, help="采样间隔毫秒")
+    parser.add_argument("-S", "--sidecar", help="--artifact 对应的 sidecar.json")
+    parser.add_argument("-w", "--window", type=int, default=10, help="采样窗口秒数（默认 10）")
+    parser.add_argument("-p", "--pid", type=int, help="游戏 PID（默认按进程名找）")
+    parser.add_argument("-i", "--interval-ms", type=int, help="采样间隔毫秒")
     parser.add_argument(
+        "-o",
         "--out",
         help="run 目录（默认 hotspot/workspace/runs/<ts>_<name>_t<秒>）",
     )
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="config.ini 路径")
-    parser.add_argument("--clean", action="store_true", help="成功后删除中间产物")
+    parser.add_argument("-c", "--config", default=str(DEFAULT_CONFIG), help="config.ini 路径")
+    parser.add_argument("-C", "--clean", action="store_true", help="成功后删除中间产物")
     parser.add_argument(
+        "-k",
         "--keep-running",
         action="store_true",
         help="采样后不停电路（就算是我们启动的也留着）",
     )
     parser.add_argument(
+        "-n",
         "--no-sim-control",
         action="store_true",
         help="不自动启停仿真（仿真没在跑就报错）",
     )
     parser.add_argument(
+        "-g",
         "--skip-game-check",
         action="store_true",
         help="跳过 sim_speed 检查（离线/测试；也是「不启停」）",
     )
     parser.add_argument(
+        "-P",
         PAUSE_ON_EXIT,
         dest="pause_on_exit",
         action="store_true",
         help="退出前等一次回车（提权重启时自动加；stdin 非 TTY 不等）",
     )
     parser.add_argument(
+        "-L",
         LOG_FILE_OPTION,
         dest="log_file",
         help="内部用：日志文件路径（默认 work/tmp/run_<时间戳>.log；提权重启时原样给子进程）",
     )
     parser.add_argument(
+        "-r",
         "--runs",
         action="store_true",
         help="clean 时连 hotspot/workspace/runs 一起删（默认保留）",
     )
     parser.add_argument(
+        "-d",
         "--dry-run",
         action="store_true",
         help="clean 时只列将删的路径与数量，不删",
@@ -964,13 +974,11 @@ def _pipeline(opts: argparse.Namespace, arguments: list[str]) -> int:
 
     share = 100 * stats["bucket0"] / stats["samples"] if stats["samples"] else 0.0
     log_write(
-        f"完成：{run_dir}\n"
         f"report：{html}\n"
         f"样本 {stats['samples']}（bucket0 {stats['bucket0']} / "
         f"bucket1 {stats['bucket1']} / bucket2 {stats['bucket2']}），"
         f"bucket0 份额 {share:.1f}%"
     )
-    print(f"完成：{run_dir}")
     print(f"  report：{html}")
     print(
         f"  样本 {stats['samples']}（bucket0 {stats['bucket0']} / "

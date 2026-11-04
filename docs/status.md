@@ -26,10 +26,10 @@
 
 ## 当前
 
-- **etw 自写已实现**：实时收、不落 ETL；解码单测 45 条通过；等管理员终端真机 smoke
-- 真机 smoke：`config.toml` 改 `backend = "etw"`，管理员终端跑 `open/window`；
-  ETW 非管理员自动 UAC（consumer/run.py），suspend 不提权；启动前显式启用
-  `SeSystemProfilePrivilege`，失败写 `work/tmp/etw_fail.log` 再终止
+- **etw 真机可用**：5 s 窗口样本 5851（bucket0 4361 / bucket1 1 / bucket2 1254）；
+  按 `ProviderId={ce1dbfb4…} + Opcode 46` 过滤；非 SP 4 个、TID 快照外 8941 个丢弃
+- UAC 仅 etw 触发；提权进程退出前暂停；运行日志 `work/tmp/run_*.log`
+- 已知：窗口统计与 `samples.tsv` 分桶和差 235（未分类内核 IP）；计数跨窗口累计未归零
 
 ## 下一步
 

@@ -27,7 +27,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-import tc_common  # noqa: E402
+sys.path.insert(0, ROOT)
+from libs import tc_common  # noqa: E402
 
 GAME = str(tc_common.game_dir())
 DLL = os.path.join(GAME, tc_common.GAME_DLL_NAME)

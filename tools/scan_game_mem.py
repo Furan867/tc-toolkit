@@ -23,10 +23,13 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 
-import tc_common
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from libs import tc_common  # noqa: E402
+
 WORK = os.path.join(ROOT, "work")
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)

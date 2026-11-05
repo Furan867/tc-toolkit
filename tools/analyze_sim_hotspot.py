@@ -36,12 +36,12 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 WORK = os.path.join(ROOT, "work")
 
-import tc_common  # noqa: E402
-from term import field, paint  # noqa: E402
+from libs import tc_common  # noqa: E402
+from libs.term import field, paint  # noqa: E402
 
 MEM_COMMIT = 0x1000
 MEM_IMAGE = 0x1000000

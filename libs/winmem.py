@@ -11,16 +11,10 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
-import os
 import subprocess
 import sys
 
-# 本模块既被 `import winmem`（脚本同目录）也被 `from .. import winmem`（tools.freq
-# 包内）加载，两种情况下 sys.path 里都没有 tools/ —— 按文件位置自己补一次。
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-import tc_common  # noqa: E402
+from libs import tc_common
 
 # Windows 下 stdout 走管道时默认按 locale(GBK) 编码，输出里的 ✅/❌ 会抛
 # UnicodeEncodeError 把流程打断。统一在这里处理一次。

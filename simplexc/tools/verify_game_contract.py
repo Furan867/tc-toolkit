@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import importlib.util
 import json
 import os
 import re
@@ -69,20 +68,12 @@ for _s in (sys.stdout, sys.stderr):
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _load_by_path(path, name):
-    """按文件路径加载模块（tools/ 不是包，静态 import 解析不到）。"""
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"加载不了 {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+from libs.tc_common import GAME_EXE_NAME, GAME_REAL_DLL_NAME, game_dir  # noqa: E402
 
-
-TC = _load_by_path(os.path.join(_REPO, "tools", "tc_common.py"), "tc_common")
-
-EXE_NAME = TC.GAME_EXE_NAME
-REAL_DLL_NAME = TC.GAME_REAL_DLL_NAME
+EXE_NAME = GAME_EXE_NAME
+REAL_DLL_NAME = GAME_REAL_DLL_NAME
 ACF_NAME = "appmanifest_1444480.acf"
 
 PASS, FAIL, UNKNOWN = "PASS", "FAIL", "UNKNOWN"
@@ -1075,7 +1066,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     try:
-        args.game_dir = args.game_dir or str(TC.game_dir())
+        args.game_dir = args.game_dir or str(game_dir())
     except RuntimeError as exc:
         print(f"跑不起来：{exc}", file=sys.stderr)
         return 2

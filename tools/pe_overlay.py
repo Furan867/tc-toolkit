@@ -3,7 +3,11 @@ import struct
 import sys
 import os
 
-import tc_common
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from libs import tc_common  # noqa: E402
 
 EXE = tc_common.game_exe()
 

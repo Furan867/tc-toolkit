@@ -5,9 +5,9 @@ import subprocess
 import sys
 from collections import defaultdict
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import tc_common  # noqa: E402
+from libs import tc_common  # noqa: E402
 from nim_demangle import decode_proc_name, demangle_module  # noqa: E402
 
 # compile.dll contains: compiler modules under OO/, plus Nim stdlib.

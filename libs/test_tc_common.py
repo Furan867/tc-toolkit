@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import tc_common
+from libs import tc_common  # noqa: E402
 
 HEADER = (
     "seq\ttime\tflags\tsrc\tsrc_len\tsrc_sha256\tout\tout_len\tout_sha256\t"

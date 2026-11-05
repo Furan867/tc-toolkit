@@ -16,7 +16,7 @@ import argparse
 import sys
 import time
 
-from .. import winmem
+from libs import winmem
 from . import probe
 
 

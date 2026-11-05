@@ -11,6 +11,8 @@
 !/docs/
 !/simplexc/
 !/tools/
+!/libs/
+!/services/
 !/hotspot/
 
 # hotspot：源码与 config.example.ini 入库；config.ini 是运行时配置，不入库

@@ -35,6 +35,7 @@ ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
 PY = sys.executable
 sys.path.insert(0, HERE)
+sys.path.insert(0, ROOT)
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -42,8 +43,8 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-import term
-from winmem import k32, find_pid, open_process
+from libs import term
+from libs.winmem import k32, find_pid, open_process
 from locate_jit_image import locate  # noqa: E402
 
 TAB = chr(9)

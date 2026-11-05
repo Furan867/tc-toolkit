@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import hook_log
+from libs import hook_log
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK_DIR = ROOT / "work" / "hook"

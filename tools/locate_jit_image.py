@@ -35,6 +35,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, ROOT)
 
 # Windows 下 stdout 走管道时默认 GBK，输出里的符号会抛 UnicodeEncodeError
 for _stream in (sys.stdout, sys.stderr):
@@ -43,7 +44,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from winmem import (
+from libs.winmem import (
     k32, find_pid, rpm, PROCESS_QUERY_INFO, PROCESS_VM_READ,
     MBI, iter_exec_regions,
 )

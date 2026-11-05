@@ -51,11 +51,11 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
 REPO = os.path.dirname(SIMPLEXC)
-# LLVM 落点与 binutils 路径不写死（迁过一次目录）：`tools/tc_common.py` 是唯一一处定义。
-# 把**仓库根**塞进 sys.path 再走 `tools.` 前缀 —— 与 hook_offline.py 同一拼法。
+# LLVM 落点与 binutils 路径不写死（迁过一次目录）：`libs/tc_common.py` 是唯一一处定义。
+# 把**仓库根**塞进 sys.path 再走 `libs.` 前缀 —— 与 hook_offline.py 同一拼法。
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
-from tools.tc_common import llvm_root, tool  # noqa: E402
+from libs.tc_common import llvm_root, tool  # noqa: E402
 
 BUILD = os.path.join(SIMPLEXC, "build")
 HOST_PY = os.path.join(SIMPLEXC, "tools", "host", "host.py")

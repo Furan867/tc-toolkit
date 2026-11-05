@@ -15,12 +15,16 @@ Nim 2.x symbol format: [TypeName_]procname[_opsuffix]__moduleZpath[_uID]
 import re
 import os
 import struct
+import sys
 from collections import defaultdict
 
-import tc_common
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from libs import tc_common  # noqa: E402
 
 EXE = tc_common.game_exe()
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
 WORK = os.path.join(_ROOT, "work")
 OUTROOT = os.path.join(_ROOT, "recovered", "src")
 

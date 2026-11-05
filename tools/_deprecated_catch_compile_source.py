@@ -47,7 +47,12 @@ import subprocess
 import sys
 import time
 
-import tc_common
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from libs import tc_common  # noqa: E402
 
 # Windows 下 stdout 被重定向或走管道时，Python 默认按 locale(GBK) 编码，脚本输出里
 # 的 ✅/❌/★ 会直接抛 UnicodeEncodeError，把整个流程打断（实测踩到）。显式改 UTF-8，
@@ -58,8 +63,6 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
 WORK = os.path.join(ROOT, "work")
 GAME = str(tc_common.game_dir())
 PID_FILE = os.path.join(WORK, "last_pid.txt")

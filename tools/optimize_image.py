@@ -68,7 +68,7 @@ Result[2]），否则游戏跳进指令中间：实测主频掉到 0.566（≈5.
 
 诊断
 ----
-- `work/opt/hook.log` 的 `opt` 行（键表见 tools/hook_log.py）：这一趟的字节数 /
+- `work/opt/hook.log` 的 `opt` 行（键表见 libs/hook_log.py）：这一趟的字节数 /
   sha256 / **实际执行**的模式 / 改写处数。**这行是「子进程真的跑过」的唯一证据** ——
   恒等改写时 opt 与 raw 逐字节相同，光看产物分不出「跑了但没改」和「压根没跑」。
 - 明细写 stderr（转发层把它引到 work/opt/opt_stderr.log）。
@@ -84,9 +84,13 @@ import sys
 from collections import Counter
 
 import analyze_jit_code as A
-import hook_log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from libs import hook_log  # noqa: E402
 
 SHIFT_MN = ("shl", "shr", "sar")
 #: 保守判据：中途只要出现跳转/调用就放弃 —— 免得漏掉"别的路径也会读 ecx"

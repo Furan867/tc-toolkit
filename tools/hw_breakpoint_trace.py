@@ -18,12 +18,17 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.wintypes as wt
+import os
 import struct
 import subprocess
 import sys
 import time
 
-import tc_common
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from libs import tc_common  # noqa: E402
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 

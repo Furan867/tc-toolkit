@@ -55,11 +55,11 @@ for _stream in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-# 游戏目录不写死（装在哪是机器的事）：`tools/tc_common.py` 是唯一一处定义，
-# 游戏在跑没在跑另由 `winmem.find_pid` 判断。
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
-from tc_common import game_dir, game_dll  # noqa: E402
+# 游戏目录不写死（装在哪是机器的事）：`libs/tc_common.py` 是唯一一处定义，
+# 游戏在跑没在跑另由 `libs/winmem.find_pid` 判断。
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+from libs.tc_common import game_dir, game_dll  # noqa: E402
 
 HOOK = os.path.join(ROOT, "simplexc", "build", "compile_hook.dll")
 
@@ -75,7 +75,7 @@ def game_paths():
 
 def find_pid():
     try:
-        from winmem import find_pid as fp
+        from libs.winmem import find_pid as fp
         return fp()
     except Exception:
         return None

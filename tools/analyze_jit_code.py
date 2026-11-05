@@ -32,9 +32,10 @@ from pathlib import Path
 from typing import TypedDict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 
-import tc_common  # noqa: E402
+from libs import tc_common  # noqa: E402
 
 # binutils 从 PATH 找：写死过一个 w64devkit 的绝对路径，换机器就失效
 OBJDUMP = tc_common.tool("objdump")

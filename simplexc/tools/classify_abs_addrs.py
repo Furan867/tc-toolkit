@@ -43,10 +43,13 @@ def _load_by_path(path, name):
 
 
 T = _load_by_path(os.path.join(REPO, "tools", "try_compile_dll.py"), "try_compile_dll")
-TC = _load_by_path(os.path.join(REPO, "tools", "tc_common.py"), "tc_common")
 
-GAME = str(TC.game_dir())
-DLL_REAL = os.path.join(GAME, TC.GAME_REAL_DLL_NAME)
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+from libs.tc_common import GAME_REAL_DLL_NAME, game_dir  # noqa: E402
+
+GAME = str(game_dir())
+DLL_REAL = os.path.join(GAME, GAME_REAL_DLL_NAME)
 DEFAULT_OURS = os.path.join(SIMPLEXC, "corpus", "ref")
 DEFAULT_REFS = os.path.join(REPO, "work", "hook", "all")
 

@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .. import tc_common, winmem
+from libs import tc_common, winmem
 
 EXE = tc_common.GAME_EXE_NAME
 BASE_VA = 0x140000000

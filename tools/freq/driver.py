@@ -11,7 +11,7 @@
 
 ⚠️ **撤销栈非空**那条**无法前置探测** —— 游戏不暴露栈深，栈空时 `Ctrl+Z` 静默
 无效，「`hook.log` 无新行」是唯一可靠判据（`docs/specs/…freq…§6` 与
-`tools/simctl.py` 的说明）。所以它带 `verifiable=False`：查不了，只能在第一次
+`services/simctl.py` 的说明）。所以它带 `verifiable=False`：查不了，只能在第一次
 `recompile` 之后由 `products.wait_new_product` 的失败解释指出来。
 """
 from __future__ import annotations
@@ -19,7 +19,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .. import simctl, winmem
+from libs import winmem
+from services import simctl
 from . import probe
 
 

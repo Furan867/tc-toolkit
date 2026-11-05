@@ -26,10 +26,12 @@ import os
 import struct
 import sys
 
-import tc_common
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)  # tc-toolkit/
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from libs import tc_common  # noqa: E402
 
 DEFAULT_EXE = str(tc_common.game_exe())
 DEFAULT_OUT = os.path.join(ROOT, "work", "function_bounds.tsv")

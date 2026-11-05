@@ -44,12 +44,13 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+sys.path.insert(0, ROOT)
 WORK = os.path.join(ROOT, "work")
 
 from try_compile_dll import load_dll, make_nim_string  # noqa: E402
-from term import duration, field  # noqa: E402
+from libs.term import duration, field  # noqa: E402
 
 MARK_SIZE = 17      # 标记的机器码长度，实测恒定
 MAGIC_BASE = 0x13370000

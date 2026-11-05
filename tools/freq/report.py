@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .. import term
+from libs import term
 from . import products, sampler
 from .sampler import Region
 

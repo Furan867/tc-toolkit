@@ -27,10 +27,11 @@ from collections import Counter
 from ctypes import wintypes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 
-import tc_common  # noqa: E402
-from term import field  # noqa: E402
+from libs import tc_common  # noqa: E402
+from libs.term import field  # noqa: E402
 
 # Windows 下 stdout 走管道时默认 GBK，输出的中文/符号会变成乱码（被
 # profile_by_image.py 当子进程调用时必然走管道）—— 统一转成 UTF-8

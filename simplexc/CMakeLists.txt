@@ -365,7 +365,7 @@ if(Unicorn_FOUND AND Capstone_FOUND)
   #
   # 不能只取 `$ENV{TC_GAME_DIR}`：这个环境变量大多数机器上没设，展开成空串后 `kDllReal` 就退化成
   # `".\\compile_real.dll"`（= 进程当前目录），difftrace 一律读不到（实测 m5/batch.py 全量 host_fail）。
-  # 游戏目录一台机器一个值，它的定义只在 `tools/tc_common.py` 的 `game_dir()`（环境变量 → Steam 库 →
+  # 游戏目录一台机器一个值，它的定义只在 `libs/tc_common.py` 的 `game_dir()`（环境变量 → Steam 库 →
   # `<库>/steamapps/common/Turing Complete`）里，configure 期问它。问不到**不**让 configure 失败：
   # 留空、退回 image.hh 的 `"."`，并打一条 message。
   set(SIMPLEXC_GAME_DIR "$ENV{TC_GAME_DIR}" CACHE PATH
@@ -373,7 +373,7 @@ if(Unicorn_FOUND AND Capstone_FOUND)
   if(NOT SIMPLEXC_GAME_DIR)
     execute_process(
       COMMAND ${Python3_EXECUTABLE} -c
-              "import sys;sys.path.insert(0,'tools');import tc_common;print(tc_common.game_dir())"
+              "import sys;sys.path.insert(0,'.');import libs.tc_common as tc_common;print(tc_common.game_dir())"
       WORKING_DIRECTORY "${SIMPLEXC_ROOT}"   # `'tools'` 是相对仓库根的
       RESULT_VARIABLE _game_dir_rc
       OUTPUT_VARIABLE _game_dir_out
@@ -387,7 +387,7 @@ if(Unicorn_FOUND AND Capstone_FOUND)
         "游戏目录（difftrace 默认从这里读 compile_real.dll）" FORCE)
     else()
       message(STATUS
-        "difftrace: 取不到游戏目录（tools/tc_common.py 的 game_dir()）：${_game_dir_err}"
+        "difftrace: 取不到游戏目录（libs/tc_common.py 的 game_dir()）：${_game_dir_err}"
         " —— TC_GAME_DIR 留空 = image.hh 的 \".\"，运行期用 --dll-dir / DIFFTRACE_DLL_DIR 指定")
     endif()
   endif()

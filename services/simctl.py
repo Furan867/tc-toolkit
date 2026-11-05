@@ -25,10 +25,10 @@ recompile 走 UI 注入：让游戏自己走「电路变化 → 重建场景 →
 恢复运行，然后才采样。
 
 命令行用法：
-    python tools/simctl.py run
-    python tools/simctl.py stop
-    python tools/simctl.py recompile            # 发撤销
-    python tools/simctl.py recompile --redo     # 发重做
+    python services/simctl.py run
+    python services/simctl.py stop
+    python services/simctl.py recompile            # 发撤销
+    python services/simctl.py recompile --redo     # 发重做
 
 CLI 每次都是新进程。脚本内循环请 import 本模块，recompile() 会按净消耗交替，
 并在进程退出时把撤销栈恢复原状。
@@ -56,11 +56,10 @@ import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
-import tc_common  # noqa: E402
-import winmem  # noqa: E402
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+from libs import tc_common, winmem  # noqa: E402
 
 EXE = tc_common.GAME_EXE_NAME
 BASE_VA = 0x140000000

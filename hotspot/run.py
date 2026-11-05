@@ -29,13 +29,17 @@ from pathlib import Path
 from types import ModuleType
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+# `libs/` 是仓库根的包；`python hotspot/run.py` 的搜索路径里只有 `hotspot/`，自己补仓库根。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from libs import tc_common  # noqa: E402
+
 SIMPLEXC = ROOT / "simplexc/build/simplexc_cli.exe"
 CONSUMER = ROOT / "hotspot/consumer/build/hotspot-consumer.exe"
 MAKE_SIDECAR = ROOT / "hotspot/tools/make_sidecar.py"
 REPORT = ROOT / "hotspot/analysis/report.py"
 READ_FREQ = ROOT / "tools/read_freq.py"
-SIMCTL = ROOT / "tools/simctl.py"
+SIMCTL = ROOT / "services/simctl.py"
 DEFAULT_CONFIG = ROOT / "hotspot/config.ini"
 SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
 WORK_TMP = ROOT / "work/tmp/hotspot_run"
@@ -67,29 +71,6 @@ class StageError(RuntimeError):
         self.stage = stage
         self.command = command
         self.output = output
-
-
-def _load_tc_common() -> ModuleType:
-    """按路径加载 `tools/tc_common.py`。
-
-    `tools/` 不是包（没有 `__init__.py`），别的脚本靠往 `sys.path` 插目录来 `import
-    tc_common`；这里按路径加载，不动全局导入路径（hotspot/tools 下也有同名目录，插进去
-    会把两个 `tools` 命名空间包混在一起）。
-
-    加载前必须登记进 `sys.modules`：`@dataclass` 处理字段时按 `cls.__module__` 反查
-    模块字典，查不到就 `AttributeError`。
-    """
-    path = TOOLS / "tc_common.py"
-    spec = importlib.util.spec_from_file_location("tc_common", path)
-    if spec is None or spec.loader is None:
-        raise StageError("preflight", f"加载不了 {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-tc_common = _load_tc_common()
 
 
 def _resolve(value: str | Path) -> Path:
@@ -498,7 +479,7 @@ def ensure_sim_running(opts: argparse.Namespace) -> None:
     if pid is None:
         raise StageError(
             "preflight",
-            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python tools/simctl.py run",
+            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python services/simctl.py run",
         )
     if speed > 0:
         print(f"→ 仿真已在跑（PID {pid}，{speed:g} MHz），不启动也不停")

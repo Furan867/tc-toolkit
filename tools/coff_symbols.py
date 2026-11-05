@@ -1,12 +1,16 @@
 """Parse COFF symbol table from Turing Complete.exe and recover compile-unit -> function mapping."""
 import struct
 import os
+import sys
 from collections import defaultdict
 
-import tc_common
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from libs import tc_common  # noqa: E402
 
 EXE = tc_common.game_exe()
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
 OUTDIR = os.path.join(_ROOT, "work")
 
 with open(EXE, "rb") as f:

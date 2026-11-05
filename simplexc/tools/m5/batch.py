@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import importlib.util
 import json
 import os
 import subprocess
@@ -62,18 +61,10 @@ MANIFEST = os.path.join(SIMPLEXC, "corpus", "manifest.tsv")
 REF_DIR = os.path.join(SIMPLEXC, "corpus", "ref")
 
 
-def _load_by_path(path, name):
-    """按文件路径加载模块（`tools/` 不是包，静态 import 解析不到）。"""
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"加载不了 {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-# 游戏目录的定义只在 `tools/tc_common.py` 的 `game_dir()` 一处（环境变量 → Steam 库 → 安装目录）。
-TC = _load_by_path(os.path.join(ROOT, "tools", "tc_common.py"), "tc_common")
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+# 游戏目录的定义只在 `libs/tc_common.py` 的 `game_dir()` 一处（环境变量 → Steam 库 → 安装目录）。
+from libs.tc_common import GAME_REAL_DLL_NAME, game_dir  # noqa: E402
 
 DEFAULT_OUT_DIR = os.path.join(ROOT, "work", "tmp", "m5batch")
 MAX_JOBS = 12                     # difftrace README 的实测：16 路只比 12 路快 7%，多占 1.75 GB
@@ -616,9 +607,9 @@ def main(argv=None):
                    "python simplexc/tools/build.py difftrace"
             fail(f"缺 {rel(exe)}：先跑 {hint}", 2)
     try:
-        dll_dir = str(TC.game_dir())
+        dll_dir = str(game_dir())
     except RuntimeError as e:
-        fail(f"找不到游戏目录（difftrace 要从那儿读 {TC.GAME_REAL_DLL_NAME}）：{e}", 2)
+        fail(f"找不到游戏目录（difftrace 要从那儿读 {GAME_REAL_DLL_NAME}）：{e}", 2)
 
     blob_dir = os.path.join(args.out_dir, "blobs")
     seq_dir = os.path.join(args.out_dir, "seq")

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]        # tc-toolkit/
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools import hook_log  # noqa: E402
+from libs import hook_log  # noqa: E402
 from tools.freq import driver, probe, products, report, sampler, variants  # noqa: E402
 
 BASE = probe.BASE_VA

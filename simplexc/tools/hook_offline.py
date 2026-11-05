@@ -106,12 +106,12 @@ from collections import OrderedDict
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIMPLEXC = os.path.dirname(HERE)
 ROOT = os.path.dirname(SIMPLEXC)                       # tc-toolkit/
-# 游戏目录不写死（装在哪是机器的事）：`tools/tc_common.py` 是唯一一处定义。
-# 把**仓库根**塞进 sys.path 再走 `tools.` 前缀 —— 与 tools/watch_freq.py 同一拼法：
+# 游戏目录不写死（装在哪是机器的事）：`libs/tc_common.py` 是唯一一处定义。
+# 把**仓库根**塞进 sys.path 再走 `libs.` 前缀 —— 与 tools/watch_freq.py 同一拼法：
 # 静态检查器（pyright）只认这种，`sys.path` 里塞 <repo>/tools 它解析不到。
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
-from tools.tc_common import game_dir  # noqa: E402
+from libs.tc_common import game_dir  # noqa: E402
 
 WORK = os.path.join(ROOT, "work", "tmp", "hook_offline")
 BIN = os.path.join(WORK, "bin")                        # 两份壳 + compile_real.dll 同居一处

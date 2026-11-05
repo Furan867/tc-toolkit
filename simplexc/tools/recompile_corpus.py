@@ -54,7 +54,10 @@ def _load_by_path(path, name):
 
 
 T = _load_by_path(os.path.join(REPO, "tools", "try_compile_dll.py"), "try_compile_dll")
-TC = _load_by_path(os.path.join(REPO, "tools", "tc_common.py"), "tc_common")
+
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+from libs.tc_common import GAME_REAL_DLL_NAME, game_dir  # noqa: E402
 
 CAPTURE_DIR = os.path.join(REPO, "work", "hook", "all")
 CORPUS = os.path.join(SIMPLEXC, "corpus")
@@ -63,9 +66,9 @@ REF_DIR = os.path.join(CORPUS, "ref")
 CAMPAIGN_DIR = os.path.join(CORPUS, "campaign")
 MANIFEST = os.path.join(CORPUS, "manifest.tsv")
 
-GAME = str(TC.game_dir())
+GAME = str(game_dir())
 GAME_CAMPAIGN = os.path.join(GAME, "campaign")
-GAME_DLL_REAL = os.path.join(GAME, TC.GAME_REAL_DLL_NAME)
+GAME_DLL_REAL = os.path.join(GAME, GAME_REAL_DLL_NAME)
 
 # stdlib 固定前缀（口径见 docs/specs/2026-10-15-simplex-llvm-compiler-design.md §2.6）：
 # DLL 里那段是 27711 字节、含 55 处 CRLF；工作副本做 CRLF→LF 归一化后是 27656 字节。

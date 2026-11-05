@@ -11,9 +11,9 @@
     driver    驱动游戏的薄封装（simctl + 前置断言）
     cli_*     薄 CLI：cli_read / cli_watch / cli_bench（`tools/*.py` 的外壳转调它们）
 
-`winmem` / `term` / `hook_log` / `simctl` 的对外接口保持不变，本包只在其上分层。
+`libs` 的 `winmem` / `term` / `hook_log` 与 `services` 的 `simctl` 对外接口保持不变，本包只在其上分层。
 
-包内模块一律 `from .. import winmem` 这样的相对导入，因此**两个入口都能用**：
+包内模块一律 `from libs import winmem` 这样的包名导入，因此**两个入口都能用**：
 
     py tools/watch_freq.py           # 人用的薄壳
     python -m tools.freq.cli_watch   # 等价（在 tc-toolkit/ 下跑）

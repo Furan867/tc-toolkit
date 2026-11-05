@@ -49,7 +49,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import tc_common, term, winmem
+from libs import tc_common, term, winmem
 from . import driver, probe, products, report, sampler, variants
 from .variants import Variant
 

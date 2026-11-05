@@ -12,7 +12,8 @@
 - W2：聚合层 + suspend 后端 + 常驻 REPL；定位忽略运行时 `.bss`、窗口只采锁定线程后，
   真机 10 s 窗口 bucket0 1279/1279（100%），已归属 1115（87.2% 全样本）
 - W3：sidecar join 与 G2 抽查（20/20、80/80）
-- W4：四表 + `report.md` / `report.html` + G3′/G4 + baseline；7 条 analysis 单测通过
+- W4：四表 + `report.md` / `report.html` + G3′/G4 + baseline；HTML 集中在
+  `hotspot/workspace/runs/html/`；7 条 analysis 单测通过
 - 函数级归因：sidecar `functions[]`（304 条，多段 ranges）+ `func_id`；表 4 拆
   stdlib/source/无函数信息，表 5 函数热度（分母 = bucket0 全部样本）；覆盖 99.97%
 - 行号绑定来源文件：`el.tsv` 用源文件行、`offsets` 带 `line_offset/sources`、

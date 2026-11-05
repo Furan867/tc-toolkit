@@ -728,7 +728,9 @@ def report_stage(run_dir: Path, sidecar: Path) -> Path:
         stage="report",
         timeout=120,
     )
-    html = run_dir / "report.html"
+    html = run_dir.parent / "html" / f"{run_dir.name}.html"
+    if not html.is_file():
+        html = run_dir / "report.html"
     if not html.is_file():
         raise StageError("report", "没有生成 report.html", output=output[-800:])
     return html

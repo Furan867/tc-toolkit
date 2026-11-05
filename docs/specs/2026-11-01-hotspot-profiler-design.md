@@ -429,6 +429,7 @@ tc-toolkit/hotspot/
        samples.tsv
        sidecar.json（同产物多 run 可引用共享侧车；亦允许拷入以便离线）
        report.md + report.html   # analysis 产出：文本归档版 + 静态交互报告（双击即看）
+    runs/html/<run>.html        # 集中 HTML 报告（主入口；run 目录保留同份副本）
     baseline.json                # G4 基线（analysis 读写）
     index.html                   # 工作区索引：列全部 run（时间/产物/freq/bucket0 份额）→ 链到各报告
   <产物库同步>                   # hook 落盘的 .si/.bin 依旧在 work/hook/，工具**只读**
@@ -498,7 +499,7 @@ hotspot-consumer                        # 进入 REPL（准确参数形状以 W2
 # (3) 报表（W4）：对一个 run 目录产出两份报告并回写 buckets
 python hotspot/analysis/report.py --run workspace/runs/<run目录>
 
-# (4) 查看：浏览器打开 workspace/runs/<run>/report.html（静态交互）；
+# (4) 查看：浏览器打开 workspace/runs/html/<run目录>.html（静态交互）；
 #     workspace/index.html 是全部 run 的索引页（W4 产/更新）
 ```
 

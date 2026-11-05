@@ -13,6 +13,7 @@ import configparser
 import contextlib
 import datetime
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -288,16 +289,23 @@ def update_index(workspace: Path) -> tuple[Path, int]:
         end = _lookup(doc, "freq.end_hz")
         freqs = [f"{v / 1e6:.3f} MHz" for v in (start, end)
                  if isinstance(v, (int, float)) and not isinstance(v, bool) and v]
-        report = runs_dir / run_ini.parent.name / "report.html"
+        run_name = run_ini.parent.name
+        html_dir = runs_dir / "html"
+        central = html_dir / f"{run_name}.html"
+        legacy = run_ini.parent / "report.html"
+        if not central.exists() and legacy.exists():
+            html_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy, central)
         entries.append(render.IndexEntry(
-            run_name=run_ini.parent.name,
+            run_name=run_name,
             created_at=str(_lookup(doc, "run.created_at") if _lookup(doc, "run.created_at") is not _MISSING
                             else "（未记录）"),
             artifact=Path(str(_lookup(doc, "artifact.path") if _lookup(doc, "artifact.path") is not _MISSING
                                else "（未记录）")).name,
             freq_note=" / ".join(freqs) if freqs else "（无）",
             bucket0_share=share,
-            report=f"runs/{run_ini.parent.name}/report.html" if report.exists() else "",
+            report=(f"runs/html/{run_name}.html" if central.exists()
+                    else f"runs/{run_name}/report.html" if legacy.exists() else ""),
         ))
     entries.sort(key=lambda e: (e.created_at, e.run_name), reverse=True)
     path = workspace / "index.html"
@@ -355,7 +363,12 @@ def run_report(args: argparse.Namespace) -> int:
     table_set = tables.build_tables(meta, att, sidecar, args.top, watermark)
 
     (run_dir / "report.md").write_text(render.render_markdown(table_set), encoding="utf-8")
-    (run_dir / "report.html").write_text(render.render_html(table_set), encoding="utf-8")
+    html_text = render.render_html(table_set)
+    (run_dir / "report.html").write_text(html_text, encoding="utf-8")
+    html_dir = workspace / "runs" / "html"
+    html_dir.mkdir(parents=True, exist_ok=True)
+    central_html = html_dir / f"{meta.run_name}.html"
+    central_html.write_text(html_text, encoding="utf-8")
     write_buckets(run_dir / "run.ini", buckets)
     index_path, run_count = update_index(workspace)
 
@@ -367,7 +380,7 @@ def run_report(args: argparse.Namespace) -> int:
     if table_set.functions:
         print(f"  函数热度 {len(table_set.functions)} 行（bucket0 全部样本按最内层函数归因）")
     print(f"  buckets 已回写 {run_dir / 'run.ini'}")
-    print(f"  报告 {run_dir / 'report.md'} + {run_dir / 'report.html'}")
+    print(f"  报告 {run_dir / 'report.md'} + {central_html}")
     print(f"  index {index_path}（{run_count} 个 run）")
     if watermark:
         print(f"  G4 告警：{watermark}")

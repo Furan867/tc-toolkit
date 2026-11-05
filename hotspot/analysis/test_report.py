@@ -461,7 +461,8 @@ class ReportCase(unittest.TestCase):
         index = (self.workspace / "index.html").read_text(encoding="utf-8")
         self.assertIn("run_a", index)
         self.assertIn("run_low", index)
-        self.assertIn('href="runs/run_a/report.html"', index)
+        self.assertTrue((self.workspace / "runs/html/run_a.html").is_file())
+        self.assertIn('href="runs/html/run_a.html"', index)
 
     def test_g3prime_overlap_four_passes(self) -> None:
         run_d = write_run(self.workspace / "runs", "run_d", SAMPLES_D)

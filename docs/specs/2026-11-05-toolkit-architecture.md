@@ -130,6 +130,16 @@ typedef struct {
 
 `libs/` 在根目录后，`python tools/x.py` 的搜索路径是 `tools/`，找不到 `libs`。迁移期统一用"每个入口补一行 `sys.path.insert(0, ROOT)`"（现有 19 处这种做法），先把目录摆对；统一成 `python -m` 或安装形态属于简化期，不在本 spec 范围。
 
+### 5.5 为什么 `simctl` 不改成 in-process import
+
+`hotspot/run.py` 现在以子进程调 `services/simctl.py`。看起来应改成 import，但实测不等价（三处）：
+
+- **import 即带副作用**：`services/simctl.py:512` 模块级 `atexit.register(restore_stack)`、`:516` 注册 SIGTERM；CLI 收尾还会把前台焦点还回去（`:564`）。hotspot 引入后会改变自己的退出语义（SIGTERM 从直接死变 `SystemExit(0)` 并跑 `finally` 的 stop 阶段）。
+- **超时没有替代品**：子进程的 60s / 30s（`hotspot/run.py:460`、`:873`）是唯一保护；Win32 调用（EnumWindows / SetForegroundWindow / SendInput）单次延迟无上界，in-process 时直接拖死 hotspot。
+- **测试会真发键**：`hotspot/tests/test_run.py:258-259` 靠命令行里的 `simctl.py` 过滤 mock 调用；改 import 后 mock 不再生效，测试会往正在运行的游戏发 F6/F4。
+
+结论：保留子进程，但把调用方式从**文件路径**改成**模块**：`python -m services.simctl run`（`_run` 已 `cwd=ROOT`，`python -m` 时 cwd 进 `sys.path`）。这样既去掉“按路径调脚本”，又不碰上面三条。
+
 ## 6. 契约
 
 ### 6.1 `hook.log`
@@ -159,10 +169,10 @@ typedef struct {
 | 步 | 内容 | 判据（全部不需要游戏在运行） |
 |---|---|---|
 | 1 | 建 `libs/`、`services/`；原样搬 `tc_common`、`winmem`、`term`、`hook_log`、`simctl`，并把 `tools/test_tc_common.py` 随 `tc_common` 搬入 `libs/`。改动面：`sys.path.insert` 19 处（`tools/` 15、`simplexc/tools/` 3、`work/tmp/` 1）；`simplexc/tools/` 的 `tc_common` 引用 8 处（3 处 `from tools.tc_common import`：`simplexc/tools/equiv_build.py:59`、`simplexc/tools/hook_offline.py:114`、`simplexc/tools/probe_006.py:58`；5 处 `_load_by_path`：`simplexc/tools/abs_scan.py:50`、`simplexc/tools/classify_abs_addrs.py:46`、`simplexc/tools/recompile_corpus.py:57`、`simplexc/tools/m5/batch.py:76`、`simplexc/tools/verify_game_contract.py:82`）；`simplexc/CMakeLists.txt:376` 的 `import tc_common`；`tools/freq/test_freq.py:25-26` 的 `from tools import hook_log` | `python -m unittest libs/test_tc_common.py tools/freq/test_freq.py`、`python -m unittest hotspot/tests/test_run.py`、`python simplexc/tools/check.py --list`、`python tools/watch_freq.py --help`、`python hotspot/run.py --help` |
-| 2 | `hotspot/run.py` 由"子进程调 `tools/simctl.py`"改为 import `services.simctl` | `python -m unittest hotspot/tests/test_run.py` |
+| 2 | `hotspot/run.py` 的 `services/simctl.py` 文件路径调用改为模块调用 `python -m services.simctl`（保留子进程的超时与隔离；不改成 in-process import，理由见 §5.5）；同步 `hotspot/tests/test_run.py:258-259` 的 mock 过滤条件 | `python -m unittest hotspot/tests/test_run.py` |
 | 3 | `cfg` 的写点从 `optimize_inplace()` 移到编译出口（`compile()` 内写 `impl` 行处附近），**不改消费者**。对应演练 1a | `python simplexc/tools/check.py --only hook_offline`（离线壳也走这条路径，能覆盖） |
 | 3b | `rewrite=` 并入 `impl` 行，删 `cfg` 事件；改 `tools/freq/products.py`、`report.py`、`cli_watch.py`、`test_freq.py`、`tools/freq/__init__.py:7` 的文档行。对应演练 1b | 同一批 unittest + `check.py --only hook_offline` |
-| 4 | 建 `decompile/`，搬逆向 7 个：`nim_demangle`、`demangle_dll`、`coff_symbols`、`organize_strings`、`pe_overlay`、`find_sym`、`extract_nim_strings`（`pdata_bounds` 例外：`simplexc/tools/verify_game_contract.py` 依赖它） | 7 个脚本各自 `--help`；`python simplexc/tools/check.py` |
+| 4 | 建 `decompile/`，搬逆向 8 个：`nim_demangle`、`demangle_dll`、`coff_symbols`、`organize_strings`、`pe_overlay`、`find_sym`、`extract_nim_strings`、`pdata_bounds`（此前认为 `verify_game_contract` 依赖 `pdata_bounds`，实测不成立：它自己解析 `.pdata`，两边只经 `work/function_bounds.tsv` 这个产物文件耦合） | `python -m py_compile decompile/*.py`；有 argparse 的 2 个（`find_sym`、`extract_nim_strings`）跑 `--help`；其余 5 个无 argparse，`--help` 会真跑并落盘，**不跑**，改为人工确认各自的仓库根层级未变 |
 | 5 | 建 `native/{forward,compile,backend}`；`compile_hook.c` 原样搬进 `compile`；`#include` 改 include 目录；CMake 改两处源路径（`simplexc/CMakeLists.txt:230`、`:483`）；同步 `simplexc/tools/hook_offline.py:121`（`HOOK_SRC`）与 `:127`（`BASELINE_SRC` 的 `tools/compile_hook.c` 路径） | 游戏**未运行**时：`python tools/deploy_compile_hook.py build-deploy`、`python simplexc/tools/check.py --only hook_offline`、`python simplexc/tools/check.py`（全量，确认步 4 的判据没被步 5 破坏） |
 | 6 | 建 `tools/perf_opt/`，把部署/配置/改写入口并进去 | 四个子命令 `build` / `deploy` / `restore` / `status` 的 `--help` 与 `status` 的输出与现状一致；跑对：重跑 `check.py` 全量 |
 | 7 | 简化：抽 `forward.h` / `backend.h` / `processor.h`，拆 `compile_hook.c` 三部分 | 编译通过；§8 的 1b 与 2 成立（1a 已在步 3 完成） |
@@ -199,7 +209,7 @@ typedef struct {
 ## 10. 待定
 
 - `backend.h` / `processor.h` 是第 5 步就抽，还是第 7 步再抽；第 5 步至少要保证 simplexc 的调用集中在一个文件里。
-- `decompile/` 里的 7 个脚本哪些还要维护、哪些只是存档。
+- `decompile/` 里的 8 个脚本哪些还要维护、哪些只是存档。
 - `work/hook` 路径集中到 `libs/paths.py` 后，`tools/profile_by_image.py`（旧热点管道）是否随之删除。
 - `opt.ini` 拆成 `[compile]`/`[rewrite]` 两段：本期不做，改动面已列在 §6.2，将来单独一次改动。
 

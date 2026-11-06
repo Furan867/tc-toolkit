@@ -97,11 +97,21 @@ int   forward_dump(const char *tag, const char *ext, const void *p, long long n,
 void  forward_log(long seq, const char *event, const char *kv);
 int   forward_config_get(const char *key, char *buf, size_t cap);  /* 进程内唯一读取点 */
 
-/* native/compile/backend.h —— 编译器后端（可换 simplexc） */
+/* native/backend/backend.h —— 编译器后端（实际形态，2026-11-06 已落地） */
 typedef struct {
-    const char *name;
-    const char *(*compile)(const char *src, long long len, const char *stdlib,
-                           void **blob, long long *n, long long *entry);
+    void              *blob;
+    long long          blob_len;
+    long long          entry;             /* 产物内锚点偏移，相对机器码起点 */
+    int                attempted;         /* 真的跑了实现自己那段（ref 恒 0）*/
+    int                guard_installed;   /* 本趟装了实现自己的崩溃保护（VEH）*/
+    unsigned long long budget_ms;
+    void              *ret;               /* 游戏要拿到的那次调用返回值；simplexc 恒 NULL */
+} backend_run;
+
+typedef struct {
+    const char *name;                     /* "simplexc" / "ref" */
+    const char *(*run)(void *out, const char *src, long long slen, void *src_raw,
+                       const char *stdlib_path, int flags, backend_run *r);
     void        (*free_blob)(void *blob);
     const char *(*last_error)(void);
     const char *(*last_warnings)(void);
@@ -115,7 +125,9 @@ typedef struct {
 } forward_processor;
 ```
 
-`native/backend/simplexc.c` 是唯一 include `simplexc/shell/simplexc_core.h` 的文件（现在这行在 `native/compile/compile_hook.c`）。更换编译器实现 = 换这个文件 + 注册一行。
+`native/backend/simplexc.c` 是唯一 include `simplexc/shell/simplexc_core.h` 的文件。更换编译器实现 = 换这个文件 + 注册一行。
+
+`src/slen` 是拆好的字符数据（给自研实现）；`src_raw` 是游戏传进来的 `NimStr` 原件（给转发原实现的实现）——后者不解读、不重建，避免 NimStr 布局契约出现第二份。
 
 三部分编进**同一个** `SHARED` target：一个 dll 只能有一个 `DllMain`，它归 `native/forward`；构建定义仍在 simplexc 的 CMake 图里（要链 C++ 核心与 LLVM-C）。
 
@@ -255,3 +267,11 @@ typedef struct {
 当前布局与 §3 的差异：`native/` 现为 `forward/`（机制）+ `compile/`（服务：`compile_hook.c`、`paths.h`、`processor.h`、`native_internal.h`、`processor_rewrite.c`）+ `backend/`（`backend.h`、`simplexc.c`、`ref.c`）；`tools/perf_opt/` 含 `cli/build/deploy/config/rewrite/format_si` 与 `optimizer/`（`core.py`、`analyze.py`）。
 
 判据现状：`check.py` 全量 7 步 PASS；`libs/test_tc_common.py` + `tools/freq/test_freq.py` 61 tests；`hotspot/tests/test_run.py` 66 tests。
+
+## 13. 已知取舍与未验项（2026-11-06）
+
+- `ours_timeout_ms` 搬进 `native/backend/simplexc.c` 后仍会读 `opt.ini`，与 §5.3「后端不打开文件」有半条张力：它是自研实现私有的调优键，不是产品配置；**暂留**，若将来出现第二个需要调优的后端，再把预算改成由壳读后经 `backend_run` 传入。
+- `free_blob` 当前无调用方（产物都交给游戏了），保留它是为了把「谁拥有产物」这件事写清；`ref` 是空实现。
+- `ref` 的 `KIND_INTERNAL` 分支实际不可达（壳在 `!g_compile` 时就早退了），留着是防御。
+- **真机未验证**：`build-deploy` 后的游戏内编译、主频与回退率都没跑。离线 11 个 case 只覆盖 ref / fallback / ours / user-err 四条路径。
+- 离线 `case_ref` 只把返回值打印成 `返回=`，**不断言**。本次人工核对过（非 NULL、产物 sha256 两侧相同），但这是长期盲点。

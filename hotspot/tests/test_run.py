@@ -256,7 +256,7 @@ def _script(states: list[str]):
 
 
 def _simctl_calls(commands: list[list[str]]) -> list[list[str]]:
-    return [parts for parts in commands if any(part.endswith("simctl.py") for part in parts)]
+    return [parts for parts in commands if "services.simctl" in parts]
 
 
 class _MainHarness(unittest.TestCase):

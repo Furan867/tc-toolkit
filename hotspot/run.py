@@ -39,7 +39,6 @@ CONSUMER = ROOT / "hotspot/consumer/build/hotspot-consumer.exe"
 MAKE_SIDECAR = ROOT / "hotspot/tools/make_sidecar.py"
 REPORT = ROOT / "hotspot/analysis/report.py"
 READ_FREQ = ROOT / "tools/read_freq.py"
-SIMCTL = ROOT / "services/simctl.py"
 DEFAULT_CONFIG = ROOT / "hotspot/config.ini"
 SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
 WORK_TMP = ROOT / "work/tmp/hotspot_run"
@@ -457,7 +456,7 @@ def _game_running() -> bool:
 
 
 def _start_sim() -> None:
-    _run([sys.executable, SIMCTL, "run"], stage="preflight", timeout=60)
+    _run([sys.executable, "-m", "services.simctl", "run"], stage="preflight", timeout=60)
 
 
 def _wait_sim_running(timeout: float = 15.0) -> None:
@@ -479,7 +478,7 @@ def ensure_sim_running(opts: argparse.Namespace) -> None:
     if pid is None:
         raise StageError(
             "preflight",
-            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python services/simctl.py run",
+            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python -m services.simctl run",
         )
     if speed > 0:
         print(f"→ 仿真已在跑（PID {pid}，{speed:g} MHz），不启动也不停")
@@ -870,7 +869,7 @@ def stop_stage(opts: argparse.Namespace) -> None:
     if opts.no_sim_control or not opts.started_by_us:
         return
     try:
-        _run([sys.executable, SIMCTL, "stop"], stage="stop", timeout=30)
+        _run([sys.executable, "-m", "services.simctl", "stop"], stage="stop", timeout=30)
     except StageError as exc:
         log_write(f"[{exc.stage}] 失败：{exc}")
         print(f"⚠ 停电路失败：{exc}", file=sys.stderr)

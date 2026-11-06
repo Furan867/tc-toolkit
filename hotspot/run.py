@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # `libs/` 是仓库根的包；`python hotspot/run.py` 的搜索路径里只有 `hotspot/`，自己补仓库根。
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from libs import tc_common  # noqa: E402
+from libs import paths, tc_common  # noqa: E402
 
 SIMPLEXC = ROOT / "simplexc/build/simplexc_cli.exe"
 CONSUMER = ROOT / "hotspot/consumer/build/hotspot-consumer.exe"
@@ -41,10 +41,10 @@ REPORT = ROOT / "hotspot/analysis/report.py"
 READ_FREQ = ROOT / "tools/read_freq.py"
 DEFAULT_CONFIG = ROOT / "hotspot/config.ini"
 SIDECAR_CACHE = ROOT / "hotspot/workspace/cache/sidecar"
-WORK_TMP = ROOT / "work/tmp/hotspot_run"
+WORK_TMP: Path = paths.tmp_dir() / "hotspot_run"
 RUNS_DIR = ROOT / "hotspot/workspace/runs"
 RUN_SCRIPT = Path(__file__).resolve()
-LOG_DIR = ROOT / "work/tmp"
+LOG_DIR = paths.tmp_dir()
 LOG_STAMP = "%Y-%m-%d_%H-%M-%S"
 LOG_FILE_OPTION = "--log-file"
 
@@ -506,7 +506,7 @@ def _pick_hook_src(opts: argparse.Namespace) -> Path:
         )
     opts.hook_num = product.num
     if product.stdlib:
-        opts.stdlib = ROOT / "work/hook/all/stdlib_prefix.si"
+        opts.stdlib = paths.hook_dir() / "all/stdlib_prefix.si"
     print(f"→ 用 hook 产物 {product.num}")
     return product.src
 

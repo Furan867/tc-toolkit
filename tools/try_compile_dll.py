@@ -28,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
-from libs import tc_common  # noqa: E402
+from libs import paths, tc_common  # noqa: E402
 
 GAME = str(tc_common.game_dir())
 DLL = os.path.join(GAME, tc_common.GAME_DLL_NAME)
@@ -173,7 +173,7 @@ def main():
     out_len, out_ptr = struct.unpack_from("<qQ", raw, 0)
     if out_ptr and 0 < out_len < 64 * 1024 * 1024:
         content = ctypes.string_at(out_ptr, out_len)
-        dest = os.path.join(ROOT, "work", "compile_out.bin")
+        dest = os.path.join(paths.WORK, "compile_out.bin")
         try:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as f:

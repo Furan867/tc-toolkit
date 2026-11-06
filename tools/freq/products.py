@@ -35,11 +35,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from libs import hook_log
+from libs import hook_log, paths
 
-ROOT = Path(__file__).resolve().parents[2]
-HOOK_DIR = ROOT / "work" / "hook"
-OPT_DIR = ROOT / "work" / "opt"
+HOOK_DIR = paths.hook_dir()
+OPT_DIR = paths.opt_dir()
 
 PRODUCT_RE = re.compile(r"^(\d+)\.opt\.bin$")
 CAPTURE_RE = re.compile(r"^hook_out_(\d+)\.bin$")

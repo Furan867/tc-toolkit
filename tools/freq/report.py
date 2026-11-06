@@ -19,12 +19,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from libs import term
+from libs import paths, term
 from . import products, sampler
 from .sampler import Region
 
-ROOT = Path(__file__).resolve().parents[2]
-FREQ_DIR = ROOT / "work" / "freq"      # 采样数据，跨会话保留（不会被人清掉）
+FREQ_DIR = paths.freq_dir()      # 采样数据，跨会话保留（不会被人清掉）
 LOG_PATH = FREQ_DIR / "freq_log.tsv"
 SUMMARY_PATH = FREQ_DIR / "freq_summary.txt"
 

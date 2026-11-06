@@ -26,6 +26,8 @@ import shutil
 import struct
 from dataclasses import dataclass
 
+from libs import paths
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent   # tools/ 的父目录
 
 GAME_EXE_NAME = "Turing Complete.exe"
@@ -292,7 +294,7 @@ def latest_hook_product(hook_dir: pathlib.Path | None = None) -> HookProduct | N
     `manifest.tsv` 里的 src/out 可能是改过名的文件，所以优先用 manifest 记的路径；
     缺那一行时退回同名配对，并按「自研 + 无 stdlib 前缀」算。
     """
-    root = pathlib.Path(hook_dir) if hook_dir is not None else REPO_ROOT / "work" / "hook"
+    root = pathlib.Path(hook_dir) if hook_dir is not None else paths.hook_dir()
     if not root.is_dir():
         return None
 

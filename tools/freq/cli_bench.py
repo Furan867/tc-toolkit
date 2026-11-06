@@ -49,14 +49,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from libs import tc_common, term, winmem
+from libs import paths, tc_common, term, winmem
 from . import driver, probe, products, report, sampler, variants
 from .variants import Variant
 
 EXE = tc_common.GAME_EXE_NAME
 BENCH_DIR = report.FREQ_DIR
 OPT_INI = variants.OPT_INI
-BACKUP = report.ROOT / "work" / "tmp" / "opt.ini.bak"
+BACKUP = paths.tmp_dir() / "opt.ini.bak"
 
 _USAGE = """\
     py tools/bench_rewrite.py                        # off,on,short,short_cse 各 8s

@@ -52,10 +52,11 @@ import time
 from collections.abc import Iterator
 from typing import NamedTuple
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-_WORK = os.path.normpath(os.path.join(HERE, os.pardir, "work"))
-NEW_PATH = os.path.join(_WORK, "hook", "hook.log")        # 迁移目标（C 侧新壳写这里）
-LEGACY_PATH = os.path.join(_WORK, "opt", "hook.log")      # 迁移前的位置（旧壳还写这里）
+from libs import paths
+
+_NEW, _LEGACY = paths.hook_log_candidates()
+NEW_PATH = os.fspath(_NEW)        # 迁移目标（C 侧新壳写这里）
+LEGACY_PATH = os.fspath(_LEGACY)  # 迁移前的位置（旧壳还写这里）
 
 
 def resolve() -> str:

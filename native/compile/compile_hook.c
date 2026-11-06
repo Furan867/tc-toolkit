@@ -7,6 +7,13 @@
  * 那只要让 "compile.dll" 这个名字指向我们就够了 —— 真正的实现改名成
  * compile_real.dll，我们只做转发。
  *
+ * 分两层
+ * ------
+ *   `native/forward/`  —— **机制**：路径表注入 / 原实现符号 / 调用编号 / 捕获落盘 / 日志 /
+ *                        指纹 / 配置读取 / 加载时清理。它不认识「转发了谁」，将来转发别的 dll
+ *                        复用同一份（`docs/specs/2026-11-05-toolkit-architecture.md` §5.2）。
+ *   本文件（壳）     —— **业务**：compile 服务、后端选择、处理器注册表、导出与 DllMain。
+ *
  * 比起之前"调试器 + 硬件断点"的做法：
  *   · 不占用 CPU 的 DR0-DR3（那是**全局**资源，游戏或 Steam overlay 可能自己也在用
  *     —— 实测因此崩了两次游戏）
@@ -65,17 +72,18 @@
  *   目标给（`simplexc/.deps/llvm`）；部署时**必须**把 `LLVM-C.dll` 一起拷进游戏目录（接口 §7）——
  *   CMake 已从 `simplexc/.deps/llvm/bin/` 拷到 `build/`，部署拿 `build/LLVM-C.dll`。
  *
- *   无第三方链接依赖：manifest.tsv 的 sha256 走系统 bcrypt.dll 的按需绑定
- *   （见 cng_bind / sha256_hex），所以不用 -lbcrypt、也不 include <bcrypt.h>。
+ * 无第三方链接依赖：manifest.tsv 的 sha256 走系统 bcrypt.dll 的按需绑定
+ *   （见 native/forward/forward.c 的 cng_bind / forward_sha256_hex），所以不用 -lbcrypt、
+ *   也不 include <bcrypt.h>。
  */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "native_internal.h"    /* 常量 + 壳提供给处理器的工具函数（同目录）*/
-#include "paths.h"              /* g_paths 的结构体；定义仍在下面 */
-#include "processor.h"           /* 编译后处理器接口 + 注册表里那一项的声明 */
+#include "forward.h"             /* 机制层（native/forward/ 静态库）*/
+#include "paths.h"                /* 壳自己那两个路径（proj / stdlib）*/
+#include "processor.h"            /* 编译后处理器接口 + 注册表里那一项的声明 */
 
 #define REAL_DLL "compile_real.dll"
 
@@ -94,8 +102,8 @@
  *
  * `OUT_DIR` / `OPT_DIR` / `OPT_INI` / `OPT_SCRIPT` / `HOOK_LOG_DIR` 仍然可以被 `-D` 覆盖：
  * 离线判据（simplexc/tools/hook_offline.py）靠它把工作目录隔离到 work/tmp/hook_offline/，
- * 不能碰活数据 —— 转发层加载时会清空 OUT_DIR / OPT_DIR（见 purge_*），测试构建若共用真路径
- * 就会把游戏抓到的捕获和 work/hook/hook.log 一起洗掉。 */
+ * 不能碰活数据 —— 转发层加载时会清空 OUT_DIR / OPT_DIR（见 forward_purge_*），测试构建若共用
+ * 真路径就会把游戏抓到的捕获和 work/hook/hook.log 一起洗掉。 */
 #ifndef TC_TOOLKIT_ROOT
 #define TC_TOOLKIT_ROOT "."
 #endif
@@ -127,13 +135,12 @@
 /* stdlib 前缀：相对项目根（`OPT_PROJ`）的路径。它不在游戏目录里，所以必须靠这个宏推出来；
    读不到时核心报错（见 `simplexc_core.h`），不会静默退硬编码。 */
 #define STDLIB_PREFIX OPT_PROJ "\\simplexc\\corpus\\stdlib_prefix.si"
-/* `PY_EXE` / `OPT_TIMEOUT` / `SEP` 的定义在 native_internal.h：改写子进程现在由
- * processor_rewrite.c 起，那几个值两边都得看见。 */
+/* `PY_EXE` / `OPT_TIMEOUT` 是编译后处理器的事（native_internal.h），壳不碰；
+ * `SEP` 在 forward.h（机制层也用）。 */
 
-/* 生效的路径表（结构体在 paths.h）。定义**只在这里**：`toolkit_paths_init` 在本文件里
- * 解析一次，处理器只读，所以它不能是 static。 */
+/* 壳自己的路径表（结构体在 paths.h）。定义**只在这里**：`hook_paths_init` 在本文件里解析一次，
+ * 处理器只读，所以它不能是 static。机制用的那组在 `forward_get_paths()` 里。 */
 toolkit_paths g_paths;
-static int g_paths_ready = 0;
 
 /* `dst = <dir>\<name>`，`dir` 末尾已带分隔符就不重复加。
  * 不直接用 `sprintf`：这条拼接会拿到 `opt.ini` 里人写的 root（长度不受我们控制）。 */
@@ -145,35 +152,42 @@ static void path_join(char* dst, size_t cap, const char* dir, const char* name) 
     dst[n] = 0;
 }
 
-/* 解析一次，之后只读。
+/* 解析一次，之后只读：先按编译期宏摆好一组路径交给机制层，再用 `opt.ini` 的 `toolkit_root`
+ * （有且非空）把它们整体搬到那个根下面。
  *
- * `toolkit_root` 非空时顶掉三者（OUT_DIR / OPT_DIR / OPT_PROJ），派生的四份跟着重算 ——
- * 其中 hook.log 跟着**新的**捕获目录走：root 换到别处以后，日志留在旧目录里等于两边都对不上号。
+ * `toolkit_root` 这一段为什么留在壳里：它换的是**仓库根**，由此派生的捕获目录 / 中间产物目录 /
+ * 改写器脚本 / stdlib 前缀全是本壳的业务；机制层只接受一组已经算好的路径（见 forward.h）。
+ * hook.log 跟着**新的**捕获目录走：root 换到别处以后，日志留在旧目录里等于两边都对不上号。
  */
-static void toolkit_paths_init(void) {
-    if (g_paths_ready) return;
-    lstrcpynA(g_paths.out_dir, OUT_DIR, MAX_PATH);
-    lstrcpynA(g_paths.opt_dir, OPT_DIR, MAX_PATH);
+static void hook_paths_init(void) {
+    static char out_dir[MAX_PATH], tmp_dir[MAX_PATH], script[MAX_PATH];
+    forward_paths fp;
+    fp.out_dir = OUT_DIR;
+    fp.tmp_dir = OPT_DIR;
+    fp.log_dir = HOOK_LOG_DIR;
+    fp.ini_path = OPT_INI;
+    fp.script = OPT_SCRIPT;
+
     lstrcpynA(g_paths.proj, OPT_PROJ, MAX_PATH);
-    lstrcpynA(g_paths.script, OPT_SCRIPT, MAX_PATH);
-    lstrcpynA(g_paths.ini, OPT_INI, MAX_PATH);
     lstrcpynA(g_paths.stdlib, STDLIB_PREFIX, MAX_PATH);
-    lstrcpynA(g_paths.log_dir, HOOK_LOG_DIR, MAX_PATH);
 
     char root[MAX_PATH];
     root[0] = 0;
     GetPrivateProfileStringA("opt", "toolkit_root", "", root, sizeof(root), OPT_INI);
     if (root[0]) {
         lstrcpynA(g_paths.proj, root, MAX_PATH);
-        path_join(g_paths.out_dir, MAX_PATH, root, "work\\hook");
-        path_join(g_paths.opt_dir, MAX_PATH, root, "work\\opt");
+        path_join(out_dir, MAX_PATH, root, "work\\hook");
+        path_join(tmp_dir, MAX_PATH, root, "work\\opt");
         /* 这里的默认值必须与 `OPT_SCRIPT` 宏同值 —— 否则 `toolkit_root` 一配就分叉：
            转发层去起一个不存在的脚本，改写器静默放弃（只能从 `hook.log` 的 error 行看出来）。 */
-        path_join(g_paths.script, MAX_PATH, root, "tools\\perf_opt\\rewrite.py");
+        path_join(script, MAX_PATH, root, "tools\\perf_opt\\rewrite.py");
         path_join(g_paths.stdlib, MAX_PATH, root, "simplexc\\corpus\\stdlib_prefix.si");
-        lstrcpynA(g_paths.log_dir, g_paths.out_dir, MAX_PATH);
+        fp.out_dir = out_dir;
+        fp.tmp_dir = tmp_dir;
+        fp.script = script;
+        fp.log_dir = out_dir;      /* 与上面的 hook.log 同一条规则 */
     }
-    g_paths_ready = 1;
+    forward_init(&fp);
 }
 
 /* 同目录的 C 边界（纯 C 头，冻结版）：核心（C++17）实现它，本文件只调它。
@@ -185,7 +199,6 @@ typedef void  (*void_fn)(void);
 
 static HMODULE    g_real = NULL;
 static compile_fn g_compile = NULL;
-static LONG       g_seq = 0;
 static void*      g_ours_prev = NULL;    /* 我们上次给游戏的产物缓冲（bit62 置位 → 游戏不 free） */
 
 /* 编译后处理器注册表 —— 壳只按这张表跑，不认识任何具体处理器。
@@ -201,7 +214,7 @@ static const forward_processor* const g_processors[] = { &processor_rewrite };
  */
 static const char* resolve_compiler(void) {
     static char mode[32] = "";
-    GetPrivateProfileStringA("opt", "compiler", "ref", mode, sizeof(mode), g_paths.ini);
+    if (!forward_config_get("compiler", mode, sizeof(mode))) return "ref";
     if (lstrcmpA(mode, "ours") == 0) return "ours";
     if (lstrcmpA(mode, "ours_with_fallback") == 0) return "ours_with_fallback";
     return "ref";
@@ -220,7 +233,7 @@ static const char* resolve_compiler(void) {
  * 读不到 / 非法 → on（真路径）；配的原样值由 `raw` 带回，整行入选 `impl` 行（`stdlib_raw=`）——
  * 写错（`of`）会看起来与 on 一样能编，日志里必须留下痕迹。 */
 static int resolve_stdlib(char* raw, DWORD raw_cap) {
-    GetPrivateProfileStringA("opt", "stdlib", "on", raw, raw_cap, g_paths.ini);
+    if (!forward_config_get("stdlib", raw, raw_cap)) lstrcpynA(raw, "on", (int)raw_cap);
     return lstrcmpA(raw, "off") != 0;   /* 只有明确的 off 才关 */
 }
 
@@ -278,7 +291,7 @@ static unsigned long long ours_budget_ms(void) {
         if (v != (unsigned long long)-1) return v;
     }
     buf[0] = 0;
-    GetPrivateProfileStringA("opt", OURS_TIMEOUT_INI_KEY, "", buf, sizeof(buf), g_paths.ini);
+    forward_config_get(OURS_TIMEOUT_INI_KEY, buf, sizeof(buf));
     unsigned long long v = parse_ms(buf);
     return v == (unsigned long long)-1 ? OURS_TIMEOUT_MS : v;
 }
@@ -446,158 +459,28 @@ static void ours_fail_result(void* out, long long seq, const char* kind) {
     (void)seq;
 }
 
-/* `hook_log` 在下面定义（中间隔着 dump/manifest 一段）：先声明，因为「加载失败」
-   是必须留痕的事件，而痕迹只能写在 ensure_real 里 —— 只有那里拿得到 GetLastError
-   （126 = 找不到文件 / 193 = 位数不对 / 127 = 没有 compile 导出）。 */
-void hook_log(LONG seq, const char* event, const char* kv);
-
 static void ensure_real(void) {
     static int fail_logged = 0;
     /* 延迟加载：绝不能在 DllMain 里 LoadLibrary（loader lock 会死锁）。
-       多线程首次并发时可能重复 LoadLibrary —— 无害，只是引用计数 +1。
-
-       ⚠️ 必须用**自身模块路径**推导 compile_real.dll 的位置，不能写相对路径
-       "compile_real.dll" —— 相对路径按宿主进程的**当前目录**解析，而宿主未必在
-       游戏目录。离线调用这个 dll 做验证时就踩到了：LoadLibrary 失败 -> 返回 NULL
-       -> 表现为「编译失败」，查了半天才发现是路径问题。 */
+       找模块那一段（按自身路径推）在 `forward_real_symbol` 里，两份转发壳共用同一套。 */
     if (g_real) return;
-    HMODULE self = NULL;
-    char path[MAX_PATH];
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           (LPCSTR)(void *)&ensure_real, &self)) {
-        DWORD n = GetModuleFileNameA(self, path, MAX_PATH);
-        if (n > 0) {
-            char *slash = strrchr(path, SEP);
-            if (slash) {
-                *(slash + 1) = 0;
-                lstrcatA(path, REAL_DLL);
-                g_real = LoadLibraryA(path);
-            }
-        }
-    }
-    if (!g_real) g_real = LoadLibraryA(REAL_DLL);      /* 兜底：当前目录 */
-    if (g_real) g_compile = (compile_fn)GetProcAddress(g_real, "compile");
+    void* sym = forward_real_symbol(REAL_DLL, "compile");
+    DWORD err = GetLastError();        /* 取模块句柄会覆盖它，先接下来 */
+    /* 模块已由上面加载进来，按基名再取一次拿到的是同一份（没加载成功就是 NULL —— 于是下次
+       调用会重试，和以前一样）。NimMain / NimDestroyGlobals 要从它取符号。 */
+    g_real = GetModuleHandleA(REAL_DLL);
+    g_compile = (compile_fn)sym;
     /* 加载失败以前**零记录**：`compile()` 里 `if (!g_compile) return NULL` 不给 out 写任何字段，
        hook.log 也没有行 —— 游戏按 out[3]==0 判成功，于是「我们的部署错了」被记成「什么都没发生」
-       （P3）。这里补一行，带 Win32 错误码；只记一次 —— NimMain / NimDestroyGlobals 也会走到本函数，
-       否则每次调用都添一行。 */
+       （P3）。这里补一行，带 Win32 错误码（126 找不到文件 / 193 位数不对 / 127 没有 compile
+       导出）；只记一次 —— NimMain / NimDestroyGlobals 也会走到本函数，否则每次调用都添一行。 */
     if (!g_compile && !fail_logged) {
-        DWORD err = GetLastError();
         char kv[160];
         fail_logged = 1;
         snprintf(kv, sizeof kv, "stage=ensure_real\tkind=%s\tdetail=%s err=%lu",
                  KIND_INTERNAL, REAL_DLL, (unsigned long)err);
-        hook_log(0, "error", kv);
+        forward_log(0, "error", kv);
     }
-}
-
-/* 返回是否真的写出了文件 —— manifest 要按它决定写文件名还是 "-"，
-   免得记录里指着一个因超限/失败而根本没落盘的捕获。 */
-static int dump(const char* tag, const char* ext, const void* p, long long n, LONG seq) {
-    if (!p || n <= 0 || n > (64LL << 20)) return 0;
-    CreateDirectoryA(g_paths.out_dir, NULL);       /* 已存在会失败，无所谓 */
-    char path[MAX_PATH];
-    sprintf(path, "%s%chook_%s_%03ld%s", g_paths.out_dir, SEP, tag, seq, ext);
-    HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    DWORD written = 0;
-    BOOL ok = WriteFile(h, p, (DWORD)n, &written, NULL);
-    CloseHandle(h);
-    return ok && written == (DWORD)n;
-}
-
-/* ---- 系统 CNG（bcrypt.dll）的按需绑定 ------------------------------------
- *
- * sha256 用 Windows 自带的 CNG，但**不链接 -lbcrypt** —— 那要依赖 w64devkit
- * 的导入库 libbcrypt.a（只是声明，不含实现）。这里只取 7 个函数：首次用到时
- * LoadLibrary 一次、GetProcAddress 一次，之后每次调用只查一个静态标志，
- * 与 ensure_real() 是同一套路。
- *
- * 连 <bcrypt.h> 也不 include：需要的符号一共就下面这几个，自己声明即可，
- * 免得依赖 w64devkit 的头文件。
- *
- * 绑不上（或任一环节失败）就让 sha256 退化成写 "-"，不影响编译与返回值。
- * 多线程首次并发可能重复 LoadLibrary —— 与 ensure_real 同样宽容处理，无害。
- */
-#define CNG_DLL           "bcrypt.dll"
-#define CNG_SHA256        L"SHA256"
-#define CNG_OBJECT_LENGTH L"ObjectLength"
-
-typedef LONG (WINAPI *cng_open_t)(void** alg, LPCWSTR id, LPCWSTR impl, ULONG flags);
-typedef LONG (WINAPI *cng_prop_t)(void* obj, LPCWSTR prop, PUCHAR out, ULONG outlen,
-                                  ULONG* got, ULONG flags);
-typedef LONG (WINAPI *cng_create_t)(void* alg, void** hash, PUCHAR buf, ULONG buflen,
-                                    PUCHAR secret, ULONG secretlen, ULONG flags);
-typedef LONG (WINAPI *cng_data_t)(void* hash, PUCHAR in, ULONG inlen, ULONG flags);
-typedef LONG (WINAPI *cng_finish_t)(void* hash, PUCHAR out, ULONG outlen, ULONG flags);
-typedef LONG (WINAPI *cng_destroy_t)(void* hash);
-typedef LONG (WINAPI *cng_close_t)(void* alg, ULONG flags);
-
-static struct {
-    int           state;          /* 0 = 还没试过，1 = 可用，-1 = 不可用 */
-    cng_open_t    open_alg;
-    cng_prop_t    get_prop;
-    cng_create_t  create_hash;
-    cng_data_t    hash_data;
-    cng_finish_t  finish_hash;
-    cng_destroy_t destroy_hash;
-    cng_close_t   close_alg;
-} g_cng;
-
-static int cng_bind(void) {
-    if (g_cng.state) return g_cng.state > 0;
-    HMODULE m = LoadLibraryA(CNG_DLL);
-    if (m) {
-        g_cng.open_alg     = (cng_open_t)   GetProcAddress(m, "BCryptOpenAlgorithmProvider");
-        g_cng.get_prop     = (cng_prop_t)   GetProcAddress(m, "BCryptGetProperty");
-        g_cng.create_hash  = (cng_create_t) GetProcAddress(m, "BCryptCreateHash");
-        g_cng.hash_data    = (cng_data_t)   GetProcAddress(m, "BCryptHashData");
-        g_cng.finish_hash  = (cng_finish_t) GetProcAddress(m, "BCryptFinishHash");
-        g_cng.destroy_hash = (cng_destroy_t)GetProcAddress(m, "BCryptDestroyHash");
-        g_cng.close_alg    = (cng_close_t)  GetProcAddress(m, "BCryptCloseAlgorithmProvider");
-    }
-    if (!m || !g_cng.open_alg || !g_cng.get_prop || !g_cng.create_hash ||
-        !g_cng.hash_data || !g_cng.finish_hash || !g_cng.destroy_hash ||
-        !g_cng.close_alg) {
-        g_cng.state = -1;
-        if (m) FreeLibrary(m);
-        return 0;
-    }
-    g_cng.state = 1;
-    return 1;
-}
-
-/* SHA-256 十六进制串（小写，64 字符 + 终止符）。
- *
- * 用系统 CNG 而不是自带实现：`hook.log` 里 `opt` 行的指纹是 Python hashlib 算的，
- * 两边必须逐字符一致才谈得上交叉核对，所以用同一个标准实现。
- *
- * **失败时不碰 out**（保留调用方给的 "-"）—— 记录失败要静默，不能因为指纹
- * 算不出来就影响编译，或写出一条看似有效的错指纹。
- */
-static void sha256_hex(const void* p, long long n, char* out) {
-    if (!p || n <= 0 || n > (64LL << 20)) return;
-    if (!cng_bind()) return;
-    void* alg = NULL;
-    void* hash = NULL;
-    PUCHAR obj = NULL;
-    ULONG objlen = 0, got = 0;
-    UCHAR digest[32];
-    if (g_cng.open_alg(&alg, CNG_SHA256, NULL, 0) != 0) return;
-    if (g_cng.get_prop(alg, CNG_OBJECT_LENGTH, (PUCHAR)&objlen,
-                       sizeof(objlen), &got, 0) != 0) goto done;
-    obj = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, objlen);
-    if (!obj) goto done;
-    if (g_cng.create_hash(alg, &hash, obj, objlen, NULL, 0, 0) != 0) goto done;
-    if (g_cng.hash_data(hash, (PUCHAR)p, (ULONG)n, 0) != 0) goto done;
-    if (g_cng.finish_hash(hash, digest, (ULONG)sizeof(digest), 0) != 0) goto done;
-    for (int i = 0; i < 32; i++) sprintf(out + i * 2, "%02x", digest[i]);
-done:
-    if (hash) g_cng.destroy_hash(hash);
-    if (obj) HeapFree(GetProcessHeap(), 0, obj);
-    g_cng.close_alg(alg, 0);
 }
 
 /* 追加一行 manifest.tsv：把一次 compile() 的四样东西串起来 ——
@@ -611,16 +494,17 @@ done:
  *
  * 必须在注册表里的处理器（`g_processors[]`，当前只有 `processor_rewrite`）跑完才调用：
  * 那时 r2 才是交给游戏的**最终**锚点。
- * 任何一步失败都静默跳过（与 dump / opt_log 同一风格）。
+ * 任何一步失败都静默跳过（与 forward_dump / forward_log 同一风格）。
  */
 static void manifest_line(LONG seq, int flags,
                           const char* src_name, long long src_len, const char* src_sha,
                           const char* out_name, long long out_len, const char* out_sha,
                           const void* out, const char* impl, const char* stdlib) {
     if (!out) return;                      /* 没有 out 缓冲就没什么可记 */
-    CreateDirectoryA(g_paths.out_dir, NULL);
+    const char* dir = forward_get_paths()->out_dir;
+    CreateDirectoryA(dir, NULL);
     char path[MAX_PATH];
-    sprintf(path, "%s%cmanifest.tsv", g_paths.out_dir, SEP);
+    sprintf(path, "%s%cmanifest.tsv", dir, SEP);
     int fresh = GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES;
     HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -646,134 +530,25 @@ static void manifest_line(LONG seq, int flags,
     CloseHandle(h);
 }
 
-int write_file(const char* path, const void* p, long long n) {
-    HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    DWORD written = 0;
-    BOOL ok = WriteFile(h, p, (DWORD)n, &written, NULL);
-    CloseHandle(h);
-    return ok && written == (DWORD)n;
-}
-
-/* 转发层的记录项 —— 与改写器写的 `opt` 行同处一个 hook.log。
- *
- * 格式（制表符分隔：时间 / 编号 / 事件 / key=value…）与扩容方式（只加事件名或
- * 键，消费者忽略不认识的）见 tools/hook_log.py 的模块 docstring —— 那是这份契约
- * 的权威描述，本函数只是它在 C 侧的实现，改一处必须改另一处。
- *
- * 追加写（FILE_APPEND_DATA）：转发层与改写子进程同时往这个文件里写，追加语义由
- * 系统保证；日志的价值也全在历史。
- */
-void hook_log(LONG seq, const char* event, const char* kv) {
-    CreateDirectoryA(g_paths.log_dir, NULL);
-    char path[MAX_PATH];
-    sprintf(path, "%s%chook.log", g_paths.log_dir, SEP);
-    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char line[320];
-    int n = sprintf(line, "%04d-%02d-%02d %02d:%02d:%02d\t%03ld\t%s",
-                    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
-                    seq, event);
-    if (kv && kv[0]) n += sprintf(line + n, "\t%s", kv);
-    n += sprintf(line + n, "\r\n");
-    DWORD w = 0;
-    WriteFile(h, line, (DWORD)n, &w, NULL);
-    CloseHandle(h);
-}
-
-/* 加载时清空 OUT_DIR 下的 `.si` / `.bin` / `.tsv`（不含子目录）。
- *
- * 为什么：编号计数器 g_seq 是**本 DLL 的全局变量**，每次加载都从 1 重新编号。
- * 不清空的话，新捕获会覆盖同号的旧文件，而且新旧混在同一目录里分不出哪些是
- * 本次会话的 —— 实测就发生过「09-19 00:23 的 001-006 被 00:35 的 001-004 覆盖」。
- *
- * **只删这一层的文件，不进入子目录** —— 想长期保留的捕获，自己挪到子目录里。
- * DllMain 里只做 FindFirstFile / DeleteFile 这类不触发 loader 的操作，是安全的。
- */
-static int ends_with_ci(const char* name, const char* ext) {
-    int ln = lstrlenA(name), le = lstrlenA(ext);
-    return ln >= le && lstrcmpiA(name + ln - le, ext) == 0;
-}
-
-static void purge_captures(void) {
-    char pat[MAX_PATH], path[MAX_PATH];
-    WIN32_FIND_DATAA fd;
-    lstrcpyA(pat, g_paths.out_dir);
-    lstrcatA(pat, "\\*");
-    HANDLE h = FindFirstFileA(pat, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在，没什么可清的 */
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   /* 不碰子目录 */
-        /* hook.log 与捕获同批清：它是**一次游戏会话**的记录（编号随加载从 1 重来），
-           留着上一会话的同号行，按编号回查归属时（ownership 同号取最后一条）会摸到
-           上一会话的值 —— 与 purge_workdir 挡的是同一个坑。 */
-        if (lstrcmpiA(fd.cFileName, "hook.log") != 0 &&
-            !ends_with_ci(fd.cFileName, ".si") &&
-            !ends_with_ci(fd.cFileName, ".bin") &&
-            !ends_with_ci(fd.cFileName, ".tsv")) continue;   /* manifest.tsv 同批清 */
-        lstrcpyA(path, g_paths.out_dir);
-        lstrcatA(path, "\\");
-        lstrcatA(path, fd.cFileName);
-        DeleteFileA(path);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-}
-
-/* 加载时也清掉 OPT_DIR 里的中间产物。
- *
- * 为什么：OPT_DIR 里的 NNN.raw.bin / NNN.opt.bin / *.log 与 OUT_DIR 的捕获文件
- * 共用同一个编号（都出自本 DLL 的 g_seq），却**从未跟着一起清** —— 实测
- * optimize.log 里同一编号攒到 5 条（五轮游戏会话都编到过 001），而对应的
- * hook_out_001.bin 只剩本轮那一份。后果是按编号回查产物信息时会摸到上一轮
- * 会话的记录，指纹张冠李戴。
- *
- * 只删这四类（`.raw.bin` / `.opt.bin` / `.entry.txt` / `.log`），不整目录删 —— 免得误伤
- * 将来往这里放的东西。
- */
-static void purge_workdir(void) {
-    char pat[MAX_PATH], path[MAX_PATH];
-    WIN32_FIND_DATAA fd;
-    lstrcpyA(pat, g_paths.opt_dir);
-    lstrcatA(pat, "\\*");
-    HANDLE h = FindFirstFileA(pat, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;         /* 目录还不存在 */
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        if (!ends_with_ci(fd.cFileName, ".raw.bin") &&
-            !ends_with_ci(fd.cFileName, ".opt.bin") &&
-            !ends_with_ci(fd.cFileName, ".entry.txt") &&
-            !ends_with_ci(fd.cFileName, ".log")) continue;
-        lstrcpyA(path, g_paths.opt_dir);
-        lstrcatA(path, "\\");
-        lstrcatA(path, fd.cFileName);
-        DeleteFileA(path);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-}
-
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     (void)hinst;
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
-        /* 路径先解析：下面两个 purge 清哪个目录全看它（`opt.ini` 的 `toolkit_root` 只在这里
+        /* 路径先解析：下面两个清理清哪个目录全看它（`opt.ini` 的 `toolkit_root` 只在这里
            读一次，之后每次 compile() 用同一组值）。 */
-        toolkit_paths_init();
-        purge_captures();
-        purge_workdir();
+        hook_paths_init();
+        forward_purge_captures();
+        forward_purge_tmp();
     }
     return TRUE;
 }
 
 __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     ensure_real();
-    /* **一次调用取一个号**，src 与 out 共用 —— 这样 hook_src_NNN.si 与
-       hook_out_NNN.bin 编号相同，一眼看出一对。早先的实现是在 dump() 里各自
+        /* **一次调用取一个号**，src 与 out 共用 —— 这样 hook_src_NNN.si 与
+       hook_out_NNN.bin 编号相同，一眼看出一对。早先的实现是在 dump 里各自
        取号，于是编号成了 src_001/out_002、src_003/out_004…，配对要看「-1」。 */
-    LONG seq = InterlockedIncrement(&g_seq);
+    LONG seq = forward_next_seq();
     const void* sp = NULL;                 /* 源码数据（ptr + 8）与长度，留给 manifest */
     long long slen = 0;
     int s_wrote = 0;
@@ -783,7 +558,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         if (ptr) {
             sp = (const char*)ptr + 8;     /* 数据在 ptr + 8 */
             slen = len;
-            s_wrote = dump("src", ".si", sp, len, seq);
+            s_wrote = forward_dump("src", ".si", sp, len, seq);
         }
     }
     if (!g_compile) return NULL;
@@ -838,9 +613,9 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     if (ours_attempted) {
         const char* warns = simplexc_last_warnings();
         if (warns && warns[0]) {
-            char kvw[260]; /* `hook_log` 行缓冲 320 减固定前缀后的额度；超了由 snprintf 截断 */
+            char kvw[260]; /* `forward_log` 行缓冲 320 减固定前缀后的额度；超了由 snprintf 截断 */
             snprintf(kvw, sizeof kvw, "detail=%s", warns);
-            hook_log(seq, "warn", kvw);
+            forward_log(seq, "warn", kvw);
         }
     }
 
@@ -853,7 +628,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         if (lstrcmpA(kind, KIND_TIMEOUT) == 0)      stage = "ours_timeout";
         else if (lstrcmpA(kind, KIND_FAULT) == 0)   stage = "ours_fault";
         /* `detail=` 是三轴诊断（`sema/用户源码错 第 12 行：…`）：stderr 只有开发机看得到，
-           游戏在别人的机器上跑，而「哪一行、哪个阶段」全在这一串里。缓冲 200 是 `hook_log`
+           游戏在别人的机器上跑，而「哪一行、哪个阶段」全在这一串里。缓冲 200 是 `forward_log`
            行缓冲（320）的上限减去固定前缀后剩下的额度，超了就在这里截断，不让它冲爆那边。 */
         char kve[200];
         size_t used = append_str(kve, sizeof kve, 0, "stage=");
@@ -864,7 +639,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
             used = append_str(kve, sizeof kve, used, "\tdetail=");
             used = append_str(kve, sizeof kve, used, g_kind_detail);
         }
-        hook_log(seq, "error", kve);
+        forward_log(seq, "error", kve);
     }
 
     /* 失败的两种走向：`ours` 模式、以及回退模式下**故意不转交**的（`UserError`）——
@@ -894,8 +669,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
            改写器的 VALID_MODES 定义一次。这边要是也维护一份，漏一个值就会像
            2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
            short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
-        GetPrivateProfileStringA("opt", "rewrite", "", rewrite_mode,
-                                 sizeof(rewrite_mode), g_paths.ini);
+        forward_config_get("rewrite", rewrite_mode, sizeof(rewrite_mode));
     }
 
     /* impl 行落在这里 —— 编译之后、改写之前。为什么不能更早：`rewrite=` 必须是**事实**
@@ -914,13 +688,13 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         /* `rewrite=` 只在起了改写器的这趟带 —— 「有 `rewrite=` = 起了改写器」是归因判据。
            值是**配置值**，与传给 `--mode` 的同源；空值写 `(空)`。 */
         if (rewrote) n += sprintf(kvi + n, "\trewrite=%s", rewrite_mode[0] ? rewrite_mode : "(空)");
-        hook_log(seq, "impl", kvi);
+        forward_log(seq, "impl", kvi);
     }
 
     if (out) {
         int o_wrote = 0;
         if (optr) {
-            o_wrote = dump("out", ".bin", optr, olen, seq);
+            o_wrote = forward_dump("out", ".bin", optr, olen, seq);
             if (rewrote) {
                 for (size_t i = 0; i < sizeof g_processors / sizeof g_processors[0]; i++) {
                     g_processors[i]->init(rewrite_mode);
@@ -931,11 +705,11 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         char ssha[65] = "-", osha[65] = "-", sname[32] = "-", oname[32] = "-";
         if (s_wrote) {
             sprintf(sname, "hook_src_%03ld.si", seq);
-            sha256_hex(sp, slen, ssha);
+            forward_sha256_hex(sp, slen, ssha);
         }
         if (o_wrote) {
             sprintf(oname, "hook_out_%03ld.bin", seq);
-            sha256_hex(optr, olen, osha);
+            forward_sha256_hex(optr, olen, osha);
         }
         manifest_line(seq, flags, sname, slen, ssha, oname, olen, osha, out, impl, stdlib);
     }

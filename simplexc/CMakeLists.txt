@@ -207,6 +207,16 @@ add_executable(llvm_prog "${SIMPLEXC_ROOT}/simplexc/cli/llvm_prog.cc")
 target_link_options(llvm_prog PRIVATE -static)
 target_link_libraries(llvm_prog PRIVATE simplexc_flags LLVMC::LLVMC)
 
+# ---------------------------------------------------------------- native_forward（转发机制静态库）
+#
+# 机制层：路径表注入 / 原实现符号 / 调用编号 / 捕获落盘 / 日志 / 指纹 / 配置读取 / 加载时清理。
+# 它不是某个产品的内部件，而是**转发这件事本身**的那一半 —— 将来转发别的 dll 时，那一份壳链接
+# 同一个库，差的是业务（转发了谁、日志里的键各是什么意思），见 docs/specs/2026-11-05-toolkit-architecture.md
+# §5.2。静态库而不是把源文件列进两个 target：一份编译单元只编一次，且两个壳的符号只有一份。
+# 单独一个 target 也意味着 `-Wall -Werror` 要显式继承（`simplexc_flags` 是 INTERFACE 库）。
+add_library(native_forward STATIC "${SIMPLEXC_ROOT}/native/forward/forward.c")
+target_link_libraries(native_forward PRIVATE simplexc_flags)
+
 # ---------------------------------------------------------------- hook（= simplexc/build/compile_hook.dll）
 #
 # 转发层 = **C 壳**（native/compile/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）
@@ -238,14 +248,15 @@ add_library(hook SHARED
 set_target_properties(hook PROPERTIES
   PREFIX ""
   OUTPUT_NAME "compile_hook")
-target_include_directories(hook PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell")
+target_include_directories(hook PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell"
+  "${SIMPLEXC_ROOT}/native/forward")
 # 仓库根编进库（"为什么不是运行时推导"见 native/compile/compile_hook.c 的路径宏注释）：
 # 壳允许被 -DOUT_DIR=... 覆盖（离线判据靠它隔离工作目录），但**不再自己持有绝对路径**。
 target_compile_definitions(hook PRIVATE "TC_TOOLKIT_ROOT=\"${SIMPLEXC_ROOT}\"")
 # -static：把 libstdc++/libgcc/libwinpthread 一起包进来，否则游戏目录还要多拷三个 DLL。
 # 旧命令行在链接行上还抄了个优化开关：无 LTO 时链接器不看它，产物逐字节相同，已删。
 target_link_options(hook PRIVATE -static)
-target_link_libraries(hook PRIVATE simplexc_flags LLVMC::LLVMC)
+target_link_libraries(hook PRIVATE simplexc_flags LLVMC::LLVMC native_forward)
 
 # `simplexc_dll` 是**同一个**目标的另一个名字（与其它 simplexc 目标对齐；部署入口转调它）。
 # 别名不做成第二个库：两份产物只会漂。
@@ -491,9 +502,10 @@ add_library(hook_offline_new SHARED
 set_target_properties(hook_offline_new PROPERTIES
   PREFIX "" OUTPUT_NAME "compile_hook_new" EXCLUDE_FROM_ALL TRUE
   RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_HOOK_OFFLINE_BIN}")
-target_include_directories(hook_offline_new PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell")
+target_include_directories(hook_offline_new PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell"
+  "${SIMPLEXC_ROOT}/native/forward")
 target_link_options(hook_offline_new PRIVATE -static)
-target_link_libraries(hook_offline_new PRIVATE simplexc_flags LLVMC::LLVMC)
+target_link_libraries(hook_offline_new PRIVATE simplexc_flags LLVMC::LLVMC native_forward)
 simplexc_hook_offline_defs(new hook_offline_new)
 
 # 基线壳（`BASELINE_REF` 的壳）不引用核心：单文件 C，不需要 C++ 运行库。

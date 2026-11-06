@@ -706,7 +706,7 @@ static void hook_log(LONG seq, const char* event, const char* kv) {
  *   · 不换缓冲区 —— 直接覆盖原缓冲，于是没有「新内存谁分配、谁释放」的问题
  *   · 任何一步失败都静默放弃 —— 游戏绝不该因为优化器出问题而受影响
  */
-static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
+static void optimize_inplace(void* buf, long long len, LONG seq, void* out, const char* mode) {
     if (!buf || len <= 0 || len > (64LL << 20)) return;
     CreateDirectoryA(g_paths.opt_dir, NULL);
 
@@ -718,21 +718,10 @@ static void optimize_inplace(void* buf, long long len, LONG seq, void* out) {
     sprintf(entry, "%s%c%03ld.entry.txt", g_paths.opt_dir, SEP, seq);
     DeleteFileA(entry);   /* 防残留：上一轮同号的入口文件不能影响本轮 */
 
-    /* 读 rewrite 配置：**这里不判断合法性，连字符集也不查** —— 合法值集合只在
-       改写器的 VALID_MODES 定义一次。这边要是也维护一份，漏一个值就会像
-       2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
-       short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
-    char mode[32] = "";
-    GetPrivateProfileStringA("opt", "rewrite", "", mode, sizeof(mode), g_paths.ini);
-    /* 写进 hook.log（起子进程前）：监听主频的程序要拿「编译时刻」的值 ——
-       这一行与下面传给改写器的值同源，必然一致。 */
-    char tag[64];
-    sprintf(tag, "rewrite=%s", mode[0] ? mode : "(空)");
-    hook_log(seq, "cfg", tag);
     if (!write_file(raw, buf, len)) { hook_log(seq, "error", "stage=raw"); return; }
 
     /* 把 Result[2]（旧锚点偏移）与模式一起传给改写器 —— 缩短模式必须同步更新
-       锚点；模式由转发层传过去，是为了让配置**只被读一次、只被判定一次**。 */
+       锚点；模式由调用方传进来，是为了让配置**只被读一次、只被判定一次**。 */
     if (mode[0])
         sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX --mode %s",
                 PY_EXE, g_paths.script, raw, opt,
@@ -1021,7 +1010,22 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
             o_wrote = dump("out", ".bin", optr, olen, seq);
             /* 改写器是给**参考产物**准备的（它按参考实现的指令形状做等长改写）：
                我们自己的产物不过它 —— 否则就是拿别人尺子改自己的衣服。 */
-            if (!ours_ok) optimize_inplace(optr, olen, seq, out);
+            if (!ours_ok) {
+                /* 读 rewrite 配置：**这里不判断合法性，连字符集也不查** —— 合法值集合只在
+                   改写器的 VALID_MODES 定义一次。这边要是也维护一份，漏一个值就会像
+                   2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
+                   short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
+                char rewrite_mode[32] = "";
+                GetPrivateProfileStringA("opt", "rewrite", "", rewrite_mode,
+                                         sizeof(rewrite_mode), g_paths.ini);
+                /* 写进 hook.log（起子进程前）：监听主频的程序要拿「编译时刻」的值 ——
+                   这一行与下面传给改写器的值同源，必然一致。这条行的有无同时是
+                   「这一趟起了改写器」的判据（`tools/freq/products.py`）。 */
+                char tag[64];
+                sprintf(tag, "rewrite=%s", rewrite_mode[0] ? rewrite_mode : "(空)");
+                hook_log(seq, "cfg", tag);
+                optimize_inplace(optr, olen, seq, out, rewrite_mode);
+            }
         }
         char ssha[65] = "-", osha[65] = "-", sname[32] = "-", oname[32] = "-";
         if (s_wrote) {

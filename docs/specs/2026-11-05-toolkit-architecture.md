@@ -209,12 +209,15 @@ typedef struct {
 | `native/` 位置 | 仓库根 |
 | 静态检查 | 本期不做，靠 §8 的删除演练与现有的 `check.py` 判据 |
 
-## 10. 剩余工作（均尚未开工）
+## 10. 剩余工作
 
-- **`native/forward/` 静态库**：机制层抽成 `add_library(native_forward STATIC …)`，编译壳与将来的 `game_engine` 转发壳各自链接它；路径由壳通过 `forward_init(paths)` 注入，forward 不知道 `opt.ini`（判据：`grep -i compile native/forward/` 为空）。
-- **`native/backend/` + `compiler_backend`**：`simplexc.c` 与 `ref.c` 各实现一次，消掉 `compile()` 里的 `is_ref` 双分支。
-- **`optimize_image` + `analyze_jit_code` 搬进 `tools/perf_opt/optimizer/`**：不原样塞进一个文件，按 `model` / `rules` / `reloc` / `verify` 分；`optimizer/*` 不许 import `tools.*`。`format_si` 也进 perf_opt，但编译路径不调用它（产物必须保真）。
-- **`libs/paths.py`**：收敛 `work/` 路径常量（现在仍是 `libs/hook_log.py` 的 NEW/LEGACY + mtime 与 `tools/freq/products.py` 各自算）。
+**2026-11-06 已全部完成**，保留当时清单以便对照：
+
+- ~~`native/forward/` 静态库~~ → `1ab9fb9`（机制层，路径由壳注入）
+- ~~`native/backend/` + `compiler_backend`~~ → `c73582a`（`is_ref` 双分支消失）
+- ~~`optimize_image` + `analyze_jit_code` 搬进 `perf_opt/optimizer/`；`format_si` 进 `perf_opt`~~ → `e26478b`（四模式字节比对一致）
+- ~~`libs/paths.py`~~ → `cbd8eab`
+- ~~旧热点管道清理~~ → `7e1d4f3`（删 10 个）
 
 ## 11. 证据索引
 
@@ -243,7 +246,12 @@ typedef struct {
 | 5 | `2bbcb65` | C 壳移入 `native/compile/`；include 改 include 目录；根级 `compile_commands.json` 供编辑器 |
 | 6 | `375c825` | `tools/perf_opt/` 五模块 + 薄壳；help/status 与 HEAD 一致 |
 | 7a | `c00d95b` | 编译后优化抽成 `processor_rewrite.c` + 注册表；删除演练通过 |
+| 8 | `7e1d4f3` | 删 10 个被取代的旧热点/调试工具，文档指针改指 `hotspot/` |
+| 9 | `cbd8eab` | `libs/paths.py` 收敛 `work/` 路径（mtime 选边留在 `hook_log`） |
+| 10 | `e26478b` | 改写器进 `perf_opt/optimizer/`，四模式输出与基线逐字节相同 |
+| 11 | `1ab9fb9` | `native/forward/` 静态库，路径由壳注入 |
+| 12 | `c73582a` | `native/backend/`：`compiler_backend` 两份实现，`is_ref` 双分支消失 |
 
-当前布局与 §3 的差异：`native/compile/` 现有 `compile_hook.c`、`paths.h`、`processor.h`、`native_internal.h`、`processor_rewrite.c`；`native/forward/` 与 `native/backend/` 尚未建（§10）。
+当前布局与 §3 的差异：`native/` 现为 `forward/`（机制）+ `compile/`（服务：`compile_hook.c`、`paths.h`、`processor.h`、`native_internal.h`、`processor_rewrite.c`）+ `backend/`（`backend.h`、`simplexc.c`、`ref.c`）；`tools/perf_opt/` 含 `cli/build/deploy/config/rewrite/format_si` 与 `optimizer/`（`core.py`、`analyze.py`）。
 
 判据现状：`check.py` 全量 7 步 PASS；`libs/test_tc_common.py` + `tools/freq/test_freq.py` 61 tests；`hotspot/tests/test_run.py` 66 tests。

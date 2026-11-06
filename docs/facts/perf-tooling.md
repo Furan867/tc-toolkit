@@ -52,12 +52,12 @@
 ### 四态与两条规则
 `rewrite = on / short / short_cse / off`。规则①：`mov ecx,imm32` + `移位 r,cl` →
 `移位 r,imm8`（恒缩 4 B）；规则②**仅 `short_cse`**：删紧邻重复装载（`short` 的 CSE 列表恒为空）。
-验证：静态核对（`optimize_image.py:676` `cse = find_cse(...) if mode == "short_cse" else []`）
+验证：静态核对（`perf_opt/optimizer/core.py:676` `cse = find_cse(...) if mode == "short_cse" else []`）
 最后验证：2026-10-11
 
 ### 填充一律用单条多字节 nop
-理由见 `optimize_image.py` 的 `NOPS` 表注释。
-验证：静态核对（`optimize_image.py` 的 NOPS 表）
+理由见 `perf_opt/optimizer/core.py` 的 `NOPS` 表注释。
+验证：静态核对（`perf_opt/optimizer/core.py` 的 NOPS 表）
 最后验证：2026-10-11
 
 ### 收益来自去掉「变量移位」依赖链
@@ -68,14 +68,14 @@
 ### 模式传递链
 `rewrite` 的值只被读一次、只被判定一次；转发层只负责原样搬运（原样写 `hook.log`、
 原样经 `--mode` 传），**合法值集合只在 `resolve_mode()` 的 `VALID_MODES` 定义**。
-验证：静态核对（`compile_hook.c` + `optimize_image.py`）
+验证：静态核对（`compile_hook.c` + `perf_opt/optimizer/core.py`）
 最后验证：2026-10-11
 
 ### `opt.ini` 规则
 不在 git 里；切换靠搬注释符；**若多行都放开：取第一个匹配行生效、不报错**
 （读法为何必须与转发层一致、旧实现错在哪，见 `resolve_mode()` 的注释）；
 非法值与读不到时都按 `on` 兜底。
-验证：静态核对（`optimize_image.py:607-629`）
+验证：静态核对（`perf_opt/optimizer/core.py:607-629`）
 最后验证：2026-10-11
 
 ### 日志的语义与格式

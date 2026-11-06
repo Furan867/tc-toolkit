@@ -64,7 +64,7 @@ Result[2]），否则游戏跳进指令中间：实测主频掉到 0.566（≈5.
 
 用法
 ----
-    py tools/optimize_image.py --in N.raw.bin --out N.opt.bin
+    py tools/perf_opt/rewrite.py --in N.raw.bin --out N.opt.bin
 
 诊断
 ----
@@ -83,10 +83,10 @@ import re
 import sys
 from collections import Counter
 
-import analyze_jit_code as A
+from . import analyze as A
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+HERE = os.path.dirname(os.path.abspath(__file__))       # tools/perf_opt/optimizer
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))      # 仓库根
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -143,7 +143,7 @@ MOV_IMM_RE = re.compile(r"^(\w+),(0x[0-9a-f]+|\d+)$")
 CSE_GAP = 5
 #: 配置文件：opt.ini 的 [opt] 段。**每次编译重新读**，
 #: 所以改完下次编译就生效，不用重启游戏。
-CONF = os.path.normpath(os.path.join(HERE, os.pardir, "opt.ini"))
+CONF = os.path.normpath(os.path.join(ROOT, "opt.ini"))
 #: REX 前缀（0x40~0x4F）
 REX = range(0x40, 0x50)
 #: 相对跳转/调用助记符全家（含防御性列出产物里未必出现的）
@@ -605,7 +605,7 @@ def rewrite_mode() -> str:
     / 'off'。读不到配置默认 'off' —— 改写器是自写编译器之前的性能产物，默认不启用。
 
     环境变量 `OPT_REWRITE` 优先于 opt.ini —— 离线验证用（opt.ini 归游戏内实验用，
-    验证时不应该去动它）：`OPT_REWRITE=short py tools/optimize_image.py --in ...  `
+    验证时不应该去动它）：`OPT_REWRITE=short py tools/perf_opt/rewrite.py --in ...  `
 
     ⚠️ 读法必须与**转发层**（`compile_hook.c` 的 GetPrivateProfileString）行为一致：
     取 [opt] 段里**第一个** rewrite 行，重复 key 不报错。以前用 configparser，

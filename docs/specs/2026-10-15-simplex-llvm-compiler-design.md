@@ -313,7 +313,7 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
    即比缓冲末尾多 8 字节（✅ 依据：`0x14021cc89 mov %ecx,0x20(%rsp)` 把 `out[0]` 当 section 大小、
    `r9d=0`、`0x14021cce9 memcpy(dest, out[1]+8, out[0])`）。原版编译器靠 Nim 字符串的分配余量兜住；我们必须显式留出，
    否则可能读到我们自己分配的页边界外（我们用的是自管内存，不像 Nim 字符串有对齐余量）。
-2. **bit62 会让"头值 == 文件总长"这条工具链约定失效**：`tools/analyze_jit_code.py` 的 `header_len`
+2. **bit62 会让"头值 == 文件总长"这条工具链约定失效**：`tools/perf_opt/optimizer/analyze.py` 的 `header_len`
    自检要求头值等于文件总长。工具链比较时应掩掉 bit62（`value & ~(1<<62)`），
    或明确接受"头值 = 总长 | bit62"。这是我们要改的唯一一处既有约定。
 3. 头 word 里**不放别的东西**（不放 magic/版本）——需要元数据就放 padding，别动头。
@@ -462,7 +462,7 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
   更稳的做法是守卫页/缺页记录触达地址。
 - **extern 中和**：参考产物的 kernel32 地址是编译期写死的绝对立即数 → patch 成我们的桩
   （`ExitProcess/ExitThread/sleep/WriteFile`），否则宿主进程会被杀。
-  `tools/optimize_image.py` 已有 movabs 改写能力可复用。
+  `tools/perf_opt/optimizer/core.py` 已有 movabs 改写能力可复用。
 - **自比对基线**：先跑「参考产物 vs 参考产物」证明宿主本身可靠，再接我们的产物。
 - 超时 + 可重放（程序内含 `while true` + `sleep`）。
 

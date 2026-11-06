@@ -6,9 +6,9 @@
 
 用法
 ----
-    python tools/analyze_jit_code.py <dump.bin>
-    python tools/analyze_jit_code.py <dump.bin> --start 0x17690 --stop 0x1e5d0
-    python tools/analyze_jit_code.py <dump.bin> --base 0x022FEADE0000
+    python -m tools.perf_opt.optimizer.analyze <dump.bin>
+    python -m tools.perf_opt.optimizer.analyze <dump.bin> --start 0x17690 --stop 0x1e5d0
+    python -m tools.perf_opt.optimizer.analyze <dump.bin> --base 0x022FEADE0000
 
 `--start` / `--stop` 都是**文件偏移**。若文件前 8 字节是长度头（小端整数，
 值等于文件总长 —— `compile()` 产物的形态），默认自动跳过。
@@ -31,8 +31,8 @@ from collections import Counter
 from pathlib import Path
 from typing import TypedDict
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+HERE = os.path.dirname(os.path.abspath(__file__))       # tools/perf_opt/optimizer
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))      # 仓库根
 sys.path.insert(0, ROOT)
 
 from libs import tc_common  # noqa: E402
@@ -46,7 +46,7 @@ OBJDUMP = tc_common.tool("objdump")
 #:
 #: 助记符也允许 `(bad)`：objdump 对 64 位模式下非法的单字节（实测见 `62`、`2f`）
 #: 就这样输出。**必须收进来**，否则字节不连续 —— 实测某份 203480 字节的产物因此
-#: 出现 41 段空洞。它们含义不明，所以改写时一律绕开（见 optimize_image.py）。
+#: 出现 41 段空洞。它们含义不明，所以改写时一律绕开（见 optimizer/core.py）。
 INS_RE = re.compile(
     r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*\t\s*([a-z][a-z0-9.]*|\(bad\))\s*(.*)$")
 CONT_RE = re.compile(r"^\s+([0-9a-f]+):\t((?:[0-9a-f]{2} )+)\s*$")

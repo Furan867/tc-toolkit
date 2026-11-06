@@ -35,7 +35,7 @@
 置位 → 不 free，否则 `rawDealloc(allocator__system_u7164, p)`。错误消息指针走同一门控
 （成功路径 `0x14021d127` → `deallocShared`）。
 → 自研实现的产物头**必须置 bit62**，否则游戏会用自己的分配器 free 我们的指针。
-代价：`analyze_jit_code.py` 的「头值 == 文件总长」自检要掩掉这一位。
+代价：`perf_opt/optimizer/analyze.py` 的「头值 == 文件总长」自检要掩掉这一位。
 验证：反汇编 exe `0x14001c260`–`0x14001c2a0`、`0x14021d11a`–`0x14021d130`
 最后验证：2026-10-15
 

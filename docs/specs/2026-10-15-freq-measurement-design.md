@@ -17,7 +17,7 @@
 - 不改底层既有模块的对外接口：`winmem.py`（进程/内存读）、`term.py`（着色）、`hook_log.py`（日志契约）、
   `simctl.py`（驱动游戏）保持接口不变，本层只在其上分层。
 - 不做自动检测（不监听文件 mtime 自动触发），不判断编译是否成功 —— 沿用 `simctl` 的三条设计原则。
-- 不重写机器码改写器（`optimize_image.py`）。
+- 不重写机器码改写器（`perf_opt/optimizer/core.py`）。
 
 ---
 
@@ -29,7 +29,7 @@
 |---|---|---|
 | 读游戏内存 | `winmem.py`；偏移与读法**各写一份**：`read_freq.py:33-43`、`watch_freq.py:66-70,355-369` | ✅ |
 | 采样循环 | **三份互不相同**：`read_freq.py:45-89`（独立轮询、无分段）；`watch_freq.py:385-565`（按游戏时间戳相位对齐 + 分段 + 重启重连）；`bench_rewrite.py:167-185`（固定 `sleep(1.0)` + 丢开头 1 个） | ✅ |
-| 配置写入 | `bench_rewrite.py:81-107`（写 `opt.ini`，原子替换）；转发层读它：`compile_hook.c:340`；合法值唯一处：`optimize_image.py:575-597` | ✅ |
+| 配置写入 | `bench_rewrite.py:81-107`（写 `opt.ini`，原子替换）；转发层读它：`compile_hook.c:340`；合法值唯一处：`perf_opt/optimizer/core.py:575-597` | ✅ |
 | 权威记录 | `hook_log.py`（`work/opt/hook.log`，C 侧 `compile_hook.c:296` 同契约）；消费：`watch_freq.py:249-286` | ✅ |
 | 产物身份 | `watch_freq.py:199-248` 与 `bench_rewrite.py:109-117` **两份语义不同的 `latest_product`**；`bench_rewrite.py:133-165` 的 `wait_new_product`（编号+mtime+hook.log 三判据） | ✅ |
 | 聚合 | `watch_freq.py:287-354` 取**最大非停机段的中位数**；`bench_rewrite.py:259-307` 用**均值** + 相对**第一个模式**的百分比 | ✅ |

@@ -119,7 +119,7 @@
 #define OPT_PROJ    TC_TOOLKIT_ROOT
 #endif
 #ifndef OPT_SCRIPT
-#define OPT_SCRIPT  OPT_PROJ "\\tools\\optimize_image.py"
+#define OPT_SCRIPT  OPT_PROJ "\\tools\\perf_opt\\rewrite.py"
 #endif
 #ifndef OPT_INI
 #define OPT_INI     OPT_PROJ "\\opt.ini"
@@ -167,7 +167,9 @@ static void toolkit_paths_init(void) {
         lstrcpynA(g_paths.proj, root, MAX_PATH);
         path_join(g_paths.out_dir, MAX_PATH, root, "work\\hook");
         path_join(g_paths.opt_dir, MAX_PATH, root, "work\\opt");
-        path_join(g_paths.script, MAX_PATH, root, "tools\\optimize_image.py");
+        /* 这里的默认值必须与 `OPT_SCRIPT` 宏同值 —— 否则 `toolkit_root` 一配就分叉：
+           转发层去起一个不存在的脚本，改写器静默放弃（只能从 `hook.log` 的 error 行看出来）。 */
+        path_join(g_paths.script, MAX_PATH, root, "tools\\perf_opt\\rewrite.py");
         path_join(g_paths.stdlib, MAX_PATH, root, "simplexc\\corpus\\stdlib_prefix.si");
         lstrcpynA(g_paths.log_dir, g_paths.out_dir, MAX_PATH);
     }

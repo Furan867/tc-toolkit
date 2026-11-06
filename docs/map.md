@@ -47,7 +47,7 @@ sim_ctl ──→ 机器码改写 ──→ 主频监听 ──→ 热点分析 
 | 线 | 做什么 | 状态 | 结论在哪 |
 |---|---|---|---|
 | **sim_ctl** | 脚本化「重编译 / 运行 / 停止」，供实验脚本 import | 已建成 | `facts/corpus-host.md` §simctl |
-| **机器码改写** | `optimize_image.py` 改写产物：四态、两条规则、锚点协议 | 已建成（默认 `rewrite = off`） | `facts/perf-tooling.md` §机器码改写 |
+| **机器码改写** | `perf_opt/optimizer/core.py` 改写产物：四态、两条规则、锚点协议 | 已建成（默认 `rewrite = off`） | `facts/perf-tooling.md` §机器码改写 |
 | **主频监听** | `read_freq` / `watch_freq` 被动记录实测主频 | 已建成 | `facts/perf-tooling.md` §主频读数 |
 | **热点分析** | `hotspot/run.py` 一条命令：编译 → sidecar → 采样 → 报表（组件级时间归因） | 已建成；新工具设计中，见 `docs/specs/2026-11-01-hotspot-profiler-design.md` | `facts/perf-tooling.md` §组件映射、§采样 |
 | **compile.dll 转发** | 转发层劫持 `compile()`，拿源码与产物 | 已建成 | `facts/forwarding.md` §compile.dll 转发层 |

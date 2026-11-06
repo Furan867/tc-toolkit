@@ -17,9 +17,9 @@
 
 用法
 ----
-    python tools/format_si.py --file work/hook_src_055.si      # 输出 .formatted.si 供查阅
-    python tools/format_si.py --file x.si --inplace            # 原地改写（自动备份 .bak）
-    python tools/format_si.py --dir work/hook                  # 批量处理目录下的 *.si
+    python tools/perf_opt/format_si.py --file work/hook_src_055.si      # 输出 .formatted.si 供查阅
+    python tools/perf_opt/format_si.py --file x.si --inplace            # 原地改写（自动备份 .bak）
+    python tools/perf_opt/format_si.py --dir work/hook                  # 批量处理目录下的 *.si
 """
 from __future__ import annotations
 

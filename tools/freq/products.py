@@ -125,10 +125,10 @@ def done_rounds(path: Path | None = None) -> dict[str, str]:
     """编号 → 这一趟的**终态行**（`impl` 且 `result=ok` / `writeback` / `opt`）。
 
     不是每趟编译都写 `writeback`：`compiler=ours` 那趟**根本不起改写子进程**
-    （`compile_hook.c`：`if (!ours_ok) optimize_inplace(...)`），日志里只有一行
-    `impl=ours result=ok`。所以「写完」的判据只能是「终态行落了」，不能是
-    「有 writeback/opt 行」—— 后者会让 ours 轮永远等不到（bench 实测：重试 3 次后
-    误报「等了 60s 没等到本次编译的产物」）。
+    （`compile_hook.c`：只有 `rewrote = optr != NULL && !ours_ok` 才跑注册表里的
+    处理器），日志里只有一行 `impl=ours result=ok`。所以「写完」的判据只能是
+    「终态行落了」，不能是「有 writeback/opt 行」—— 后者会让 ours 轮永远等不到
+    （bench 实测：重试 3 次后误报「等了 60s 没等到本次编译的产物」）。
 
     终态即上表三档中先到的那一行：`impl` 行带 `result=ok`（我们的实现成功）、
     `writeback`（参考产物已写回）、`opt`（改写器已收工）。改写的成败仍是 `opt` 行的事，

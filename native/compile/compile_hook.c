@@ -73,8 +73,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "native_internal.h"    /* 常量 + 壳提供给处理器的工具函数（同目录）*/
+#include "paths.h"              /* g_paths 的结构体；定义仍在下面 */
+#include "processor.h"           /* 编译后处理器接口 + 注册表里那一项的声明 */
+
 #define REAL_DLL "compile_real.dll"
-#define SEP      92        /* 反斜杠的 ASCII —— 写成字符字面量在多轮转义里会失真 */
 
 /* 路径：三层优先级 —— `opt.ini` 的 `[opt] toolkit_root`（有且非空）> 编译期宏 > `"."`。
  *
@@ -124,23 +127,12 @@
 /* stdlib 前缀：相对项目根（`OPT_PROJ`）的路径。它不在游戏目录里，所以必须靠这个宏推出来；
    读不到时核心报错（见 `simplexc_core.h`），不会静默退硬编码。 */
 #define STDLIB_PREFIX OPT_PROJ "\\simplexc\\corpus\\stdlib_prefix.si"
-#define PY_EXE      "C:\\Windows\\py.exe"    /* 系统自带的启动器，不依赖 PATH */
-#define OPT_TIMEOUT 8000                      /* 子进程最多等 8 秒，超时就放弃 */
+/* `PY_EXE` / `OPT_TIMEOUT` / `SEP` 的定义在 native_internal.h：改写子进程现在由
+ * processor_rewrite.c 起，那几个值两边都得看见。 */
 
-/* 生效的路径：上面那些宏是**默认值**，运行时还要被 `opt.ini` 的 `toolkit_root` 顶一次，
- * 所以调用点一律读这里的字段，不再直接读宏。
- * `ini` 例外 —— 它只能来自编译期：要读 `toolkit_root` 得先知道 opt.ini 在哪，自举不能绕回去。 */
-typedef struct {
-    char out_dir[MAX_PATH];    /* 捕获（hook_src_NNN.si / hook_out_NNN.bin / manifest.tsv）*/
-    char opt_dir[MAX_PATH];    /* 改写器中间产物 */
-    char proj[MAX_PATH];       /* 改写子进程的 cwd */
-    char script[MAX_PATH];     /* tools/optimize_image.py */
-    char ini[MAX_PATH];        /* opt.ini */
-    char stdlib[MAX_PATH];     /* simplexc/corpus/stdlib_prefix.si */
-    char log_dir[MAX_PATH];    /* hook.log 所在目录 */
-} toolkit_paths;
-
-static toolkit_paths g_paths;
+/* 生效的路径表（结构体在 paths.h）。定义**只在这里**：`toolkit_paths_init` 在本文件里
+ * 解析一次，处理器只读，所以它不能是 static。 */
+toolkit_paths g_paths;
 static int g_paths_ready = 0;
 
 /* `dst = <dir>\<name>`，`dir` 末尾已带分隔符就不重复加。
@@ -193,6 +185,12 @@ static HMODULE    g_real = NULL;
 static compile_fn g_compile = NULL;
 static LONG       g_seq = 0;
 static void*      g_ours_prev = NULL;    /* 我们上次给游戏的产物缓冲（bit62 置位 → 游戏不 free） */
+
+/* 编译后处理器注册表 —— 壳只按这张表跑，不认识任何具体处理器。
+ * 「删掉编译后优化」= 移走 processor_rewrite.c + 删掉这一项（以及 processor.h 的 include），
+ * 壳的正文没有第三处引用它：`init` / `process` 都由这张表间接调用。
+ * 加处理器同理：写一个 TU、导出一个 `forward_processor`、在这里加一行。 */
+static const forward_processor* const g_processors[] = { &processor_rewrite };
 
 /* ---- 选实现：`opt.ini` 的 `[opt] compiler=`（见 docs/specs/…interfaces.md §5）
  *
@@ -449,7 +447,7 @@ static void ours_fail_result(void* out, long long seq, const char* kind) {
 /* `hook_log` 在下面定义（中间隔着 dump/manifest 一段）：先声明，因为「加载失败」
    是必须留痕的事件，而痕迹只能写在 ensure_real 里 —— 只有那里拿得到 GetLastError
    （126 = 找不到文件 / 193 = 位数不对 / 127 = 没有 compile 导出）。 */
-static void hook_log(LONG seq, const char* event, const char* kv);
+void hook_log(LONG seq, const char* event, const char* kv);
 
 static void ensure_real(void) {
     static int fail_logged = 0;
@@ -609,7 +607,8 @@ done:
  * r2 = 锚点偏移；r3/r4 到 2026-10 为止没人读过，记下来就是为了看编译器是否初始化它们
  * —— 离线实测被写成 0（调用方缓冲预先填 0xCC 哨兵，读回来仍是 0，不是残留）。
  *
- * 必须在 optimize_inplace 之后调用：那时 r2 才是交给游戏的**最终**锚点。
+ * 必须在注册表里的处理器（`g_processors[]`，当前只有 `processor_rewrite`）跑完才调用：
+ * 那时 r2 才是交给游戏的**最终**锚点。
  * 任何一步失败都静默跳过（与 dump / opt_log 同一风格）。
  */
 static void manifest_line(LONG seq, int flags,
@@ -645,7 +644,7 @@ static void manifest_line(LONG seq, int flags,
     CloseHandle(h);
 }
 
-static int write_file(const char* path, const void* p, long long n) {
+int write_file(const char* path, const void* p, long long n) {
     HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
@@ -653,21 +652,6 @@ static int write_file(const char* path, const void* p, long long n) {
     BOOL ok = WriteFile(h, p, (DWORD)n, &written, NULL);
     CloseHandle(h);
     return ok && written == (DWORD)n;
-}
-
-/* 读 NNN.entry.txt（一行十六进制）—— 改写器在缩短模式下写的新入口偏移。
-   文件不存在（等长/off/防御未过）返回 FALSE，本层就不动 Result[2]。 */
-static BOOL read_entry(const char* path, long long* val) {
-    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return FALSE;
-    char buf[32];
-    DWORD got = 0;
-    BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
-    CloseHandle(h);
-    if (!ok || got == 0) return FALSE;
-    buf[got] = 0;
-    return sscanf(buf, "%llx", (unsigned long long*)val) == 1;
 }
 
 /* 转发层的记录项 —— 与改写器写的 `opt` 行同处一个 hook.log。
@@ -679,7 +663,7 @@ static BOOL read_entry(const char* path, long long* val) {
  * 追加写（FILE_APPEND_DATA）：转发层与改写子进程同时往这个文件里写，追加语义由
  * 系统保证；日志的价值也全在历史。
  */
-static void hook_log(LONG seq, const char* event, const char* kv) {
+void hook_log(LONG seq, const char* event, const char* kv) {
     CreateDirectoryA(g_paths.log_dir, NULL);
     char path[MAX_PATH];
     sprintf(path, "%s%chook.log", g_paths.log_dir, SEP);
@@ -697,105 +681,6 @@ static void hook_log(LONG seq, const char* event, const char* kv) {
     DWORD w = 0;
     WriteFile(h, line, (DWORD)n, &w, NULL);
     CloseHandle(h);
-}
-
-/* 把产物交给外部改写器走一趟，成功则**就地**写回原缓冲区。
- *
- * MVP 的三条约束都落在这个函数里：
- *   · 长度必须与原件相 —— 不等就放弃（因此不必动 out_len、不必动 8 字节头）
- *   · 不换缓冲区 —— 直接覆盖原缓冲，于是没有「新内存谁分配、谁释放」的问题
- *   · 任何一步失败都静默放弃 —— 游戏绝不该因为优化器出问题而受影响
- */
-static void optimize_inplace(void* buf, long long len, LONG seq, void* out, const char* mode) {
-    if (!buf || len <= 0 || len > (64LL << 20)) return;
-    CreateDirectoryA(g_paths.opt_dir, NULL);
-
-    char raw[MAX_PATH], opt[MAX_PATH], cmd[4 * MAX_PATH], err[MAX_PATH];
-    char entry[MAX_PATH];
-    sprintf(raw, "%s%c%03ld.raw.bin", g_paths.opt_dir, SEP, seq);
-    sprintf(opt, "%s%c%03ld.opt.bin", g_paths.opt_dir, SEP, seq);
-    sprintf(err, "%s%copt_stderr.log", g_paths.opt_dir, SEP);
-    sprintf(entry, "%s%c%03ld.entry.txt", g_paths.opt_dir, SEP, seq);
-    DeleteFileA(entry);   /* 防残留：上一轮同号的入口文件不能影响本轮 */
-
-    if (!write_file(raw, buf, len)) { hook_log(seq, "error", "stage=raw"); return; }
-
-    /* 把 Result[2]（旧锚点偏移）与模式一起传给改写器 —— 缩短模式必须同步更新
-       锚点；模式由调用方传进来，是为了让配置**只被读一次、只被判定一次**。 */
-    if (mode[0])
-        sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX --mode %s",
-                PY_EXE, g_paths.script, raw, opt,
-                out ? *(long long*)((char*)out + 16) : 0LL, mode);
-    else
-        sprintf(cmd, "\"%s\" \"%s\" --in \"%s\" --out \"%s\" --entry %llX",
-                PY_EXE, g_paths.script, raw, opt,
-                out ? *(long long*)((char*)out + 16) : 0LL);
-
-    /* 把子进程的输出/错误引到文件：游戏是 GUI 进程，标准句柄未必可用，
-       直接继承会让 Python 在写 stderr 时出怪事，且现场也留不下来。 */
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE;
-    HANDLE sink = CreateFileA(err, FILE_APPEND_DATA, FILE_SHARE_READ, &sa,
-                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    if (sink != INVALID_HANDLE_VALUE) {
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdOutput = sink;
-        si.hStdError = sink;
-    }
-    ZeroMemory(&pi, sizeof(pi));
-    BOOL started = CreateProcessA(NULL, cmd, NULL, NULL,
-                                  sink != INVALID_HANDLE_VALUE,
-                                  CREATE_NO_WINDOW, NULL, g_paths.proj, &si, &pi);
-    if (sink != INVALID_HANDLE_VALUE) CloseHandle(sink);
-    if (!started) { hook_log(seq, "error", "stage=spawn"); return; }
-
-    DWORD wait = WaitForSingleObject(pi.hProcess, OPT_TIMEOUT);
-    DWORD code = 1;
-    if (wait == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
-    else TerminateProcess(pi.hProcess, 1);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    if (wait != WAIT_OBJECT_0 || code != 0) {
-        char kv[64];
-        if (wait != WAIT_OBJECT_0) sprintf(kv, "stage=child\ttimeout=1");
-        else sprintf(kv, "stage=child\tcode=%lu", (unsigned long)code);
-        hook_log(seq, "error", kv);
-        return;
-    }
-
-    HANDLE h = CreateFileA(opt, GENERIC_READ, FILE_SHARE_READ, NULL,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) { hook_log(seq, "error", "stage=optbin"); return; }
-    LARGE_INTEGER sz;
-    if (!GetFileSizeEx(h, &sz) || sz.QuadPart != len) {
-        CloseHandle(h);
-        hook_log(seq, "error", "stage=length");
-        return;
-    }
-    DWORD got = 0;
-    BOOL ok = ReadFile(h, buf, (DWORD)len, &got, NULL);
-    CloseHandle(h);
-    if (!ok || got != (DWORD)len) { hook_log(seq, "error", "stage=read"); return; }
-    char kvw[64];
-    sprintf(kvw, "len=%lld", len);
-    hook_log(seq, "writeback", kvw);
-
-    /* 缩短模式：改写器把平移后的入口偏移写在 NNN.entry.txt，
-       必须同步改回 Result[2]，否则游戏按旧偏移调进指令中间（实测必崩） */
-    long long v = 0;
-    if (read_entry(entry, &v) && v > 0 && v < len) {
-        *(long long*)((char*)out + 16) = v;
-        char kve[48];
-        sprintf(kve, "offset=0x%llX", v);
-        hook_log(seq, "entry", kve);
-    }
 }
 
 /* 加载时清空 OUT_DIR 下的 `.si` / `.bin` / `.tsv`（不含子目录）。
@@ -1034,7 +919,12 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         int o_wrote = 0;
         if (optr) {
             o_wrote = dump("out", ".bin", optr, olen, seq);
-            if (rewrote) optimize_inplace(optr, olen, seq, out, rewrite_mode);
+            if (rewrote) {
+                for (size_t i = 0; i < sizeof g_processors / sizeof g_processors[0]; i++) {
+                    g_processors[i]->init(rewrite_mode);
+                    g_processors[i]->process(optr, olen, seq, out);
+                }
+            }
         }
         char ssha[65] = "-", osha[65] = "-", sname[32] = "-", oname[32] = "-";
         if (s_wrote) {

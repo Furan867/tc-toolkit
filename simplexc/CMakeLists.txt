@@ -209,9 +209,10 @@ target_link_libraries(llvm_prog PRIVATE simplexc_flags LLVMC::LLVMC)
 
 # ---------------------------------------------------------------- hook（= simplexc/build/compile_hook.dll）
 #
-# 转发层 = **C 壳**（native/compile/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
+# 转发层 = **C 壳**（native/compile/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）
+# + **编译后处理器**（native/compile/processor_rewrite.c，走 processor.h 的注册表）。
 # 壳必须是 C（交给 C++ 编译器会把 .c 当 C++ 编），核心与链接要用 C++ 编译器（要 C++ 运行库）——
-# CMake 按扩展名分。
+# CMake 按扩展名分。处理器那层是**可删的**：把 processor_rewrite.c 从下面的源文件表里去掉即可（壳不再引用它）。
 # 生成物落在产物目录里（`simplexc/build/shell/`）而不是源码树：它和 objs/ 一样是派生物，
 # 放源码树就会在 `simplexc/shell/` 里多出一份与本文件声明的源文件表无关的文件。
 set(SIMPLEXC_EMBEDDED_OBJS "${SIMPLEXC_BUILD}/shell/embedded_objs.cc")
@@ -228,6 +229,7 @@ add_custom_command(
 
 add_library(hook SHARED
   "${SIMPLEXC_ROOT}/native/compile/compile_hook.c"
+  "${SIMPLEXC_ROOT}/native/compile/processor_rewrite.c"
   "${SIMPLEXC_ROOT}/simplexc/shell/simplexc_core.cc"
   "${SIMPLEXC_EMBEDDED_OBJS}"
   ${SIMPLEXC_CORE_SOURCES}
@@ -481,6 +483,7 @@ endfunction()
 
 add_library(hook_offline_new SHARED
   "${SIMPLEXC_ROOT}/native/compile/compile_hook.c"
+  "${SIMPLEXC_ROOT}/native/compile/processor_rewrite.c"
   "${SIMPLEXC_ROOT}/simplexc/shell/simplexc_core.cc"
   "${SIMPLEXC_EMBEDDED_OBJS}"
   ${SIMPLEXC_CORE_SOURCES}

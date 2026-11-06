@@ -13,6 +13,8 @@
  *                        指纹 / 配置读取 / 加载时清理。它不认识「转发了谁」，将来转发别的 dll
  *                        复用同一份（`docs/specs/2026-11-05-toolkit-architecture.md` §5.2）。
  *   本文件（壳）     —— **业务**：compile 服务、后端选择、处理器注册表、导出与 DllMain。
+ *   `native/backend/` —— **实现**：`compiler_backend`（`backend.h`）的两份 —— `simplexc.c`
+ *                       （进程内调我们的 C++ 编译器核心）与 ref（转交原实现）。
  *
  * 比起之前"调试器 + 硬件断点"的做法：
  *   · 不占用 CPU 的 DR0-DR3（那是**全局**资源，游戏或 Steam overlay 可能自己也在用
@@ -65,7 +67,7 @@
  * 编译
  * ----
  *   不再是「一个 gcc 单文件命令」：本文件仍是 **C**（不要改成 C++），但它链接我们的
- *   C++ 编译器核心（`simplexc/shell/simplexc_core.h` 是两者之间唯一的 C 边界）。
+ *   C++ 编译器核心（它与壳之间隔着后端接口 `native/backend/backend.h`）。
  *   构建入口：`python simplexc/tools/build.py simplexc_dll`（或部署入口
  *   `python tools/deploy_compile_hook.py build-deploy`，它转调同一个 target）。
  *   链接用 PATH 上的 g++（要 C++ 运行库），LLVM-C 的头与导入库由 CMake 的 `LLVMC::LLVMC`
@@ -84,8 +86,7 @@
 #include "forward.h"             /* 机制层（native/forward/ 静态库）*/
 #include "paths.h"                /* 壳自己那两个路径（proj / stdlib）*/
 #include "processor.h"            /* 编译后处理器接口 + 注册表里那一项的声明 */
-
-#define REAL_DLL "compile_real.dll"
+#include "backend.h"              /* 编译器后端接口：compile() 只认这张表，不认具体实现 */
 
 /* 路径：三层优先级 —— `opt.ini` 的 `[opt] toolkit_root`（有且非空）> 编译期宏 > `"."`。
  *
@@ -133,7 +134,7 @@
 #define OPT_INI     OPT_PROJ "\\opt.ini"
 #endif
 /* stdlib 前缀：相对项目根（`OPT_PROJ`）的路径。它不在游戏目录里，所以必须靠这个宏推出来；
-   读不到时核心报错（见 `simplexc_core.h`），不会静默退硬编码。 */
+   读不到时后端报错（见 `native/backend/backend.h`），不会静默退硬编码。 */
 #define STDLIB_PREFIX OPT_PROJ "\\simplexc\\corpus\\stdlib_prefix.si"
 /* `PY_EXE` / `OPT_TIMEOUT` 是编译后处理器的事（native_internal.h），壳不碰；
  * `SEP` 在 forward.h（机制层也用）。 */
@@ -190,16 +191,11 @@ static void hook_paths_init(void) {
     forward_init(&fp);
 }
 
-/* 同目录的 C 边界（纯 C 头，冻结版）：核心（C++17）实现它，本文件只调它。
- * 用相对路径 include：转发层的编译命令就没有额外的 -I 要维护（它两个入口共用）。 */
-#include "simplexc_core.h"
-
 typedef void* (*compile_fn)(void* out, void* src, int flags);
 typedef void  (*void_fn)(void);
 
 static HMODULE    g_real = NULL;
 static compile_fn g_compile = NULL;
-static void*      g_ours_prev = NULL;    /* 我们上次给游戏的产物缓冲（bit62 置位 → 游戏不 free） */
 
 /* 编译后处理器注册表 —— 壳只按这张表跑，不认识任何具体处理器。
  * 「删掉编译后优化」= 移走 processor_rewrite.c + 删掉这一项（以及 processor.h 的 include），
@@ -227,7 +223,7 @@ static const char* resolve_compiler(void) {
  * off = 走我们硬编码的 runtime（`sema/analyze.cc` 的 `prefix_funcs()` + `global_seed` + `#U64_HASH`）。
  *
  * **`compiler = ref` 时这个键无作用，而且这不是「碰巧没作用」**：`ref` 根本不进 ours 段，
- * 也就不调 `simplexc_compile()`（见 `compile()` 的 `is_ref` 分支）；参考编译器的前缀由它自己
+ * 也就不叫自研后端（见 `compile()` 里选 `backend` 那一处）；参考编译器的前缀由它自己
  * 在内部拼，与我们这个键无关 —— 两边产物逐字节相同（离线判据里量过）。
  *
  * 读不到 / 非法 → on（真路径）；配的原样值由 `raw` 带回，整行入选 `impl` 行（`stdlib_raw=`）——
@@ -236,24 +232,6 @@ static int resolve_stdlib(char* raw, DWORD raw_cap) {
     if (!forward_config_get("stdlib", raw, raw_cap)) lstrcpynA(raw, "on", (int)raw_cap);
     return lstrcmpA(raw, "off") != 0;   /* 只有明确的 off 才关 */
 }
-
-/* ---- 失败分类（接口冻结版 1 §8）-----------------------------------------
- * 这里的三个串是**壳自己**会产生的失败：内部错误（没有源码 / 核心给的形状不合法）、
- * 超预算、熔断。源码侧的六个分类（`UserError` / `UnsupportedConstruct` / `BlobTooLarge` /
- * `RelocUnsupported` / `SymbolUndefined` / `InternalError`）由核心返回，
- * 它们的唯一一处定义在 `simplexc/shell/simplexc_core.h`（那边是 C++，与本文件无法共享宏）。
- * `UserError` 只在这里多一个用法：回退决策要认出它（用户错不转交），但仍没在这里定义。 */
-#define KIND_INTERNAL   "InternalError"
-#define KIND_TIMEOUT    "Timeout"
-#define KIND_FAULT      "OursFault"
-#define KIND_USER_ERROR "UserError"
-
-/* 核心给的失败还带着三轴诊断串（`sema/用户源码错 第 12 行：…`，`simplexc_last_error()`）。
- * 为什么存到文件级静态缓冲：`ours_compile_ours` 拿到 kind 的地方与 `ours_fail_result` /
- * `kind=` 日志行用到它的地方隔着一个段（`ours_segment`），而诊断串只在**同一次调用**里有效
- * —— 壳在 `ours_compile_ours` 入口清它，不存在跨调用串值。
- * 壳自己判的失败（没源码 / 形状不合法）没有诊断，那时它是空串。 */
-static char g_kind_detail[512];
 
 /* 把 `s` 接到 `buf` 尾（显式截断，绝不越界）；返回新的已用长度。
  * 为什么不用 `sprintf`/`strcat`：拼进去的是用户源码里的名字，长度不受我们控制；
@@ -264,188 +242,20 @@ static size_t append_str(char* buf, size_t cap, size_t used, const char* s) {
     return used;
 }
 
-/* ours 段的超时预算（毫秒）：`TC_OURS_TIMEOUT_MS` 环境变量 > `opt.ini` 的
- * `[opt] ours_timeout_ms` > 默认 5 秒；调试期调大到 60000。
- * 与 `OPT_TIMEOUT` 是两同事：那个只管改写子进程，这个只量 ours 段自身。
- * 特殊值 0 = 任何耗时都算超预算（离线判据用它对真实产物走一遍超时分支）。
- */
-#define OURS_TIMEOUT_MS        5000
-#define OURS_TIMEOUT_ENV       "TC_OURS_TIMEOUT_MS"
-#define OURS_TIMEOUT_INI_KEY   "ours_timeout_ms"
-
-static unsigned long long parse_ms(const char* s) {
-    /* 不合法（含空串）返回 -1 表示"这个来源没给值"。写错的值不会报错，但它总会被
-       `budget_ms` 记进 hook.log 的 impl 行 —— 静默改值至少留得下痕迹。 */
-    if (!s || !s[0]) return (unsigned long long)-1;
-    char* end = NULL;
-    unsigned long long v = strtoull(s, &end, 10);
-    if (!end || *end) return (unsigned long long)-1;
-    return v;
-}
-
-static unsigned long long ours_budget_ms(void) {
-    char buf[32];
-    DWORD n = GetEnvironmentVariableA(OURS_TIMEOUT_ENV, buf, sizeof(buf));
-    if (n > 0 && n < sizeof(buf)) {
-        unsigned long long v = parse_ms(buf);
-        if (v != (unsigned long long)-1) return v;
-    }
-    buf[0] = 0;
-    forward_config_get(OURS_TIMEOUT_INI_KEY, buf, sizeof(buf));
-    unsigned long long v = parse_ms(buf);
-    return v == (unsigned long long)-1 ? OURS_TIMEOUT_MS : v;
-}
-
-/* 自研路径的产物：**进程内**调我们的 C++ 编译器核心（`simplexc_compile`），拿回一块内存里的产物。
- *
- * 三条不变量（写错了会崩游戏，别动）：
- *   · 缓冲是核心 **malloc** 的，头 word 的 **bit62 置位** → 游戏不拿 Nim 的分配器去 free 我们的指针；
- *   · `out[0]` = 缓冲总长（含 8 字节头），缓冲实际分配 **out[0] + 8** 字节（游戏会多读 8 字节）；
- *   · 上一次的缓冲在下一次编译开始时释放，而且必须用 `simplexc_free` 放（跨 C 边界的所有权）。
- *
- * 返回 NULL = 成功，否则是 §8 分类串。分类串由核心给（UnsupportedConstruct / InternalError /
- * BlobTooLarge / RelocUnsupported / SymbolUndefined），只有「没源码」与「形状不合法」是壳自己判的。
- */
-static const char* ours_compile_ours(void* out, const char* src, long long slen,
-                                     const char* stdlib_path) {
-    if (g_ours_prev) { simplexc_free(g_ours_prev); g_ours_prev = NULL; }
-    g_kind_detail[0] = 0;                           /* 诊断串只跟**本次**失败走 */
-    if (!src || slen <= 0) return KIND_INTERNAL;     /* 没有源码可编（src 缺失或空）*/
-
-    void* blob = NULL;
-    long long len = 0, entry = 0;
-    const char* kind = simplexc_compile(src, slen, stdlib_path, &blob, &len, &entry);
-    if (kind) {                                     /* 失败：三个出参一个都没动 */
-        append_str(g_kind_detail, sizeof g_kind_detail, 0, simplexc_last_error());
-        return kind;
-    }
-
-    /* 核心的返回值已经过自己的校验，这里再守一道：形状不合法就不能交给游戏。
-       长度必须装得下 8 字节头、且不超转发层自己的上限（dump() 也是 64 MB）。 */
-    /* `entry > len - 8` 而不是 `entry + 8 > len`：后者的加法在 entry 接近 LLONG_MAX 时是有符号溢出（UB），
-       而这条判断的整个意义就是「不信核心给的数」——判据本身不能先 UB。len >= 16 已在前面卡住。 */
-    if (!blob || len < 16 || len > (64LL << 20) || entry < 0 || entry > len - 8) {
-        simplexc_free(blob);
-        return KIND_INTERNAL;
-    }
-
-    g_ours_prev = blob;
-    *(long long*)((char*)out + 0) = len;
-    *(void**)((char*)out + 8) = blob;
-    *(long long*)((char*)out + 16) = entry;     /* 8 字节写全（游戏按 32 位读、按 64 位用） */
-    *(long long*)((char*)out + 24) = 0;         /* err_len = 0 */
-    *(long long*)((char*)out + 32) = 0;         /* err_ptr = 0 */
-    return NULL;
-}
-
-/* ---- ours 段的看门狗：超时预算 + VEH 熔断 -------------------------------
- *
- * VEH **只包 ours 段**：处理器装一次（首次进 ours 段时），作用域由 `g_in_ours`
- * 卡住 —— 参考实现路径上它是 0，异常照原样穿透给游戏自己的处理器（实测见
- * `docs/notes/2026-10-17-shell-failure-paths.md` 的穿透试验）。
- *
- * 触发后：置 `g_ours_fault`、**永久**置熔断标志（本进程内之后所有调用直接按
- * 失败处理，不再进 ours 段），并把上下文搬回 `g_resume` 恢复点 —— 于是控制流
- * 回到 `ours_segment()` 里，异常不往游戏那边传。
- *
- * 处理器里只做三件事：置标志、搬上下文、返回；**不分配内存、不 LoadLibrary、
- * 不写文件**（真正落盘留给调用方，理由与 `hook_log` 的静默风格相反：这里没有
- * 安全的 I/O 手段，硬写可能死在写一半上）。
- */
-static volatile LONG g_veh_present  = 0;    /* VEH 已注册（惰性装一次） */
-static volatile LONG g_ours_fault  = 0;    /* 本次调用里 ours 段出过异常 */
-static volatile LONG g_in_ours     = 0;    /* ours 段正在跑（VEH 只认这个窗口） */
-static volatile LONG g_have_resume = 0;    /* g_resume 里有一个有效的恢复点 */
-static volatile LONG g_resume_tid  = 0;    /* 抓恢复点时的线程 —— 别线程的异常绝不用它 */
-static volatile LONG g_breaker     = 0;    /* 熔断：本进程内永久不再进 ours 段 */
-static CONTEXT       g_resume;
-
-static LONG CALLBACK ours_veh(EXCEPTION_POINTERS* ep) {
-    if (!g_in_ours || !g_have_resume) return EXCEPTION_CONTINUE_SEARCH;
-    /* 整个壳本来就是单线程假设（g_seq / g_ours_prev 也是全局的）；万一有别的线程
-       在 ours 窗口里踩了异常，把 A 线程的上下文往 B 线程身上搬会跳到别人的栈帧上
-       —— 宁可不接，也不要把"不崩"变成"换个死法"。 */
-    if ((LONG)GetCurrentThreadId() != g_resume_tid) return EXCEPTION_CONTINUE_SEARCH;
-    switch (ep->ExceptionRecord->ExceptionCode) {
-    /* 本体代码会踩的"真"异常；断点 / 单步 / C++ 抛出等一律穿透，别抢 */
-    case EXCEPTION_ACCESS_VIOLATION:
-    case EXCEPTION_ILLEGAL_INSTRUCTION:
-    case EXCEPTION_PRIV_INSTRUCTION:
-    case EXCEPTION_INT_DIVIDE_BY_ZERO:
-    case EXCEPTION_INT_OVERFLOW:
-    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
-    case EXCEPTION_IN_PAGE_ERROR:
-    case EXCEPTION_STACK_OVERFLOW:
-        break;
-    default:
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-    g_ours_fault = 1;
-    InterlockedExchange(&g_breaker, 1);
-    g_in_ours = 0;
-    g_have_resume = 0;
-    memcpy(ep->ContextRecord, &g_resume, sizeof(CONTEXT));
-    return EXCEPTION_CONTINUE_EXECUTION;
-}
-
-/* 装一次；返回 1 表示"这次调用是安装者"（只用于在日志里留一条安装证据）。 */
-static int ours_guard_install(void) {
-    if (g_veh_present) return 0;
-    if (AddVectoredExceptionHandler(1, ours_veh)) { g_veh_present = 1; return 1; }
-    return 0;
-}
-
-/* ours 段（VEH 包住的整段，含编译）。返回 NULL = 成功，否则是 §8 分类串。
- *
- * 计时用 GetTickCount64（毫秒粒度，别拿它量微秒级的差异 —— 这里要判的是"秒级预算"）。
- * `src`/`slen` 是游戏给的那份源码（壳已经从 NimStr 里取出来，与写 `hook_src_NNN.si` 的是同一块）。
- */
-static const char* ours_segment(void* out, const char* src, long long slen,
-                                const char* stdlib_path, int* installed,
-                                unsigned long long* budget_ms) {
-    *installed = ours_guard_install();
-    *budget_ms = ours_budget_ms();
-    g_ours_fault = 0;
-
-    /* 恢复点：下面这行之后就是"异常被拦下"回来的入口。
-       RtlCaptureContext 存下的就是这一刻的寄存器组（含非易失寄存器与 Rsp），
-       处理器把它搬回 ContextRecord 再 CONTINUE_EXECUTION，等于一次 longjmp。 */
-    RtlCaptureContext(&g_resume);
-    if (g_ours_fault) return KIND_FAULT;
-    g_resume_tid = (LONG)GetCurrentThreadId();
-    g_have_resume = 1;
-    g_in_ours = 1;
-    ULONGLONG t0 = GetTickCount64();
-    const char* err = ours_compile_ours(out, src, slen, stdlib_path);
-    ULONGLONG elapsed = GetTickCount64() - t0;
-    g_in_ours = 0;
-    g_have_resume = 0;
-    if (err) return err;
-    if (elapsed > *budget_ms) {
-        /* 超预算：产物作废。缓冲区由我们持有，直接放掉，并把 out 里指向它的字段
-           清干净 —— 后面任何路径都不该读到一个悬垂指针。 */
-        if (g_ours_prev) { simplexc_free(g_ours_prev); g_ours_prev = NULL; }
-        *(long long*)((char*)out + 0) = 0;
-        *(void**)((char*)out + 8) = NULL;
-        *(long long*)((char*)out + 16) = 0;
-        return KIND_TIMEOUT;
-    }
-    return NULL;
-}
-
 /* `ours` 模式的失败 Result（以及回退模式下**故意不转交**的那一类）：**必须给非 0 的 out[3]**，
  * 否则游戏会走成功路径、在 jit 里因 len<=0 抛 index error（见 docs/facts.md）。返回值的形状由
  * 游戏自己拼，这里返回 NULL 即可（真正决定走向的是 out[3]）。
  *
  * 内容 = `ours: ` + §8 分类串（接口冻结版 1 §5）+ ` @ ` + 三轴诊断（有的话）—— 回退率报告按
- * 前缀分类；诊断串是给**人**看的（游戏是 GUI 进程，看不到我们的 stderr，只有这条路能出去）。 */
-static void ours_fail_result(void* out, long long seq, const char* kind) {
+ * 前缀分类；诊断串是给**人**看的（游戏是 GUI 进程，看不到我们的 stderr，只有这条路能出去）。
+ * 诊断串由调用方从后端取（`backend->last_error()`）再传进来：它属于那次编译，壳不存第二份。 */
+static void ours_fail_result(void* out, long long seq, const char* kind, const char* detail) {
     char why[768];
     size_t n = append_str(why, sizeof why, 0, "ours: ");
     n = append_str(why, sizeof why, n, kind ? kind : KIND_INTERNAL);
-    if (g_kind_detail[0]) {
+    if (detail && detail[0]) {
         n = append_str(why, sizeof why, n, " @ ");
-        n = append_str(why, sizeof why, n, g_kind_detail);
+        n = append_str(why, sizeof why, n, detail);
     }
     unsigned long long* desc = (unsigned long long*)malloc(n + 9);
     if (!desc) return;
@@ -563,46 +373,63 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     }
     if (!g_compile) return NULL;
 
-    /* 选实现 + 跑 ours 段。§5 的词表与三种模式一一对应（左列与 `impl=` 这次**同词**：两者是两
-       个轴（`mode=` 是配了什么，`impl=` 是实际走了哪个），但词表变更时得一起改，见接口 §5）：
+    /* 选实现：`ref` 与自研实现是同一张表的两份实例，下面只按 `backend` 调 —— 本文件里「哪个实现」
+       只有这一处判断（`compiler=` 的合法值只在 `resolve_compiler` 定义）。
+       §5 的词表与三种模式一一对应（左列与 `impl=` 这次**同词**：两者是两个轴（`mode=` 是
+       配了什么，`impl=` 是实际走了哪个），但词表变更时得一起改，见接口 §5）：
      *   ref             → impl=ref        result=ref（**每次调用都记**，回退率要分母）
      *   ours 成功       → impl=ours       result=ok
      *   fallback 成功   → impl=fallback   result=ref
      *   ours 失败       → impl=ours_failed result=fail
-     * 熔断（g_breaker）后不再进 ours 段，按模式当"ours 失败"处理。 */
+     * 熔断由后端自己管（它返回 KIND_FAULT、不再进自己那段），壳只按分类串走。 */
     const char* mode = resolve_compiler();
-    int is_ref = lstrcmpA(mode, "ref") == 0;
-    /* stdlib 开关：`compiler = ref` 时它仍然被读、也被记，但对产物**无作用** —— 参考那条路
-       不调 `simplexc_compile()`，前缀是参考编译器自己内部拼的（见 `resolve_stdlib` 的注释）。 */
+    const int ref_mode = lstrcmpA(mode, "ref") == 0;
+    const compiler_backend* backend = ref_mode ? &backend_ref : &backend_simplexc;
+    /* stdlib 开关：`compiler = ref` 时它仍然被读、也被记，但对产物**无作用** —— 原实现自己
+       在内部拼前缀（ref 后端忽略这个形参，见 backend.h）。 */
     char stdlib_raw[16];
     const int stdlib_on = resolve_stdlib(stdlib_raw, sizeof stdlib_raw);
     const char* stdlib = stdlib_on ? "on" : "off";
     const char* impl = NULL;
     const char* result = NULL;
     const char* kind = NULL;               /* §8 分类串；NULL = 没失败 */
+    const char* detail = NULL;             /* 后端的诊断串，与这次调用同寿（见 backend.h）*/
     int ours_ok = 0, ours_attempted = 0, guard_installed = 0, need_reference = 0;
     unsigned long long budget_ms = 0;
+    backend_run br;
+    memset(&br, 0, sizeof br);
+    void* ret = NULL;
 
-    if (is_ref) {
-        impl = "ref"; result = "ref"; need_reference = 1;
+    if (!out && !ref_mode) {
+        /* 没有 out 缓冲（无处写产物）：不叫后端，直接算内部错。ref 那条路 HEAD 里连
+           out == NULL 也照调，这里不改那个行为。 */
+        kind = KIND_INTERNAL;
     } else {
-        if (out && !g_breaker) {
-            ours_attempted = 1;
-            kind = ours_segment(out, (const char*)sp, slen, stdlib_on ? g_paths.stdlib : NULL,
-                                &guard_installed, &budget_ms);
-            ours_ok = kind == NULL;
-        } else {
-            /* 没有 out 缓冲（无处写产物）/ 已熔断：不试 ours */
-            kind = out ? KIND_FAULT : KIND_INTERNAL;
-        }
-        if (ours_ok) { impl = "ours"; result = "ok"; }
-        else if (lstrcmpA(mode, "ours") == 0) { impl = "ours_failed"; result = "fail"; }
-        /* 回退模式下还有一类**故意不转交**的失败：`UserError` = 用户能自己改对的源码错。
-           为什么：转交只会白跑一次参考编译，而且往回退率的分母里偷一个「我们的 bug」——
-           回退率是关掉回退的唯一量化依据。其余分类（未实现 / `OurBug` / 超时 / 熔断）照旧转交：
-           那几档确实是「我们不行」，让原版顶上是对的。 */
-        else if (lstrcmpA(kind, KIND_USER_ERROR) == 0) { impl = "ours_failed"; result = "fail"; }
-        else { impl = "fallback"; result = "ref"; need_reference = 1; }
+        kind = backend->run(out, (const char*)sp, slen, src,
+                            stdlib_on ? g_paths.stdlib : NULL, flags, &br);
+        ret = br.ret;                      /* ref 模式：原实现的返回值原样回给游戏 */
+        detail = backend->last_error();
+        ours_attempted = br.attempted;
+        guard_installed = br.guard_installed;
+        budget_ms = br.budget_ms;
+        ours_ok = !ref_mode && kind == NULL;
+    }
+
+    if (ref_mode) {
+        impl = "ref"; result = "ref";
+    } else if (ours_ok) {
+        impl = "ours"; result = "ok";
+    } else if (lstrcmpA(mode, "ours") == 0) {
+        impl = "ours_failed"; result = "fail";
+    }
+    /* 回退模式下还有一类**故意不转交**的失败：`UserError` = 用户能自己改对的源码错。
+       为什么：转交只会白跑一次参考编译，而且往回退率的分母里偷一个「我们的 bug」——
+       回退率是关掉回退的唯一量化依据。其余分类（未实现 / `OurBug` / 超时 / 熔断）照旧转交：
+       那几档确实是「我们不行」，让原版顶上是对的。 */
+    else if (kind && lstrcmpA(kind, KIND_USER_ERROR) == 0) {
+        impl = "ours_failed"; result = "fail";
+    } else {
+        impl = "fallback"; result = "ref"; need_reference = 1;
     }
 
     /* 编译期的**非致命观察**（解析期 notes、「不可达 def 被跳过」）以前在编译路径上没有任何
@@ -611,7 +438,7 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
        `error`），回退率按 `error` 行统计，不会被这些条目污染。`detail=` 与 `error` 行同形，
        消费者忽略不认识的事件名。 */
     if (ours_attempted) {
-        const char* warns = simplexc_last_warnings();
+        const char* warns = backend->last_warnings();
         if (warns && warns[0]) {
             char kvw[260]; /* `forward_log` 行缓冲 320 减固定前缀后的额度；超了由 snprintf 截断 */
             snprintf(kvw, sizeof kvw, "detail=%s", warns);
@@ -635,21 +462,24 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         used = append_str(kve, sizeof kve, used, stage);
         used = append_str(kve, sizeof kve, used, "\tkind=");
         used = append_str(kve, sizeof kve, used, kind);
-        if (g_kind_detail[0]) {
+        if (detail && detail[0]) {
             used = append_str(kve, sizeof kve, used, "\tdetail=");
-            used = append_str(kve, sizeof kve, used, g_kind_detail);
+            used = append_str(kve, sizeof kve, used, detail);
         }
         forward_log(seq, "error", kve);
     }
 
-    /* 失败的两种走向：`ours` 模式、以及回退模式下**故意不转交**的（`UserError`）——
-       两者都要给游戏一个形状合法的失败 Result，差別只在 impl 行里的 mode。 */
-    void* ret = NULL;
-    if (!is_ref && !ours_ok && !need_reference) {
-        if (out) ours_fail_result(out, seq, kind);
+    /* 走向：ours 模式下「故意不转交」的失败要给游戏一个形状合法的失败 Result；需要原实现的
+       另一条路（ours 失败后的回退）也走 `&backend_ref` —— ref 模式那一趟在上面已经调过了。 */
+    if (!ref_mode && !ours_ok && !need_reference) {
+        if (out) ours_fail_result(out, seq, kind, detail);
         ret = NULL;
     } else if (need_reference) {
-        ret = g_compile(out, src, flags);
+        backend_run rr;
+        memset(&rr, 0, sizeof rr);
+        backend_ref.run(out, (const char*)sp, slen, src,
+                         stdlib_on ? g_paths.stdlib : NULL, flags, &rr);
+        ret = rr.ret;
     }
 
     long long olen = 0;

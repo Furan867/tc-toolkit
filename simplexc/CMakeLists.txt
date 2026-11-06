@@ -240,6 +240,8 @@ add_custom_command(
 add_library(hook SHARED
   "${SIMPLEXC_ROOT}/native/compile/compile_hook.c"
   "${SIMPLEXC_ROOT}/native/compile/processor_rewrite.c"
+  "${SIMPLEXC_ROOT}/native/backend/simplexc.c"
+  "${SIMPLEXC_ROOT}/native/backend/ref.c"
   "${SIMPLEXC_ROOT}/simplexc/shell/simplexc_core.cc"
   "${SIMPLEXC_EMBEDDED_OBJS}"
   ${SIMPLEXC_CORE_SOURCES}
@@ -249,7 +251,7 @@ set_target_properties(hook PROPERTIES
   PREFIX ""
   OUTPUT_NAME "compile_hook")
 target_include_directories(hook PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell"
-  "${SIMPLEXC_ROOT}/native/forward")
+  "${SIMPLEXC_ROOT}/native/forward" "${SIMPLEXC_ROOT}/native/backend")
 # 仓库根编进库（"为什么不是运行时推导"见 native/compile/compile_hook.c 的路径宏注释）：
 # 壳允许被 -DOUT_DIR=... 覆盖（离线判据靠它隔离工作目录），但**不再自己持有绝对路径**。
 target_compile_definitions(hook PRIVATE "TC_TOOLKIT_ROOT=\"${SIMPLEXC_ROOT}\"")
@@ -495,6 +497,8 @@ endfunction()
 add_library(hook_offline_new SHARED
   "${SIMPLEXC_ROOT}/native/compile/compile_hook.c"
   "${SIMPLEXC_ROOT}/native/compile/processor_rewrite.c"
+  "${SIMPLEXC_ROOT}/native/backend/simplexc.c"
+  "${SIMPLEXC_ROOT}/native/backend/ref.c"
   "${SIMPLEXC_ROOT}/simplexc/shell/simplexc_core.cc"
   "${SIMPLEXC_EMBEDDED_OBJS}"
   ${SIMPLEXC_CORE_SOURCES}
@@ -503,7 +507,7 @@ set_target_properties(hook_offline_new PROPERTIES
   PREFIX "" OUTPUT_NAME "compile_hook_new" EXCLUDE_FROM_ALL TRUE
   RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_HOOK_OFFLINE_BIN}")
 target_include_directories(hook_offline_new PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell"
-  "${SIMPLEXC_ROOT}/native/forward")
+  "${SIMPLEXC_ROOT}/native/forward" "${SIMPLEXC_ROOT}/native/backend")
 target_link_options(hook_offline_new PRIVATE -static)
 target_link_libraries(hook_offline_new PRIVATE simplexc_flags LLVMC::LLVMC native_forward)
 simplexc_hook_offline_defs(new hook_offline_new)

@@ -32,7 +32,7 @@ work/reports/ 分析报告      work/tmp/    一次性中间产物
 recovered/    反编译产物（不进 git，可由 tools/ 重新生成）
 ```
 
-`work/hook/` 与 `work/opt/` 在**转发层加载时**清空（`compile_hook.c` 的 `purge_captures` / `purge_workdir`）；
+`work/hook/` 与 `work/opt/` 在**转发层加载时**清空（`native/compile/compile_hook.c` 的 `purge_captures` / `purge_workdir`）；
 `work/freq/` 跨会话保留。
 
 ## 七条工作线

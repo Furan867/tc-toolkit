@@ -30,7 +30,7 @@
 新版壳在进程内调 C++ 编译器核心（`simplexc_compile`），**一个 blob 都不读** ——
 `OURS_BLOB` 宏随旧路径一起删掉了，预编译 blob 与 `build/blob_empty.bin` 都不再是输入。
 「缺失」这个失败源因此没有了，改用**空源码**：壳对 `slen <= 0` 自己判 `InternalError`
-（`tools/compile_hook.c` 的 `ours_compile_ours`），失败分类与记账链路（错串前缀 / manifest
+（`native/compile/compile_hook.c` 的 `ours_compile_ours`），失败分类与记账链路（错串前缀 / manifest
 `impl` / `error`+`impl` 两条日志）完全一样，`fallback-nosrc` 就拿它当「ours 失败 → 整单
 转交参考」的触发点。`ours-ok` 原来断言「产物与改动前逐字节相同」，那个「改动前」指旧壳读
 `blob_empty.bin` 拿到的东西 —— 对象已不存在，现在改判三件**仍然可判**的事：产物是我们的
@@ -118,7 +118,7 @@ BIN = os.path.join(WORK, "bin")                        # 两份壳 + compile_rea
 RESULT_DIR = os.path.join(WORK, "results")
 STUB = os.path.join(WORK, "tools", "rewrite_stub.py")
 BASE_SRC = os.path.join(WORK, "compile_hook_base.c")
-HOOK_SRC = os.path.join(ROOT, "tools", "compile_hook.c")
+HOOK_SRC = os.path.join(ROOT, "native", "compile", "compile_hook.c")
 # 基线壳钉在「壳接上 C++ 核心」那一笔（451e1e2）的父：只有那版才是 `refcmp` 原文里的
 # 「改动前」—— 它单文件 gcc 编得动。取不到就报错、**不退回 HEAD**：HEAD 已是新壳，退回等于
 # 偷偷把 base 换成「链核心的壳」，「编不动」会被误读成「壳坏了」。

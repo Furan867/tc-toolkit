@@ -202,7 +202,7 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 
 | 组件 | 输入 → 输出 | 职责 | 现状 |
 |---|---|---|---|
-| 转发层（壳） | 游戏调用 → 产物 | 选实现、记录 `flags`/Result、异常熔断（绝不让游戏崩）、失败转交 | **既有 `tools/compile_hook.c` 演进**（它已承担 manifest/捕获/purge/配置读取/entry 回写）；`simplexc/shell/` 只放“选实现 + 失败转交 + 核心入口”这段新代码，契约只有一份 |
+| 转发层（壳） | 游戏调用 → 产物 | 选实现、记录 `flags`/Result、异常熔断（绝不让游戏崩）、失败转交 | **既有 `native/compile/compile_hook.c` 演进**（它已承担 manifest/捕获/purge/配置读取/entry 回写）；`simplexc/shell/` 只放“选实现 + 失败转交 + 核心入口”这段新代码，契约只有一份 |
 | 前端（`frontend/`） | 源码文本 → **无类型 AST** | 词法/语法、`#if in_scope` 的裁剪点、span | **已落地**（M4.5） |
 | sema（`sema/`） | 无类型 AST → **HIR** | 名字解析、类型、常量求值、泛型单态化、内建识别、根确定与 DCE；**不发任何 LLVM 指令** | **已存在**（现为 `lower.cc` 内 27 函数/651 行，待搬出） |
 | codegen（`codegen/`） | HIR → LLVM IR | 语义保真映射（§5）、内建映射表、extern 声明、entry 包装 | **已落地**（现为 `lower/`，待改名） |
@@ -553,7 +553,7 @@ simplexc/
   runtime/    路线 B 的运行时（arena、字符串、打印、排序…）
   assemble/   目标码 → blob（PC 相对、extern 解析、8 字节头、entry、生命周期）
   shell/      壳里**新增的那部分**（选实现、三模式、失败转交、核心入口）——
-              既有的 `tools/compile_hook.c` 继续演进，**不做第二份壳**
+              既有的 `native/compile/compile_hook.c` 继续演进，**不做第二份壳**
   cli/        离线 CLI（`--src/--out/--entry`），与 shell 共用核心
   tools/      语料抓取、参考产物生成、差分宿主、判据入口、语义档案采集
   corpus/     语料 + manifest

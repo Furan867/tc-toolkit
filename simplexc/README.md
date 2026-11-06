@@ -12,7 +12,7 @@
 | `codegen/` | **HIR → LLVM IR**（**C++17**）：语义保真映射、内建映射表、pass pipeline | 产品路径（`49568d8` 起） |
 | `runtime/` | 路线 B 运行时（编成 COFF，随 blob 装配） | 只有 `rt_min.cc`（spike 用） |
 | `assemble/` | COFF → blob | 可用 |
-| `shell/` | 壳里新增的那部分 | 只有入口桩与链接探针；选实现/失败转交仍在 `tools/compile_hook.c` |
+| `shell/` | 壳里新增的那部分 | 只有入口桩与链接探针；选实现/失败转交仍在 `native/compile/compile_hook.c` |
 | `cli/` | 离线 CLI（不碰游戏） | `tcblob` / `llvm_prog` / `prog_empty` |
 | `tools/` | 语料/判据/宿主脚本 | 见下「判据」 |
 | `corpus/` | 98 份语料 + manifest（`ref/` 不进 git） | 已固化 |

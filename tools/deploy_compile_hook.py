@@ -208,7 +208,7 @@ def main():
     ap = argparse.ArgumentParser(description="部署/恢复 compile.dll 转发层")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="查看当前状态")
-    sub.add_parser("build", help="编译 tools/compile_hook.c → simplexc/build/compile_hook.dll")
+    sub.add_parser("build", help="编译 native/compile/compile_hook.c → simplexc/build/compile_hook.dll")
     sub.add_parser("deploy", help="部署转发层（游戏在跑则拒绝）")
     sub.add_parser("build-deploy", help="编译后立刻部署（改完 compile_hook.c 的常规流程）")
     sub.add_parser("restore", help="还原为原始 compile.dll")

@@ -184,7 +184,7 @@ static void toolkit_paths_init(void) {
 
 /* 同目录的 C 边界（纯 C 头，冻结版）：核心（C++17）实现它，本文件只调它。
  * 用相对路径 include：转发层的编译命令就没有额外的 -I 要维护（它两个入口共用）。 */
-#include "../simplexc/shell/simplexc_core.h"
+#include "simplexc_core.h"
 
 typedef void* (*compile_fn)(void* out, void* src, int flags);
 typedef void  (*void_fn)(void);

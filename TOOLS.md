@@ -19,7 +19,7 @@
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `compile_hook.c` → `simplexc/build/compile_hook.dll` | **转发层**：劫持 `compile()`，拿源码与产物，并记 `work/hook/manifest.tsv`（flags / Result 5 字段 / sha256） | ✅ |
+| `native/compile/compile_hook.c` → `simplexc/build/compile_hook.dll` | **转发层**：劫持 `compile()`，拿源码与产物，并记 `work/hook/manifest.tsv`（flags / Result 5 字段 / sha256） | ✅ |
 | `optimize_image.py` | 机器码改写器：四态 + 两条规则 + 锚点协议 | ✅ |
 | `check_shift_equiv.py` | 把改写前后的字节真跑一遍，验证语义等价 | ✅ |
 | `try_compile_dll.py` | 离线加载 `compile.dll` 调 `compile()` | ✅ ⚠️ 须从游戏目录运行 |

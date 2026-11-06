@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
         std::fclose(f);
         std::cout << "写出 " << out_path << "（" << r.blob.out_len() << " 字节）\n";
         /* entry 偏移不在产物里（它是 Result 的字段）→ 写成 `<blob>.entry`（十六进制），
-           `tools/compile_hook.c` 的自研路径靠它拿到入口。 */
+           `native/compile/compile_hook.c` 的自研路径靠它拿到入口。 */
         std::string epath = out_path + ".entry";
         FILE* fe = std::fopen(epath.c_str(), "w");
         if (fe) {

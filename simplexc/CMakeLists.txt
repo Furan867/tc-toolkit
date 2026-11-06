@@ -63,7 +63,7 @@ target_compile_options(simplexc_flags INTERFACE ${SIMPLEXC_COMMON_COMPILE_OPTION
 
 # 三条「工具判据」目标（difftrace / difftrace_selftest / asm_x64_selftest）比产线多两条告警 ——
 # 它们是新写的工具代码，吃得住。单独一个 INTERFACE 档而不是铺到全部目标：铺开会在 Win32 的
-# `GetProcAddress` 函数指针强转上炸出一串（tools/compile_hook.c 那个 C 壳），那是另一个决定。
+# `GetProcAddress` 函数指针强转上炸出一串（native/compile/compile_hook.c 那个 C 壳），那是另一个决定。
 set(SIMPLEXC_STRICT_COMPILE_OPTIONS -Wextra -Wpedantic)
 add_library(simplexc_strict_flags INTERFACE)
 target_compile_options(simplexc_strict_flags INTERFACE ${SIMPLEXC_STRICT_COMPILE_OPTIONS})
@@ -209,7 +209,7 @@ target_link_libraries(llvm_prog PRIVATE simplexc_flags LLVMC::LLVMC)
 
 # ---------------------------------------------------------------- hook（= simplexc/build/compile_hook.dll）
 #
-# 转发层 = **C 壳**（tools/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
+# 转发层 = **C 壳**（native/compile/compile_hook.c）+ **C++ 编译器核心**（frontend/sema/codegen/assemble/shell）。
 # 壳必须是 C（交给 C++ 编译器会把 .c 当 C++ 编），核心与链接要用 C++ 编译器（要 C++ 运行库）——
 # CMake 按扩展名分。
 # 生成物落在产物目录里（`simplexc/build/shell/`）而不是源码树：它和 objs/ 一样是派生物，
@@ -227,7 +227,7 @@ add_custom_command(
   VERBATIM)
 
 add_library(hook SHARED
-  "${SIMPLEXC_ROOT}/tools/compile_hook.c"
+  "${SIMPLEXC_ROOT}/native/compile/compile_hook.c"
   "${SIMPLEXC_ROOT}/simplexc/shell/simplexc_core.cc"
   "${SIMPLEXC_EMBEDDED_OBJS}"
   ${SIMPLEXC_CORE_SOURCES}
@@ -236,8 +236,8 @@ add_library(hook SHARED
 set_target_properties(hook PROPERTIES
   PREFIX ""
   OUTPUT_NAME "compile_hook")
-target_include_directories(hook PRIVATE "${SIMPLEXC_DIR}")
-# 仓库根编进库（"为什么不是运行时推导"见 tools/compile_hook.c 的路径宏注释）：
+target_include_directories(hook PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell")
+# 仓库根编进库（"为什么不是运行时推导"见 native/compile/compile_hook.c 的路径宏注释）：
 # 壳允许被 -DOUT_DIR=... 覆盖（离线判据靠它隔离工作目录），但**不再自己持有绝对路径**。
 target_compile_definitions(hook PRIVATE "TC_TOOLKIT_ROOT=\"${SIMPLEXC_ROOT}\"")
 # -static：把 libstdc++/libgcc/libwinpthread 一起包进来，否则游戏目录还要多拷三个 DLL。
@@ -480,7 +480,7 @@ function(simplexc_hook_offline_defs variant target)
 endfunction()
 
 add_library(hook_offline_new SHARED
-  "${SIMPLEXC_ROOT}/tools/compile_hook.c"
+  "${SIMPLEXC_ROOT}/native/compile/compile_hook.c"
   "${SIMPLEXC_ROOT}/simplexc/shell/simplexc_core.cc"
   "${SIMPLEXC_EMBEDDED_OBJS}"
   ${SIMPLEXC_CORE_SOURCES}
@@ -488,7 +488,7 @@ add_library(hook_offline_new SHARED
 set_target_properties(hook_offline_new PROPERTIES
   PREFIX "" OUTPUT_NAME "compile_hook_new" EXCLUDE_FROM_ALL TRUE
   RUNTIME_OUTPUT_DIRECTORY "${SIMPLEXC_HOOK_OFFLINE_BIN}")
-target_include_directories(hook_offline_new PRIVATE "${SIMPLEXC_DIR}")
+target_include_directories(hook_offline_new PRIVATE "${SIMPLEXC_DIR}" "${SIMPLEXC_ROOT}/simplexc/shell")
 target_link_options(hook_offline_new PRIVATE -static)
 target_link_libraries(hook_offline_new PRIVATE simplexc_flags LLVMC::LLVMC)
 simplexc_hook_offline_defs(new hook_offline_new)
@@ -505,10 +505,16 @@ simplexc_hook_offline_defs(base hook_offline_base)
 # ---------------------------------------------------------------- clangd 入口（最后一步）
 # 把 CMake 生成的编译数据库拷到 `simplexc/`（与本文件同级）：clangd 从源文件所在目录向上找
 # `compile_commands.json`，而源文件都在 `simplexc/**` 下，`build/cmake/` 不在那条上行链上。
+# 再用同样一份拷到**仓库根**：C 壳在 `native/compile/`，不在 `simplexc/**` 的子树下，只拷到
+# `simplexc/` 那份它找不到 —— 少了 `-I simplexc/shell` 就会把 `#include "simplexc_core.h"`
+# 报成「文件不存在」。根级那份被根 `.gitignore` 的 `/*` 挡住，不入库。
 # 用 target 而不是 configure_file 是因为 json 在 **generate 阶段结束**才写，configure 期拿到的会是上一轮的。
 add_custom_target(compile_commands ALL
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_BINARY_DIR}/compile_commands.json"
           "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
-  COMMENT "更新 simplexc/compile_commands.json（给 clangd）"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_BINARY_DIR}/compile_commands.json"
+          "${SIMPLEXC_ROOT}/compile_commands.json"
+  COMMENT "更新 simplexc/ 与仓库根的 compile_commands.json（给 clangd）"
   VERBATIM)

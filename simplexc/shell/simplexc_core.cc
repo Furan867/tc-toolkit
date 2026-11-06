@@ -1,6 +1,6 @@
 /* simplexc_core.cc —— `simplexc_core.h` 的实现：内存里的 Simplex 源码 → 游戏可 JIT 的 blob。
  *
- * 这一层是**唯一**被 C 壳（`tools/compile_hook.c`）调用的入口，也是 C 与 C++ 的唯一交界：
+ * 这一层是**唯一**被 C 壳（`native/compile/compile_hook.c`）调用的入口，也是 C 与 C++ 的唯一交界：
  * 边界是 C（纯 C 头 + `extern "C"` 定义），因为壳是 C 且继续演进，C++ 名字改编会让链接找不到符号；
  * 异常一律在**这里**折成返回码 —— 穿过 Nim 帧的展开没有保证（接口冻结版 §5）。
  *

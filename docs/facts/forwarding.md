@@ -110,7 +110,7 @@
 `OUT_DIR` 等仍可被 `-D` 覆盖：离线判据靠它把工作目录隔到 `work/tmp/hook_offline/`（否则加载时的 purge 会洗掉活数据）。
 LLVM-C 落 `simplexc/.deps/llvm`（`fetch_llvm.py` 默认解到这里、压缩包缓存 `simplexc/.deps/downloads`）；
 `FindLLVMC.cmake` 的查找顺序：`-DLLVMC_ROOT` / `-DLLVM_C_ROOT` > `$TC_LLVM_DIR` > `simplexc/.deps/llvm` > `build/llvm`（旧落点仍认）。
-验证：`grep -n 'TC_TOOLKIT_ROOT' tools/compile_hook.c simplexc/CMakeLists.txt`（缺省值在壳、实际值由 CMake 给）+
+验证：`grep -n 'TC_TOOLKIT_ROOT' native/compile/compile_hook.c simplexc/CMakeLists.txt`（缺省值在壳、实际值由 CMake 给）+
       `grep -n 'deps/llvm\|TC_LLVM_DIR' cmake/FindLLVMC.cmake simplexc/tools/fetch_llvm.py`；
       运行时判据 `python simplexc/tools/hook_offline.py`（11 case，测试壳的路径宏全由 `-D` 隔离）
 最后验证：2026-11-01

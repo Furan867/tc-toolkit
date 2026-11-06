@@ -42,8 +42,8 @@ simplexc/
 - **语言分工（唯一权威）**：产品路径的 `frontend/` / `sema/` / `codegen/` / `runtime/` / `assemble/` / `shell/` / `cli/`
   = **C++17**（必要时汇编）；`tools/` 下的脚本 = Python（离线工具，不进产品路径）；
   **产品路径不得依赖 Python**（判据 = 主设计 §7.5 依赖门）。M3 期的 Python 原型已于 2026-10-18 删除。
-- 既有 `tools/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
-- 一个写者一个目录（主设计 §8）；`tools/compile_hook.c` 由 `work/tmp/locks/compile-hook.lock` 串行化。
+- 既有 `native/compile/compile_hook.c` **继续演进，不做第二份壳**；`simplexc/shell/` 只放新代码。
+- 一个写者一个目录（主设计 §8）；`native/compile/compile_hook.c` 由 `work/tmp/locks/compile-hook.lock` 串行化。
 
 ---
 
@@ -236,7 +236,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 ---
 
-## 5. DLL 壳（`tools/compile_hook.c` 演进 + `simplexc/shell/`）
+## 5. DLL 壳（`native/compile/compile_hook.c` 演进 + `simplexc/shell/`）
 
 **模式（冻结）**：`opt.ini` 的 `[opt] compiler = ref | ours | ours_with_fallback`；**缺失键兜底 `ref`**
 （fail-safe：绝不能把"没配"当成"我们的实现"）。
@@ -267,7 +267,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 - DLL 必须靠**名字**匹配：`compile` / `NimMain` / `NimDestroyGlobals`
   （游戏是 `nimLoadLibrary("compile.dll")` + `nimGetProcAddr("compile")`）。现状是纯 C，用 `__declspec(dllexport)`
-  （`tools/compile_hook.c:763,869,876`）；**C++ 化后必须补 `extern "C"`**（否则导出名变成 `_Z7compile…`，
+  （`native/compile/compile_hook.c:763,869,876`）；**C++ 化后必须补 `extern "C"`**（否则导出名变成 `_Z7compile…`，
   游戏查到 NULL）。**不必**用 `.def` 导出别名去绕名字改编（GNU ld 的 `EXPORTS alias=internal` 可用，
   代价是内部名随编译器/ABI 变而脆）。
 - 导出签名**只允许 C 类型**（调用方是 Nim，不知道我们的 C++ ABI）：C++ 类型不得出现在参数/返回值里。

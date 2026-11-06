@@ -81,10 +81,10 @@ def hz_style(hz: float) -> tuple[str, ...]:
 # ---------------------------------------------------------------- 区间表（watch 总结）
 
 def _rewrite_cell(own: products.Ownership) -> str:
-    """改写列：改写器实际做的（`opt` 行）→ 转发层配的（`cfg` 行）→ 这一趟压根没起改写器。
+    """改写列：改写器实际做的（`opt` 行）→ 转发层配的（`impl` 行的 `rewrite=`）→ 这一趟压根没起改写器。
 
     第三档的必要性：`impl=ours` 的产物不过改写器（`hook.log` 里它的终态就是 `impl` 行，
-    见 `products.done_rounds`），既没有 `opt` 也没有 `cfg` 行；只写 `?` 会让人以为
+    见 `products.done_rounds`），既没有 `opt` 也没有 `rewrite=`；只写 `?` 会让人以为
     「改写器失败了」，而事实是这一趟本就不该有改写 —— 归因取自 `impl` 行，仍然是
     `hook.log` 说的。
     """

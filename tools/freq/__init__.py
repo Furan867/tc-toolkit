@@ -4,7 +4,7 @@
 
     probe     偏移常量 + Snapshot + wait_for_game + 快照读取（底层，只读内存）
     variants  Variant(compiler × rewrite) 与 opt.ini 读写（合法值集合的唯一一处）
-    products  产物编号 / 指纹 / 归属（只认 hook.log 的 cfg、opt、impl 三行）
+    products  产物编号 / 指纹 / 归属（只认 hook.log 的 opt、impl 两行）
     sampler   采样循环 + Segmenter + 事件 Sink（口径唯一的一处：median + 丢首个 +
               相位对齐 + 停机/低压判据）
     report    人读表（区间表 / 对照表）+ JSON 报告（Report.schema = 1）

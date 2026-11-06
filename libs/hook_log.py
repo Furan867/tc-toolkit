@@ -4,7 +4,7 @@
 路径为什么不是常量：`hook.log` 于 2026-10-18 从 `work/opt/` 迁到 `work/hook/`（freq
 设计 §7 决策 4），而 C 侧的新壳是**另一趟部署** —— 过渡期里旧壳仍写 `work/opt/hook.log`。
 所以生效路径由 `resolve()` 决定（规则见它自己的 docstring），`hook_log.PATH` 取到的就是
-它的结果。读写都走这一个入口：`cfg`（转发层）与 `opt`（改写器）两行落在两个文件里，
+它的结果。读写都走这一个入口：`impl`（转发层）与 `opt`（改写器）两行落在两个文件里，
 归属就会静默错位。
 
 要判「日志还没出现过」，用 `os.path.exists(hook_log.resolve())` —— 空的日志与「没编译」
@@ -25,8 +25,7 @@
 
 | 事件 | 写入者 | 含义 | 键 |
 |---|---|---|---|
-| `cfg`       | 转发层 | 起改写子进程前读到的配置 | `rewrite` |
-| `impl`      | 转发层 | **这一次实际走了哪个实现**（与 `cfg` 的 `compiler` 可能不同：回退就是不同） | `impl` `mode` `result`（ours 行可选 `budget_ms`；首次加 `guard=veh`） |
+| `impl`      | 转发层 | **这一次实际走了哪个实现**（与 `mode=` 里配的 `compiler` 可能不同：回退就是不同） | `impl` `mode` `result`；只在这趟起过改写器时额外带 `rewrite`（配的改写模式）；ours 行可选 `budget_ms`；首次加 `guard=veh` |
 | `writeback` | 转发层 | 产物已就位写回原缓冲     | `len` |
 | `entry`     | 转发层 | 缩短后锚点已同步更新     | `offset` |
 | `error`     | 转发层 | 任一环节放弃             | `stage` + `kind`/`code`/`timeout`/`detail` |
@@ -36,13 +35,15 @@
 `append()`。格式是两边的契约，改一处必须改另一处。
 
 `mode` 是**实际执行**的模式（`off` / `on` / `short` / `short_cse`）：
-解析失败或缩短被防御挡回时它与 `cfg` 的 `rewrite` 不同，那正是要查的信号。
+解析失败或缩短被防御挡回时它与 `impl` 行的 `rewrite` 不同，那正是要查的信号。
 ⚠️ `impl` 行的 `mode` 是**另一个东西** —— 它是 `opt.ini` 里配的 `compiler`（`ref` / `ours` /
 `ours_with_fallback`），取值以 `docs/specs/2026-10-15-simplexc-interfaces.md` §5 的 `impl` 词表为准。
 解析时按事件名区分：`opt` 行的 `mode` = 改写器实际做了什么，`impl` 行的 `mode` = 配了什么。
 `impl` 词表（唯一一处定义在接口文档 §5）：`ref` / `ours` / `fallback` / `ours_failed`，
 **每次编译都写一行**（含 ref —— 回退率需要分母）；解析：`fallback` = 配了
 `ours_with_fallback` 但 ours 失败、整单转交了参考实现。
+唯一没有 `impl` 行的情形：参考实现直接把进程 abort 掉（行写在它返回之后，
+因为 `rewrite=` 得先说清有没有产物；那一趟同样没有 dump 与 manifest）。
 """
 from __future__ import annotations
 
@@ -66,7 +67,7 @@ def resolve() -> str:
     3. 都不存在 → 新路径（写入时按它创建，读就是空日志）；
     4. mtime 相同 → 新路径（确定性，不抖）。
 
-    `append()` 也必须跟随解析结果：另建一个新文件就会让 `cfg` 与 `opt` 分家。
+    `append()` 也必须跟随解析结果：另建一个新文件就会让 `impl` 与 `opt` 分家。
     """
     if os.path.exists(NEW_PATH) and os.path.exists(LEGACY_PATH):
         try:

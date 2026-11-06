@@ -980,19 +980,6 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
         hook_log(seq, "error", kve);
     }
 
-    /* impl 行在**起参考实现之前**写：参考实现是别人的代码，它 aborts 或崩掉的话
-       这一行是唯一的"我们走到了哪"的记录（hook.log 只加行，不改已有行）。 */
-    {
-        char kvi[224];
-        int n = sprintf(kvi, "impl=%s\tmode=%s\tresult=%s\tstdlib=%s", impl, mode, result, stdlib);
-        /* 原样值只在它不被认出来时多记一个键：`stdlib = of` 会静默当 on 用（能编、产物一样），
-           而开/关的产物**字节与符号表都不同**，事后归因只靠这一行。 */
-        if (lstrcmpA(stdlib_raw, stdlib) != 0) n += sprintf(kvi + n, "\tstdlib_raw=%s", stdlib_raw);
-        if (ours_attempted) n += sprintf(kvi + n, "\tbudget_ms=%llu", budget_ms);
-        if (guard_installed) n += sprintf(kvi + n, "\tguard=veh");
-        hook_log(seq, "impl", kvi);
-    }
-
     /* 失败的两种走向：`ours` 模式、以及回退模式下**故意不转交**的（`UserError`）——
        两者都要给游戏一个形状合法的失败 Result，差別只在 impl 行里的 mode。 */
     void* ret = NULL;
@@ -1002,30 +989,52 @@ __declspec(dllexport) void* compile(void* out, void* src, int flags) {
     } else if (need_reference) {
         ret = g_compile(out, src, flags);
     }
+
+    long long olen = 0;
+    void* optr = NULL;
+    /* 这趟过不过改写器。改写器是给**参考产物**准备的（它按参考实现的指令形状做等长改写）：
+       我们自己的产物不过它 —— 否则就是拿别人尺子改自己的衣服。产物要等参考实现返回才存在，
+       所以判定只能放在这里；`impl` 行的 `rewrite=` 依赖它。 */
+    int rewrote = 0;
     if (out) {
-        long long olen = *(long long*)out;
-        void* optr = *(void**)((char*)out + 8);
+        olen = *(long long*)out;
+        optr = *(void**)((char*)out + 8);
+        rewrote = optr != NULL && !ours_ok;
+    }
+    char rewrite_mode[32] = "";
+    if (rewrote) {
+        /* 读 rewrite 配置：**这里不判断合法性，连字符集也不查** —— 合法值集合只在
+           改写器的 VALID_MODES 定义一次。这边要是也维护一份，漏一个值就会像
+           2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
+           short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
+        GetPrivateProfileStringA("opt", "rewrite", "", rewrite_mode,
+                                 sizeof(rewrite_mode), g_paths.ini);
+    }
+
+    /* impl 行落在这里 —— 编译之后、改写之前。为什么不能更早：`rewrite=` 必须是**事实**
+       （有产物且没走自研实现才会起改写器），而产物要等参考实现返回才存在，写早了只能靠猜。
+       猜错就会给没起改写器的那趟也标上 `rewrite=`，而「有 `rewrite=` = 起了改写器」是
+       `tools/freq/products.py` 的归因判据。代价：参考实现真 abort 掉这一趟就没有 `impl`
+       行（hook.log 只加不改，写出去的行补不了），那一趟同样没有 dump 与 manifest。 */
+    {
+        char kvi[224];
+        int n = sprintf(kvi, "impl=%s\tmode=%s\tresult=%s\tstdlib=%s", impl, mode, result, stdlib);
+        /* 原样值只在它不被认出来时多记一个键：`stdlib = of` 会静默当 on 用（能编、产物一样），
+           而开/关的产物**字节与符号表都不同**，事后归因只靠这一行。 */
+        if (lstrcmpA(stdlib_raw, stdlib) != 0) n += sprintf(kvi + n, "\tstdlib_raw=%s", stdlib_raw);
+        if (ours_attempted) n += sprintf(kvi + n, "\tbudget_ms=%llu", budget_ms);
+        if (guard_installed) n += sprintf(kvi + n, "\tguard=veh");
+        /* `rewrite=` 只在起了改写器的这趟带 —— 「有 `rewrite=` = 起了改写器」是归因判据。
+           值是**配置值**，与传给 `--mode` 的同源；空值写 `(空)`。 */
+        if (rewrote) n += sprintf(kvi + n, "\trewrite=%s", rewrite_mode[0] ? rewrite_mode : "(空)");
+        hook_log(seq, "impl", kvi);
+    }
+
+    if (out) {
         int o_wrote = 0;
         if (optr) {
             o_wrote = dump("out", ".bin", optr, olen, seq);
-            /* 改写器是给**参考产物**准备的（它按参考实现的指令形状做等长改写）：
-               我们自己的产物不过它 —— 否则就是拿别人尺子改自己的衣服。 */
-            if (!ours_ok) {
-                /* 读 rewrite 配置：**这里不判断合法性，连字符集也不查** —— 合法值集合只在
-                   改写器的 VALID_MODES 定义一次。这边要是也维护一份，漏一个值就会像
-                   2026-10-05 的 short_cse 那样被静默改写成 on（hook.log 标 on、改写器实跑
-                   short_cse，两份日志对不上）。值为空就不传 --mode，让改写器自己读 opt.ini。 */
-                char rewrite_mode[32] = "";
-                GetPrivateProfileStringA("opt", "rewrite", "", rewrite_mode,
-                                         sizeof(rewrite_mode), g_paths.ini);
-                /* 写进 hook.log（起子进程前）：监听主频的程序要拿「编译时刻」的值 ——
-                   这一行与下面传给改写器的值同源，必然一致。这条行的有无同时是
-                   「这一趟起了改写器」的判据（`tools/freq/products.py`）。 */
-                char tag[64];
-                sprintf(tag, "rewrite=%s", rewrite_mode[0] ? rewrite_mode : "(空)");
-                hook_log(seq, "cfg", tag);
-                optimize_inplace(optr, olen, seq, out, rewrite_mode);
-            }
+            if (rewrote) optimize_inplace(optr, olen, seq, out, rewrite_mode);
         }
         char ssha[65] = "-", osha[65] = "-", sname[32] = "-", oname[32] = "-";
         if (s_wrote) {

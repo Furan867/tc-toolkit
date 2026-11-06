@@ -5,14 +5,16 @@
 
 | 行 | 键 | 回答 |
 |---|---|---|
-| `cfg`  | `rewrite=`              | **配了什么**（转发层起改写子进程前读到的 opt.ini） |
-| `opt`  | `mode=` `rewritten=`    | 改写器**实际做了什么**（被防御挡回时与 cfg 不同） |
+| `opt`  | `mode=` `rewritten=`    | 改写器**实际做了什么**（被防御挡回时与 `rewrite=` 不同） |
 | `impl` | `impl=` `mode=` `result=` | **实际走了哪个实现**；`mode=` 是配的 `compiler`，不是 rewrite |
+
+`rewrite=` 只在**起过改写器**的那趟挂在 `impl` 行上（有产物且没走自研实现），
+它的有无本身就是判据；值是转发层起改写子进程前读到的配置。
 
 早先的写法是读 `opt.ini` 的当前值当归属 —— 那是「检测时刻」的配置，用户在两次
 编译之间切开关必然错位（实测 #005 标了 off、#006 标了 on，而两者产物 sha 完全相同）。
 `impl` 是 per-call 的：配了 `ours_with_fallback` 而 ours 失败的那次写 `impl=fallback`，
-只看 `cfg` 就会把回退当成我们的实现（词表唯一处在 `simplexc-interfaces` §5）。
+只看 `opt` 行就会把回退当成我们的实现（词表唯一处在 `simplexc-interfaces` §5）。
 
 生成物所在：
 
@@ -109,7 +111,7 @@ def impl_rounds(path: Path | None = None) -> dict[str, str]:
     """编号 → **实际走了哪个实现**（`hook.log` 的 `impl` 行；同号取最后一条）。
 
     `impl` 行每次 `compile()` 都写（含 ref —— 回退率要分母），所以它是日志里
-    「编译发生过」的完整清单；`cfg`/`opt` 只有起过改写器的那趟才有。
+    「编译发生过」的完整清单；`opt` 只有起过改写器的那趟才有。
     """
     where = None if path is None else str(path)
     out: dict[str, str] = {}
@@ -244,7 +246,7 @@ def hook_log_lines(path: Path | None = None) -> list[str]:
 
 @dataclass(frozen=True)
 class Ownership:
-    """一次编译的归属 —— `cfg` / `opt` / `impl` 三行的合成，取不到的是 `?`。"""
+    """一次编译的归属 —— `opt` / `impl` 两行的合成，取不到的是 `?`。"""
 
     num: str
     cfg_rewrite: str
@@ -263,9 +265,6 @@ def ownership(num: str | None, path: Path | None = None) -> Ownership:
               "compiler_cfg": UNKNOWN, "impl_result": UNKNOWN}
     where = None if path is None else str(path)      # hook_log 只收 str 路径
     if num:
-        for rec in hook_log.find("cfg", num, where):
-            if "rewrite" in rec.kv:
-                fields["cfg_rewrite"] = rec.kv["rewrite"]
         for rec in hook_log.find("opt", num, where):
             kv = rec.kv
             if "mode" in kv:
@@ -282,6 +281,8 @@ def ownership(num: str | None, path: Path | None = None) -> Ownership:
                 fields["compiler_cfg"] = kv["mode"]
             if "result" in kv:
                 fields["impl_result"] = kv["result"]
+            if "rewrite" in kv:         # 只在这趟起过改写器时存在
+                fields["cfg_rewrite"] = kv["rewrite"]
     return Ownership(**fields)
 
 
@@ -296,7 +297,7 @@ def opt_info(num: str | None, path: Path | None = None) -> tuple[str, str, str]:
 
 
 def mode_from_hook_log(num: str | None, path: Path | None = None) -> str:
-    """转发层起改写子进程**之前**按当时的 opt.ini 写下的 `rewrite`（`cfg` 行）。
+    """转发层起改写子进程**之前**按当时的 opt.ini 写下的 `rewrite`（`impl` 行的 `rewrite=`）。
 
     它同时也是转发层传给改写器的 `--mode`（2026-10-05 起）—— 两边同源，正常必然
     一致。万一不一致（历史上 C 侧自己维护过一份白名单，把 `short_cse` 当非法值归成

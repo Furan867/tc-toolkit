@@ -160,12 +160,15 @@ class VariantsTest(unittest.TestCase):
 
 class ProductsOwnershipTest(unittest.TestCase):
     LOG = (
-        "2026-10-17 17:21:36\t008\timpl\timpl=fallback\tmode=ours_with_fallback\tresult=ref\n"
-        "2026-10-17 17:21:36\t008\tcfg\trewrite=short\n"
+        "2026-10-17 17:21:36\t008\timpl\timpl=fallback\tmode=ours_with_fallback\tresult=ref\t"
+        "rewrite=short\n"
         "2026-10-17 17:21:37\t008\topt\tmode=on\trewritten=1590\tlen=219088\t"
         "sha256=deadbeef00cafe11\tnote=把 short 挡回 on\n"
         "2026-10-17 17:21:37\t008\twriteback\tlen=219088\n"
-        "2026-10-17 17:21:40\t009\tcfg\trewrite=off\n"
+        "2026-10-17 17:21:37\t008\tentry\toffset=0x1C8\n"
+        # 009 只有一行**不参与归属**的事件 —— 缺行用例靠它（`impl` 行要带 `rewrite=`，
+        # 所以「只有 `rewrite=`、没有 `impl`」这种序号已经不存在了）。
+        "2026-10-17 17:21:40\t009\twarn\tdetail=跳过 1 个不可达 def\n"
     )
 
     def setUp(self):
@@ -257,7 +260,8 @@ class HookFixture(unittest.TestCase):
             setattr(module, attr, value)
 
     def add_round(self, num: str, impl: str, *, rewritten: bool, captured: bool) -> None:
-        """按 `compile_hook.c` 的行契约写一趟编译：改写过的才有 cfg/opt/writeback。
+        """按 `compile_hook.c` 的行契约写一趟编译：改写过的 `impl` 行带 `rewrite=`，
+        另有 `opt`/`writeback`。
 
         `impl` 行的 `result`：ours → `ok`（只有它会如此），失败 → `fail`，其余 `ref`。
         """
@@ -267,11 +271,10 @@ class HookFixture(unittest.TestCase):
         if rewritten:
             (self.opt / f"{num}.opt.bin").write_bytes(f"opt-{num}".encode())
         lines = [f"2026-10-18 00:00:00\t{num}\timpl\timpl={impl}\tmode={impl}\t"
-                 f"result={result}\n"]
+                 f"result={result}" + ("\trewrite=off" if rewritten else "") + "\n"]
         if rewritten:
-            lines += [f"2026-10-18 00:00:01\t{num}\tcfg\trewrite=off\n",
-                      f"2026-10-18 00:00:02\t{num}\topt\tmode=off\trewritten=0\n",
-                      f"2026-10-18 00:00:03\t{num}\twriteback\tlen=8\n"]
+            lines += [f"2026-10-18 00:00:01\t{num}\topt\tmode=off\trewritten=0\n",
+                      f"2026-10-18 00:00:02\t{num}\twriteback\tlen=8\n"]
         with open(self.log, "a", encoding="utf-8") as f:
             f.writelines(lines)
 
@@ -355,7 +358,7 @@ class DoneRoundTest(HookFixture):
         self.assertEqual(products.done_rounds(), {"005": "writeback"})
 
     def test_reference_impl_row_alone_is_not_done(self):
-        """参考实现那趟的 `impl` 行写在**起参考实现之前**（`result=ref`）—— 不算写完。"""
+        """参考实现那趟的 `impl` 行在**改写之前**写（`result=ref`）—— 不算写完。"""
         self.add_round("005", "ref", rewritten=False, captured=True)
         self.assertEqual(products.done_rounds(), {})
         self.assertEqual(products.impl_rounds(), {"005": "ref"})
@@ -520,7 +523,7 @@ class SegmenterTest(unittest.TestCase):
 def _ownership(num: str = "004", *, cfg_rewrite: str = "off", opt_mode: str = "off",
                rewritten: str = "0", sha_log: str = "ae1e2f3a",
                impl: str = "ref") -> products.Ownership:
-    """一份构造的归属（`opt` 与 `cfg` 都给同一值时的常规形态）。"""
+    """一份构造的归属（`opt` 与 `rewrite=` 都给同一值时的常规形态）。"""
     return products.Ownership(num=num, cfg_rewrite=cfg_rewrite, opt_mode=opt_mode,
                               rewritten=rewritten, sha_log=sha_log, impl=impl,
                               compiler_cfg=impl,
@@ -605,7 +608,7 @@ class ReportTableTest(unittest.TestCase):
         self.assertTrue(title.startswith("1 个编译区间 · 共 4 个样本"))
 
     def test_summarize_names_the_impl_when_the_round_skipped_the_rewriter(self):
-        """`impl=ours` 那轮既没有 `opt` 也没有 `cfg` 行 —— 改写列归因给 `impl` 行。"""
+        """`impl=ours` 那轮既没有 `opt` 也没有 `rewrite=` —— 改写列归因给 `impl` 行。"""
         own = _ownership("009", cfg_rewrite=products.UNKNOWN, opt_mode=products.UNKNOWN,
                          rewritten="", sha_log="-", impl="ours")
         self._patch(fp=lambda _n: "aebf07e4", own=lambda _n: own)

@@ -87,7 +87,7 @@
 
 ### 游戏内 JIT 代码与离线产物逐字节相同
 故映射可直接用于采样地址。19 份产物 md5 全等，`locate()` 对 19 个内存候选做整段比对全 pass。
-验证：跑 `tools/profile_by_image.py`，看 locate 的整段校验结果
+验证：跑 `python hotspot/run.py`，看样本归属比例与 bucket0 未归属量（旧 `locate()` 整段比对随 `tools/profile_by_image.py` 删除，`2026-11-06`）
 最后验证：2026-10-11
 
 ### 产物文件前 8 字节是长度头

@@ -209,12 +209,12 @@ typedef struct {
 | `native/` 位置 | 仓库根 |
 | 静态检查 | 本期不做，靠 §8 的删除演练与现有的 `check.py` 判据 |
 
-## 10. 待定
+## 10. 剩余工作（均尚未开工）
 
-- **步 7 后半：`forward.h` / `backend.h` 抽象。** 现在机制函数（`ensure_real`、`dump`、`hook_log`、`sha256_hex`、`purge_*`）仍与 compile 服务同处 `compile_hook.c`，换 simplexc 要动这个文件。抽成 `native/backend/simplexc.c` + 一个 `compiler_backend` 接口后，换实现只改一个文件。优先级低：当前没有第二个后端。
-- `decompile/` 里的 8 个脚本哪些还要维护、哪些只是存档。
-- `work/hook` 路径解析集中到 `libs/paths.py` 未做——现在仍是 `libs/hook_log.py` 的 NEW/LEGACY + mtime 与 `tools/freq/products.py` 各自算。`libs/paths.py` 还不存在。
-- 旧热点管道（`tools/profile_by_image.py`、`build_component_map.py`、`analyze_sim_hotspot.py` 等）未清理，与 `hotspot/` 职能重叠。
+- **`native/forward/` 静态库**：机制层抽成 `add_library(native_forward STATIC …)`，编译壳与将来的 `game_engine` 转发壳各自链接它；路径由壳通过 `forward_init(paths)` 注入，forward 不知道 `opt.ini`（判据：`grep -i compile native/forward/` 为空）。
+- **`native/backend/` + `compiler_backend`**：`simplexc.c` 与 `ref.c` 各实现一次，消掉 `compile()` 里的 `is_ref` 双分支。
+- **`optimize_image` + `analyze_jit_code` 搬进 `tools/perf_opt/optimizer/`**：不原样塞进一个文件，按 `model` / `rules` / `reloc` / `verify` 分；`optimizer/*` 不许 import `tools.*`。`format_si` 也进 perf_opt，但编译路径不调用它（产物必须保真）。
+- **`libs/paths.py`**：收敛 `work/` 路径常量（现在仍是 `libs/hook_log.py` 的 NEW/LEGACY + mtime 与 `tools/freq/products.py` 各自算）。
 
 ## 11. 证据索引
 

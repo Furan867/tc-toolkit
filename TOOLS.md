@@ -9,10 +9,6 @@
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `profile_by_image.py` | **一键入口**：定位产物 → 采样 → 按字节范围过滤 → 建映射 → 出报告 | ✅ |
-| `build_component_map.py` | 建组件 ↔ 机器码偏移映射（被上一行调用） | ✅ |
-| `analyze_sim_hotspot.py` | 组件级耗时报告（按 `comp_index` 聚合） | ⚠️ ⑥-B `com_none` 未滤除，待修 |
-| `sample_threads.py` | RIP 采样 | ✅ |
 | `deploy_compile_hook.py` | 构建 / 部署 / 查询转发层（子命令 `build-deploy`、`status`…） | ✅ |
 
 ## 源码与产物
@@ -24,7 +20,6 @@
 | `check_shift_equiv.py` | 把改写前后的字节真跑一遍，验证语义等价 | ✅ |
 | `try_compile_dll.py` | 离线加载 `compile.dll` 调 `compile()` | ✅ ⚠️ 须从游戏目录运行 |
 | `analyze_jit_code.py` | 量化 JIT 机器码的冗余（带解析自检） | ✅ |
-| `scan_game_mem.py` | 扫内存 / `--dump-exec` dump JIT 区 | ⚠️ 抓源码部分已废弃 |
 
 ## 动态分析（对运行中的游戏）
 
@@ -50,9 +45,8 @@
 |---|---|---|
 | `decompile/pdata_bounds.py` | 函数精确边界（解析 PE `.pdata`） | ✅ 唯一可信 |
 | `decompile/find_sym.py` | 按模块 / 名字 / 地址查符号 | ⚠️ `--name` 只匹配进程名 |
-| `analyze_gen_code.py` | 统计生成源码的组件构成与代码代价 | ⚠️ 需源码输入 |
 | `nm`（w64devkit） | **符号表的正确来源**（未 strip） | ✅ |
-| `decompile/nim_demangle.py`、`decompile/demangle_dll.py`、`decompile/coff_symbols.py`、`decompile/organize_strings.py`、`decompile/pe_overlay.py`、`tools/_deprecated_*` | 反编译辅助 / 旧流程 | ❌ 已失效、路径写死或会崩游戏，别再依赖 |
+| `decompile/nim_demangle.py`、`decompile/demangle_dll.py`、`decompile/coff_symbols.py`、`decompile/organize_strings.py`、`decompile/pe_overlay.py` | 反编译辅助 | ❌ 已失效、路径写死或会崩游戏，别再依赖 |
 
 ## 目录约定
 
@@ -69,6 +63,4 @@ simplexc/build/   编译产物：compile_hook.dll / simplexc_cli.exe / objs/ / s
 
 ## 技术债
 
-1. `hw_breakpoint_trace.py`：**重启这条线前必须先补 DR 清理**（否则崩游戏），或直接删
-2. `analyze_sim_hotspot.py`：⑥-B（`com_none` 未滤除、区间归属错）待修
-3. 上表标 ❌ 的废弃工具应择机清理
+1. 上表标 ❌ 的废弃工具应择机清理

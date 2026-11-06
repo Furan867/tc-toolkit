@@ -140,7 +140,7 @@ BUILTIN(grow,   "grow(arena?, Arr[T], Int) -> Arr[T]", YES, alloc+copy, - , RT_g
   1. `compile_real.dll` 的字面量池 —— `mac_*` 名表已实测提取到（17 个：`mac_in_scope, mac_uint_of_size,
      mac_raw_cast, mac_type_of_element, mac_type_of, mac_append, mac_shrink, mac_grow, mac_join, mac_clone,
      mac_array, mac_empty_array_address, mac_default, mac_int_of_size, mac_store, mac_load, mac_size`），
-     提取器 `tools/extract_nim_strings.py`；**裸名表（store/min/max/clz/ctz/asr/lsr/lsl/ror/rol/
+     提取器 `decompile/extract_nim_strings.py`；**裸名表（store/min/max/clz/ctz/asr/lsr/lsl/ror/rol/
      bswap/…）也在同一池里，但类别分组（STANDARD/UNARY/BINARY/BINARY_MUTATING）尚未从容器结构确认 → §9 U-L13**。
   2. stdlib 前缀里「被调用但未定义」的名字。
   3. 98 份语料里「被调用但未定义」的名字。
@@ -210,7 +210,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 
 **冻结的装配规则**
 1. 输入是 COFF 目标文件（`LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)` 的字节）；
-   解析节/符号/重定位，**复用 `tools/coff_symbols.py` 已探明的解析方式，不另起一套**。
+   解析节/符号/重定位，**复用 `decompile/coff_symbols.py` 已探明的解析方式，不另起一套**。
 2. 允许的重定位：`IMAGE_REL_AMD64_REL32`(0x04) 及其 `+1..+5` 变体（内部符号）。
    **任何指向内部符号的绝对重定位（`ADDR64`=0x01 / `ADDR32`=0x02 / `ADDR32NB`）一律 `UnsupportedReloc` 硬错误**
    （已批准项 b：blob 会被拷到任意地址执行，内部绝对地址必然失效）。
@@ -402,5 +402,5 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 | 数组布局 = `(len<<16)\|cap`，`get_capacity = (1<<cap)>>1` | 读 `stdlib_prefix.si` 的 `allocate_raw`/`get_length`/`set_length`/`get_capacity` |
 | 游戏把自己的数组硬编码交给生成代码 | `grep -n 'raw_cast(<Arr\|#SIMULATION_STATE' work/hook/all/hook_src_001.si` |
 | `#` 只有 `#if in_scope` 与 `const #NAME` 两类 | `grep -oh '#[A-Za-z_][A-Za-z0-9_]*' work/hook/all/*.si \| sort -u` |
-| 内建/宏名表在 DLL 的字面量池里 | `tools/extract_nim_strings.py <dll>` → `mac_*` 组 |
+| 内建/宏名表在 DLL 的字面量池里 | `decompile/extract_nim_strings.py <dll>` → `mac_*` 组 |
 | extern 调用 = Win64 ABI + `sub rsp,imm16` 影子空间 | 反汇编任一 `work/hook/all/hook_out_*.bin`（U10）；调用目标是 `compile_real.dll` 的导入 thunk，见 `docs/facts.md` |

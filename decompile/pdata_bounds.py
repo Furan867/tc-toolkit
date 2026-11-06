@@ -7,10 +7,10 @@
 
 用法
 ----
-    python tools/pdata_bounds.py                      # 生成 work/function_bounds.tsv
-    python tools/pdata_bounds.py --symbols work/symbols_raw.txt   # 附带函数名
-    python tools/pdata_bounds.py --lookup wrap_sleep  # 查函数边界 + 打印 objdump 命令
-    python tools/pdata_bounds.py --exe "X:\\path\\to.exe"         # 指定其它二进制
+    python decompile/pdata_bounds.py                      # 生成 work/function_bounds.tsv
+    python decompile/pdata_bounds.py --symbols work/symbols_raw.txt   # 附带函数名
+    python decompile/pdata_bounds.py --lookup wrap_sleep  # 查函数边界 + 打印 objdump 命令
+    python decompile/pdata_bounds.py --exe "X:\\path\\to.exe"         # 指定其它二进制
 
 输出
 ----

@@ -33,7 +33,7 @@ def demangle_symbol_loose(sym: str):
     return proc, module
 
 DLL = tc_common.game_dll()
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（tools/ 的父）
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（decompile/ 的父）
 OUTROOT = os.path.join(_ROOT, "recovered", "compiler-src")
 WORK = os.path.join(_ROOT, "work")
 

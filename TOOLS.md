@@ -48,11 +48,11 @@
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `pdata_bounds.py` | 函数精确边界（解析 PE `.pdata`） | ✅ 唯一可信 |
-| `find_sym.py` | 按模块 / 名字 / 地址查符号 | ⚠️ `--name` 只匹配进程名 |
+| `decompile/pdata_bounds.py` | 函数精确边界（解析 PE `.pdata`） | ✅ 唯一可信 |
+| `decompile/find_sym.py` | 按模块 / 名字 / 地址查符号 | ⚠️ `--name` 只匹配进程名 |
 | `analyze_gen_code.py` | 统计生成源码的组件构成与代码代价 | ⚠️ 需源码输入 |
 | `nm`（w64devkit） | **符号表的正确来源**（未 strip） | ✅ |
-| `nim_demangle.py`、`demangle_dll.py`、`coff_symbols.py`、`organize_strings.py`、`pe_overlay.py`、`_deprecated_*` | 反编译辅助 / 旧流程 | ❌ 已失效、路径写死或会崩游戏，别再依赖 |
+| `decompile/nim_demangle.py`、`decompile/demangle_dll.py`、`decompile/coff_symbols.py`、`decompile/organize_strings.py`、`decompile/pe_overlay.py`、`tools/_deprecated_*` | 反编译辅助 / 旧流程 | ❌ 已失效、路径写死或会崩游戏，别再依赖 |
 
 ## 目录约定
 

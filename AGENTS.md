@@ -1,31 +1,27 @@
 # tc-toolkit
 
-逆向工程的**主工作区**（独立 git 仓库）。通用规则见 `../AGENTS.md`；这里只写本仓库的目录与分层。
+Turing Complete 的逆向工程工具集：把游戏编译出的电路机器码拿下来做性能分析（主频测量、组件级热点归因），并维护一条用自研编译器替代 `compile.dll` 的路线。
 
 ## 目录
 
-| 目录 | 是什么 | 依赖谁 |
+| 目录 | 依赖谁 | 放什么 |
 |---|---|---|
-| `libs/` | Python 库：环境发现、`winmem`、`term`、`hook_log`、`work/` 路径 | 只标准库 |
-| `services/` | 被 ≥2 个产品共用的能力（如 `simctl`） | `libs` |
-| `native/` | C 侧：`forward/`（机制）→ `compile/`（服务）→ `backend/`（`simplexc` / `ref`） | Windows API / 前一层 |
-| `tools/` | 用户敲的命令；**不放库** | 上面三层 |
-| `hotspot/`、`simplexc/` | 产品 | 同上 |
+| `libs/` | 标准库 | 所有层都会用的东西：游戏环境发现、Win32 内存原语、终端着色、`hook.log`、`work/` 路径 |
+| `services/` | `libs` | 两个以上产品都要的能力，例如 `simctl` |
+| `native/` | Windows API；`backend/` 另需 simplexc 的 C 边界 | C 侧：`forward/` 机制、`compile/` compile 服务、`backend/` 编译器实现 |
+| `tools/` | 上面三层 | 用户敲的命令，一个文件一个入口（`perf_opt/` 转发层入口与编译后优化、`freq/` 主频测量包、`decompile/` PE 与符号工具） |
+| `hotspot/`、`simplexc/` | 同上 | 两个独立产品 |
 
-`tools/` 下：`perf_opt/`（转发层入口 + 编译后优化）、`freq/`（主频测量包）、`decompile/`（PE/符号工具，零产品依赖），以及几个薄壳入口。
+## 依赖方向
 
-## 规矩
+**只能指向更稳定的一层。** 具体条款都是它的推论：
 
-- **依赖单向**：命令 → 服务 → 库。产品之间不 import；要共用就下沉到 `services/`。
-- **`tools/` 里出现"被两个入口 import 的实现"就是放错了位置** —— 实现去 `libs/` 或 `services/`。
-- **入口一律脚本式**：`python tools/x.py`。不要 `python -m`：C 壳的 `OPT_SCRIPT`、`opt.ini` / `config.ini` 里的命令串都写着脚本路径。
-- **C 侧边界**：`native/forward/` 不许出现 `compile` / `simplexc` / `opt.ini` / `work/`（路径由壳注入）；`simplexc_core.h` 只许 `native/backend/simplexc.c` include。
-- **跨语言只经文件与进程**：`work/`、`hook.log`、`opt.ini`。Python 不 import C，C 不 import Python。
-- 改动后的判据：`python simplexc/tools/check.py`（7 步）；缺 CLI 先 `python simplexc/tools/build.py simplexc_cli tcblob`。
+- 命令 → 服务 → 库；产品之间不互相 import。
+- 实现被两个入口用到，就不该留在 `tools/`——它会比入口活得久。
+- `native/forward/` 不认识 `compile`、`simplexc`、`opt.ini`、`work/`——机制要比业务活得久。
 
 ## 找东西
 
-- 目录地图：`docs/map.md`；各层细则：对应目录的 `README.md`
-- 工具清单与坑：`TOOLS.md`、`docs/pitfalls.md`
-- 设计依据：`docs/specs/2026-11-05-toolkit-architecture.md`
-- 当前在追什么：`../docs/status.md`
+- 目录地图 `docs/map.md`；每层细则看该目录的 `README.md`
+- 工具与坑 `TOOLS.md`、`docs/pitfalls.md`
+- 当前状态 `docs/status.md`

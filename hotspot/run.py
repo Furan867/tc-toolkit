@@ -32,9 +32,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # `libs/` 是仓库根的包；`python hotspot/run.py` 的搜索路径里只有 `hotspot/`，自己补仓库根。
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from libs import paths, tc_common  # noqa: E402
+import libs.paths as paths  # noqa: E402
+import libs.tc_common as tc_common  # noqa: E402
 
 SIMPLEXC = ROOT / "simplexc/build/simplexc_cli.exe"
+SIMPLEXC_BUILD = ROOT / "simplexc/tools/build.py"
 CONSUMER = ROOT / "hotspot/consumer/build/hotspot-consumer.exe"
 MAKE_SIDECAR = ROOT / "hotspot/tools/make_sidecar.py"
 REPORT = ROOT / "hotspot/analysis/report.py"
@@ -539,9 +541,24 @@ def preflight(opts: argparse.Namespace) -> tuple[Path, Path]:
             f'找不到 {config}；复制 hotspot/config.example.ini 并把 sampler.backend 改成 "suspend"',
         )
 
-    for name, path in (("simplexc_cli", SIMPLEXC), ("hotspot-consumer", CONSUMER)):
-        if not path.is_file():
-            raise StageError("preflight", f"缺少 {name}：{path}，先构建")
+    if opts.artifact is None and not SIMPLEXC.is_file():
+        print(f"→ 缺少 simplexc_cli，先构建：{SIMPLEXC_BUILD} simplexc_cli")
+        output = _run(
+            [sys.executable, SIMPLEXC_BUILD, "simplexc_cli"],
+            stage="build",
+            timeout=600,
+        )
+        if not SIMPLEXC.is_file():
+            raise StageError(
+                "build",
+                f"构建后仍缺 simplexc_cli：{SIMPLEXC}",
+                output=output[-800:],
+            )
+    if not CONSUMER.is_file():
+        raise StageError(
+            "preflight",
+            f"缺少 hotspot-consumer：{CONSUMER}，先构建 hotspot/consumer",
+        )
 
     if (opts.artifact is None) != (opts.sidecar is None):
         raise StageError(

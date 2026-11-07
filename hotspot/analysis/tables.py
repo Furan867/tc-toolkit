@@ -11,7 +11,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 
-from attribution import Attribution, Sidecar
+from hotspot.analysis.attribution import Attribution, Sidecar
 
 
 @dataclass(frozen=True)

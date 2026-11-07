@@ -17,9 +17,11 @@ import shutil
 import sys
 from pathlib import Path
 
-import attribution
-import render
-import tables
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from hotspot.analysis import attribution, render, tables  # noqa: E402
 
 RUN_SCHEMA = 1
 BUCKET_PRECISION = 6

@@ -10,8 +10,8 @@
   5. 三个负例（id 重复 / 行区间重叠 / 锚点缺失）各必须非零退出。
 
 W1 真产物到位后不用这个脚本，直接跑两个工具（样例见 W3 验收记录）：
-    make_sidecar.py --blob <blob> --obj <module.obj> --elements <el.tsv> --offsets <blob>.offsets
-    g2_check.py --sidecar <sidecar.json> --obj <module.obj> --offsets <blob>.offsets --blob <blob>
+    make_sidecar.py --blob <blob> --obj <module.obj> --elements <el.tsv> --offsets <offsets.json>
+    g2_check.py --sidecar <sidecar.json> --obj <module.obj> --offsets <offsets.json> --blob <blob>
 本脚本是 W1 还没产物时（或想复现判据时）的自造样本。
 
 用法：
@@ -29,10 +29,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-import sidecar as sc
-
 TOOLS = Path(__file__).resolve().parent
 ROOT = TOOLS.parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from hotspot.tools import sidecar as sc  # noqa: E402
+
 CLANG = ROOT / "simplexc/.deps/llvm/bin/clang.exe"
 MAKE_SIDECAR = TOOLS / "make_sidecar.py"
 G2_CHECK = TOOLS / "g2_check.py"

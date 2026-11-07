@@ -13,7 +13,7 @@ sidecar 的行按来源文件绑定（file + 文件内行），比较前按 offs
 
 用法：
     python hotspot/tools/g2_check.py --sidecar sidecar.json --obj build/module.obj \\
-        --offsets work/hook/x.bin.offsets --blob work/hook/x.bin [--limit 20]
+        --offsets build/offsets.json --blob work/hook/x.bin [--limit 20]
 """
 
 from __future__ import annotations
@@ -23,8 +23,13 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-import sidecar as sc
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from hotspot.tools import sidecar as sc  # noqa: E402
 
 INSN_ROW = re.compile(r"^\s*(?P<addr>[0-9a-f]+):\t")
 LINE_MARKER = re.compile(r"^(?P<file>.+?):(?P<line>\d+)(?:\s+\(discriminator\s+\d+\))?\s*$")

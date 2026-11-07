@@ -266,7 +266,7 @@ typedef struct {
 
 当前布局与 §3 的差异：`native/` 现为 `forward/`（机制）+ `compile/`（服务：`compile_hook.c`、`paths.h`、`processor.h`、`native_internal.h`、`processor_rewrite.c`）+ `backend/`（`backend.h`、`simplexc.c`、`ref.c`）；`tools/perf_opt/` 含 `cli/build/deploy/config/rewrite/format_si` 与 `optimizer/`（`core.py`、`analyze.py`）。
 
-判据现状：`check.py` 全量 7 步 PASS；`libs/test_tc_common.py` + `tools/freq/test_freq.py` 61 tests；`hotspot/tests/test_run.py` 66 tests。
+判据现状：`check.py` 全量 7 步 PASS；`libs/test_tc_common.py` + `tools/freq/test_freq.py` 61 tests；`hotspot/tests/test_run.py` 63 tests。
 
 ## 13. 已知取舍与未验项（2026-11-06）
 

@@ -28,11 +28,12 @@ hotspot-consumer [--config hotspot/config.ini]
 （`freq.command`，超时 `freq.timeout_sec`）填入 `freq.start_hz/end_hz`。
 无游戏、无 PID、产物不存在都只报错，REPL 不退出（`quit`/EOF 才退）。
 
-后端目前只有 `suspend`（免管理员；SuspendThread + GetThreadContext，粗采
-`suspend_probe_rounds` 轮锁定仿真线程，未命中则退回全线程并告警）。`etw` 后端
-未实现；需要时按自写最小 ETW 解析或 MSVC C ABI 桥另加。
+后端：`suspend`（免管理员；SuspendThread + GetThreadContext，粗采
+`suspend_probe_rounds` 轮锁定仿真线程，未命中则退回全线程并告警）和自写 `ETW`
+（`StartTrace` / `ProcessTrace` 实时消费，不落 ETL；仅 ETW 路径需要提权）。
+两路的真机结果与已知差异见 `docs/status.md`。
 
-## 已验证 / 待真机验证
+## 已验证 / 后续真机覆盖
 
 已验证（本机，2026-11-05）：
 
@@ -41,7 +42,4 @@ hotspot-consumer [--config hotspot/config.ini]
 - 特征窗偏移（0x400 / 过短退 len/3）、候选基址换算、产物头 `(head & ~(1<<62)) == 文件长`；
 - 无游戏/无 PID/坏产物的 REPL 错误路径与 `game.lock` 的 RAII 清理。
 
-待真机验证（缺游戏进程或管理员终端，未阻塞交付）：
-
-- 单样本暂停时长上界实测值（`suspend` 后端的 `WindowStats::max_pause`，目前只在有游戏时才有数）；
-- `open` 后 `window` 与 `save` 的端到端样本量与 bucket 份额（需游戏已载入电路）。
+后续真机结果（ETW / suspend 双后端、暂停上界、端到端样本量）见 `docs/status.md`。

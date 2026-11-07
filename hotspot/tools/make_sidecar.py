@@ -2,7 +2,7 @@
 """生成 sidecar.json（spec §6 `ours` Provider）—— 构建后离线跑，只读装配器产物。
 
 输入：LLVM 对象（`.debug_line` 行表，W1 产）+ `el.tsv`（元件表，W1 产）+
-`<blob>.offsets`（偏移基准，W1 产）+ 产物本身 + 现成的 `<blob>.stubs`。
+`offsets.json`（偏移基准，W1 产）+ 产物本身 + 现成的 `<blob>.stubs`。
 输出：`segments`（blob 偏移区间 → 元件）、`lines`（全部有行号信息的机器段，含未归属段；
 行号已按 offsets 的 `sources` 绑回 (file, 文件内行)）、`functions`（函数体区间 → 函数，
 `lines`/`segments` 各带一列 `func_id`）、`stubs`、`elements`（按 (type,id)
@@ -19,7 +19,7 @@
 
 用法：
     python hotspot/tools/make_sidecar.py --blob work/hook/x.bin --obj build/module.obj \\
-        --elements work/hook/x.el.tsv --offsets work/hook/x.bin.offsets --out sidecar.json
+        --elements build/el.tsv --offsets build/offsets.json --out sidecar.json
 """
 
 from __future__ import annotations
@@ -28,9 +28,14 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
 
-import functions
-import sidecar as sc
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from hotspot.tools import functions  # noqa: E402
+from hotspot.tools import sidecar as sc  # noqa: E402
 
 
 def run_objdump_decodedline(objdump, obj_path):
@@ -80,8 +85,11 @@ def build_sidecar(args):
 
     meta = None
     if args.timing_log:
-        with open(args.timing_log, encoding="utf-8", errors="replace") as f:
-            meta = sc.parse_timing_log(f.read())
+        try:
+            with open(args.timing_log, encoding="utf-8", errors="replace") as f:
+                meta = sc.parse_timing_log(f.read())
+        except OSError as exc:
+            raise sc.SidecarError(f"读不了 timing log {args.timing_log}：{exc}") from exc
     if sources is not None:
         meta = dict(meta or {})
         meta["sources"] = sources
@@ -201,9 +209,13 @@ def main(argv=None):
     except sc.SidecarError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(sidecar, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    try:
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(sidecar, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as exc:
+        print(f"错误：写不了 {args.out}：{exc}", file=sys.stderr)
+        return 1
 
     covered = sum(s["end"] - s["start"] for s in sidecar["segments"])
     func_covered = sum(end - start for fn in sidecar["functions"] for start, end in fn["ranges"])

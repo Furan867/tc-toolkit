@@ -19,7 +19,7 @@ import re
 import subprocess
 from dataclasses import dataclass, replace
 
-import sidecar as sc
+from hotspot.tools import sidecar as sc
 
 DEBUG_RANGES = ".debug_ranges"
 # .debug_ranges 里的基址选择项：begin 取全 1 时，end 是新的基址（DWARF 4 §2.17.3）

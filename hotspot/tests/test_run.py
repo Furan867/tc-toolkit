@@ -1,10 +1,9 @@
-"""hotspot 脚本的单测：run.py 的编排 + tools/migrate_toml_to_ini.py 的迁移。
+"""hotspot 脚本的单测：run.py 的编排。
 
 不启动游戏、不编译、不采样、不弹 UAC。
 """
 from __future__ import annotations
 
-import configparser
 import hashlib
 import importlib.util
 import io
@@ -16,7 +15,6 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -25,25 +23,6 @@ assert SPEC and SPEC.loader
 run = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(run)
 
-MIGRATE_SPEC = importlib.util.spec_from_file_location(
-    "hotspot_migrate_toml_to_ini", HERE.parent / "tools" / "migrate_toml_to_ini.py"
-)
-assert MIGRATE_SPEC and MIGRATE_SPEC.loader
-migrate = importlib.util.module_from_spec(MIGRATE_SPEC)
-MIGRATE_SPEC.loader.exec_module(migrate)
-
-
-def read_ini(path: Path) -> dict[str, dict[str, Any]]:
-    """按冻结的 INI 子集读回（值都是 JSON 编码）。"""
-    parser = configparser.ConfigParser(
-        delimiters=("=",),
-        interpolation=None,
-        comment_prefixes=("#", ";"),
-        inline_comment_prefixes=("#", ";"),
-    )
-    parser.read_string(path.read_text(encoding="utf-8"))
-    return {section: {key: json.loads(raw) for key, raw in parser.items(section, raw=True)}
-            for section in parser.sections()}
 
 
 def setUpModule() -> None:
@@ -122,6 +101,39 @@ class PreflightTest(unittest.TestCase):
                 run.preflight(opts)
             self.assertEqual(caught.exception.stage, "preflight")
             self.assertIn("config", str(caught.exception))
+
+    def test_missing_simplexc_cli_runs_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.ini"
+            config.write_text("", encoding="utf-8")
+            src = root / "x.si"
+            src.write_text("", encoding="utf-8")
+            consumer = root / "consumer.exe"
+            consumer.write_text("", encoding="utf-8")
+            cli = root / "simplexc_cli.exe"
+            build = root / "build.py"
+            commands = []
+
+            def fake_run(command, *, stage, timeout=120, input_text=None):
+                commands.append(command)
+                cli.write_text("", encoding="utf-8")
+                return "built"
+
+            opts = run.parse_args(
+                ["--src", str(src), "--config", str(config), "--skip-game-check"]
+            )
+            with mock.patch.object(run, "SIMPLEXC", cli), mock.patch.object(
+                run, "CONSUMER", consumer
+            ), mock.patch.object(run, "SIMPLEXC_BUILD", build), mock.patch.object(
+                run, "_run", side_effect=fake_run
+            ):
+                got_config, got_target = run.preflight(opts)
+
+            self.assertEqual(got_config, config)
+            self.assertEqual(got_target, src)
+            self.assertEqual(commands[0][1:], [build, "simplexc_cli"])
+            self.assertTrue(cli.is_file())
 
 
 class SampleStageTest(unittest.TestCase):
@@ -1025,100 +1037,6 @@ class RelaunchLogTest(unittest.TestCase):
         text = self.log_path.read_text(encoding="utf-8")
         self.assertIn("backend：etw", text)
         self.assertIn("已交给提权进程", text)
-
-
-class MigrateTomlToIniTest(unittest.TestCase):
-    """TOML → INI 子集迁移：临时目录里造一份 config.toml + 一个 run.toml，只看文件结果。"""
-
-    def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
-        config = self.root / "hotspot" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text(
-            '# hotspot 的唯一配置（spec §10）\n'
-            '[sampler]\n'
-            'backend = "suspend"\n'
-            'interval_ms = 1\n'
-            '\n'
-            '[freq]\n'
-            'command = "python tools/read_freq.py --samples 1"\n'
-            'timeout_sec = 5.0\n',
-            encoding="utf-8")
-        self.run_toml = self.root / "hotspot" / "workspace" / "runs" / "r1" / "run.toml"
-        self.run_toml.parent.mkdir(parents=True)
-        self.run_toml.write_text(
-            'schema = 1\n'
-            'created_at = "2026-11-04T20:13:30"\n'
-            'backend = "etw"\n'
-            '\n'
-            '[artifact]\n'
-            'path = "work/hook/c001.bin"\n'
-            'file_len = 29052\n'
-            'num = ""\n'
-            '\n'
-            '[locate]\n'
-            'bases = ["0x2104da10000"]\n'
-            '\n'
-            '[window]\n'
-            'sec = 5\n'
-            'tids = [1956, 3448]\n',
-            encoding="utf-8")
-        self.config_ini = config.with_suffix(".ini")
-        self.run_ini = self.run_toml.with_suffix(".ini")
-
-    def test_migrates_config_and_run_and_keeps_a_backup(self):
-        with redirect_stdout(io.StringIO()):
-            self.assertEqual(migrate.main(["--root", str(self.root)]), 0)
-
-        self.assertFalse((self.root / "hotspot" / "config.toml").exists())
-        self.assertFalse(self.run_toml.exists())
-        config = read_ini(self.config_ini)
-        self.assertEqual(config["sampler"]["backend"], "suspend")
-        self.assertEqual(config["freq"]["command"], "python tools/read_freq.py --samples 1")
-        self.assertEqual(config["freq"]["timeout_sec"], 5.0)
-        run_doc = read_ini(self.run_ini)
-        self.assertEqual(run_doc["run"]["schema"], 1)            # 顶层键进 [run] section
-        self.assertEqual(run_doc["run"]["created_at"], "2026-11-04T20:13:30")
-        self.assertEqual(run_doc["artifact"]["path"], "work/hook/c001.bin")
-        self.assertEqual(run_doc["locate"]["bases"], ["0x2104da10000"])   # 列表是 JSON
-        self.assertEqual(run_doc["window"]["tids"], [1956, 3448])
-        backup = self.root / migrate.BACKUP_SUBDIR / "hotspot/workspace/runs/r1/run.toml"
-        self.assertTrue(backup.is_file())
-        self.assertIn("schema = 1", backup.read_text(encoding="utf-8"))
-
-    def test_dry_run_reports_and_changes_nothing(self):
-        stdout = io.StringIO()
-        with redirect_stdout(stdout):
-            code = migrate.main(["--root", str(self.root), "--dry-run"])
-
-        self.assertEqual(code, 0)
-        self.assertIn("[dry-run]", stdout.getvalue())
-        self.assertIn("r1/run.ini", stdout.getvalue().replace("\\", "/"))
-        self.assertTrue(self.run_toml.is_file())
-        self.assertFalse(self.run_ini.exists())
-        self.assertFalse((self.root / "work").exists())     # 连备份目录都不建
-
-    def test_existing_ini_is_not_overwritten(self):
-        self.run_ini.write_text("[run]\nschema = 1\n", encoding="utf-8")
-        stderr = io.StringIO()
-        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-            code = migrate.main(["--root", str(self.root)])
-
-        self.assertEqual(code, 1)
-        self.assertIn("已存在", stderr.getvalue())
-        self.assertTrue(self.run_toml.is_file())
-        # 一个文件失败不影响另一个：config.toml 照样迁完
-        self.assertTrue(self.config_ini.is_file())
-
-    def test_tree_without_toml_is_a_no_op(self):
-        stdout = io.StringIO()
-        with tempfile.TemporaryDirectory() as empty, redirect_stdout(stdout):
-            code = migrate.main(["--root", empty])
-
-        self.assertEqual(code, 0)
-        self.assertIn("没有要迁移的文件", stdout.getvalue())
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from __future__ import annotations
 import html
 from dataclasses import dataclass
 
-from tables import BucketRow, InstRow, Tables
+from hotspot.analysis.tables import BucketRow, InstRow, Tables
 
 CSS = """
 :root { --fg:#1b1b1b; --dim:#6a6a6a; --line:#d8d8d8; --bg:#fdfdfd; --bar:#4a78c8;

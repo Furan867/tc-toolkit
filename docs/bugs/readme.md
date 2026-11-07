@@ -30,3 +30,4 @@
 | `2026-10-25-thread-exit-collision.md` | 未修 | 隐式收尾与前缀的 `def thread_exit` 同名，撞出 `thread_exit.1` |
 | `2026-10-26-031-unreproducible-crash.md` | 未修（原观察被推翻） | 031/032 逻辑试炼：参考同样丢弃未调用的函数，产物大小差只是编码密度；崩溃待重新取证 |
 | `2026-10-26-084-ref-uninit-stack-seed.md` | 不修（非我方 bug） | 084「Overture 1 寄存器序章」（`overture_1_registers`）：参考把随机种子读成未初始化的栈值 7 |
+| `2026-11-07-simplexc-cli-shell-pipeline-duplication.md` | 未修 | CLI 与游戏壳各接一遍编译管线；只改一侧会让 hotspot 产物与游戏内副本分叉 |

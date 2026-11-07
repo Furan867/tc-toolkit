@@ -1,12 +1,8 @@
 """产物改写的 CLI 入口 —— 本体在 `tools/perf_opt/optimizer/core.py`。
 
-两种调用方式都得能跑，因为两个调用者不一样：
-- C 壳（`OPT_SCRIPT`）直接 `python tools\\perf_opt\\rewrite.py --in ... --out ...`，
-  此时没有包上下文，相对导入不可用；
-- `python -m tools.perf_opt rewrite ...` 走 `__main__.py` 转发进来。
-
-于是这里固定把仓库根放进 `sys.path`，本体一律用**绝对名**导入 —— 两种方式拿到的是
-同一个模块，不会出现「core 被导入成两份」。
+调用者是 C 壳（`OPT_SCRIPT`）：直接 `python tools\\perf_opt\\rewrite.py --in ... --out ...`，
+没有包上下文，相对导入不可用。于是这里固定把仓库根放进 `sys.path`，本体一律用**绝对名**
+导入 —— 只有脚本式这一条路，所以 `core` 不会被导入成两份。
 """
 from __future__ import annotations
 
@@ -25,8 +21,7 @@ PROG = "python tools/perf_opt/rewrite.py"
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog=PROG,
-                                 description="产物改写器（等长 / 缩短两模式）；"
-                                             "`python -m tools.perf_opt rewrite` 等价")
+                                 description="产物改写器（等长 / 缩短两模式）")
     ap.add_argument("--in", dest="src", required=True, help="转发层落盘的原始产物")
     ap.add_argument("--out", dest="dst", required=True, help="要写回游戏的产物")
     ap.add_argument("--entry", help="产物锚点偏移（转发层从 Result[2] 取来，十六进制）——"

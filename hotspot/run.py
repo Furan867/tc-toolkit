@@ -480,7 +480,7 @@ def ensure_sim_running(opts: argparse.Namespace) -> None:
     if pid is None:
         raise StageError(
             "preflight",
-            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python -m services.simctl run",
+            f"游戏没在跑（{READ_FREQ.name} 读不到 PID）；先 python services/simctl.py run",
         )
     if speed > 0:
         print(f"→ 仿真已在跑（PID {pid}，{speed:g} MHz），不启动也不停")

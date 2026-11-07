@@ -1,6 +1,6 @@
 # tools/perf_opt/
 
-转发层的**用户入口**：构建、部署、配置、编译后优化。`tools/deploy_compile_hook.py` 是它的薄壳。
+转发层的**用户入口**：构建、部署、配置、编译后优化。入口是 `cli.py`（`python tools/perf_opt/cli.py build-deploy`）。
 
 | 模块 | 职责 |
 |---|---|

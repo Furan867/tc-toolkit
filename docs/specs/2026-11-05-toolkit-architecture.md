@@ -134,7 +134,7 @@ typedef struct {
 ### 5.3 配置读取：一处读、其余传参
 
 - C 服务读 `opt.ini`（`forward_config_get`），把值传给处理器与后端；处理器与后端不打开文件。
-- 游戏内链路**在配置值非空时**已经是这样：C 读到 `rewrite` 后通过 `--mode` 传给改写器（`native/compile/compile_hook.c`），改写器随即不读文件（`tools/optimize_image.py` 的优先级 `--mode > OPT_REWRITE > opt.ini`）。
+- 游戏内链路**在配置值非空时**已经是这样：C 读到 `rewrite` 后通过 `--mode` 传给改写器（`native/compile/compile_hook.c`），改写器随即不读文件（`tools/perf_opt/optimizer/core.py` 的优先级 `--mode > OPT_REWRITE > opt.ini`）。
 - **空值缺口，按此裁决**：C 读到 `rewrite` 为空时按 `off` 处理，并**显式传 `--mode off`**。改写器只要收到 `--mode` 就永不读文件；这样"单一读取点"才闭合（现状是空值不传、改写器回退读 `opt.ini`，见 `tools/optimize_image.py`）。
 - `perf_opt` 离线操作时同理：`config.py` 读一次，传参给 `rewrite.py`。
 - 兜底值只有一处：`tools/freq/variants.py` 的 `on` 改为与改写器一致的 `off`。

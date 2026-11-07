@@ -138,7 +138,7 @@ Result* compile(Result* out /*rcx*/, NimStr* src /*rdx*/, int flags /*r8d*/);
 
 | 来源 | 规模 | 说明 |
 |---|---|---|
-| 官方关卡测试代码 | 92 文件 / 464664 B（454 KB） | **在游戏安装目录**（`$TC_GAME_DIR`，`python tools/tc_common.py` 打印），不在仓库；需拷进 `simplexc/corpus/` 固化 |
+| 官方关卡测试代码 | 92 文件 / 464664 B（454 KB） | **在游戏安装目录**（`$TC_GAME_DIR`，`python libs/tc_common.py` 打印），不在仓库；需拷进 `simplexc/corpus/` 固化 |
 | 转发层抓取的生成源码 | `work/hook/all/`：180 份 `.si`（29 MB 含产物） | **去重后 98 份唯一源码**；最多一份重复 73 次（“地图电路”，切换关卡会重复加载） |
 | 生成源码的参考产物 | 180 份 `.bin`（与 `.si` 同名配对） | ⚠️ **`work/hook/all/` 里没有 manifest**（转发层每次加载都清 `work/hook/`；现存 `manifest.tsv` 只有最近一次会话的 9 行）→ 180 组只有「源码, 产物」，**entry 一个都没留**（entry 只在 manifest 的 `r2` 与 `NNN.entry.txt`，两者都已丢） |
 | stdlib 前缀 | 1 份 / 27711 B | 已提取（工作目录 `stdlib_prefix.si`） |
@@ -475,7 +475,7 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 - **主频/bench 这一层已重写立项并定稿**：设计见 `docs/specs/2026-10-15-freq-measurement-design.md`。
   归属语义在这里统一（三条线含义不同，别混）：`cfg` = **配置了什么**、`opt` = **改写器实际做了什么**、
   新增的 per-call `impl` 行 = **实际走了哪个实现**；**归属只认后两者**。落地时同步 `facts/forwarding.md`
-  与 `tools/hook_log.py` 的事件表（搬 `hook.log` 时一并改）。
+  与 `libs/hook_log.py` 的事件表（搬 `hook.log` 时一并改）。
 
 ### 7.4 语义档案（semantics dossier）
 
@@ -693,5 +693,5 @@ simplexc/
 | 语料规模 180 份 / 去重 98 份 | `ls work/hook/all/*.si \| xargs md5sum \| awk '{print $1}' \| sort -u \| wc -l` |
 | 180 组「源码, 产物」配对（**无 entry**） | `ls work/hook/all/*.si \| wc -l` 与 `*.bin` 同名配对；`work/hook/manifest.tsv` 只有最近一次会话的 9 行，`all/` 里无 manifest |
 | 参考产物 bit62 = 0 | 读 `work/hook/all/hook_out_*.bin` 头 8 字节：低 32 位 == 文件长度、bit62 为 0 |
-| 游戏版本 | `<steamapps>/appmanifest_1444480.acf`（`python tools/tc_common.py` 给 build_id 与 compile.dll 指纹） |
+| 游戏版本 | `<steamapps>/appmanifest_1444480.acf`（`python libs/tc_common.py` 给 build_id 与 compile.dll 指纹） |
 | 社区前作 | `github.com/michalusio/TC-si`（MIT） |

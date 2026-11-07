@@ -89,7 +89,7 @@ tools/freq/                 # 包（位置与命名已确认）
   "标注 vs 实际"错位（`compile_hook.c:337` 记的 `short_cse` 被静默改写成 `on` 那次就是同类问题）。
 - **`hook.log` 移到 `work/hook/`**（已确认，名字更符合直觉）：
   - C 侧 `compile_hook.c:299`（`sprintf(path, "%s%chook.log", OPT_DIR, SEP)`）与 `:297` 的 `CreateDirectoryA`；
-  - Python 侧 `tools/hook_log.py` 的 `PATH`；
+  - Python 侧 `libs/hook_log.py` 的 `PATH`；
   - 文档：`docs/map.md:18`、`docs/facts.md`、`compile_hook.c` 头部注释、`hook_log.py` docstring。
   - 消费者通过 `hook_log.PATH` / `hook_log.find()` 取路径，改这两处即可，不用逐个改调用方。
 - **判据入口调用方式**：`cli_bench --variant reference:off --variant ours:off --json out.json`；
@@ -156,6 +156,6 @@ tools/freq/                 # 包（位置与命名已确认）
 | bench 依赖 watch_freq | `tools/bench_rewrite.py:62` |
 | median vs mean 口径不一致 | `watch_freq.py:148,446` vs `bench_rewrite.py:248,262,291,394` |
 | `hook.log` 现有行类型 | `cut -f3 work/opt/hook.log \| sort \| uniq -c` → `cfg/entry/opt/writeback` |
-| 日志契约（两个写入者） | `tools/hook_log.py` docstring + `compile_hook.c:296` |
+| 日志契约（两个写入者） | `libs/hook_log.py` docstring + `compile_hook.c:296` |
 | 权威配置来源只认 `hook.log` | `docs/facts/forwarding.md` §「产物 rewrite 模式的权威来源」 |
 | 采样判据四条 | `docs/facts/perf-tooling.md` §「采样判据四条」 |

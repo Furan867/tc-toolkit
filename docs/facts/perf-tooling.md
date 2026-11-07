@@ -80,9 +80,9 @@
 
 ### 日志的语义与格式
 `work/hook/hook.log` 是**唯一**的记录型日志（2026-10-18 从 `work/opt/` 迁来），转发层与改写子进程共写、追加写；
-Python 侧取路径走 `tools/hook_log.py` 的 `resolve()`：两文件只存在一个就用它、都在取 mtime 更新的、
+Python 侧取路径走 `libs/hook_log.py` 的 `resolve()`：两文件只存在一个就用它、都在取 mtime 更新的、
 都不存在则新路径，且 **`append()` 写到刚刚 `read()` 到的那个文件**（窗口期不分裂 `cfg`/`opt`）；
-每行 `时间 \t 编号 \t 事件 \t key=value…`（事件表与键表见 `tools/hook_log.py`，
+每行 `时间 \t 编号 \t 事件 \t key=value…`（事件表与键表见 `libs/hook_log.py`，
 C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什么（原样搬运），
 `opt` 行 = 实际执行的模式 / 改写处数 / 产物 sha256 —— 两者不一致就是 short 退回了 on。
 `impl` 行 = **实际走了哪个实现**（每次编译都写、含 reference），键 `impl`/`mode`/`result`（ours 行可选 `budget_ms`、
@@ -90,7 +90,7 @@ C 侧实现是 `compile_hook.c` 的 `hook_log()`）。`cfg` 行 = 配置了什�
 词表唯一出处是 `docs/specs/2026-10-15-simplexc-interfaces.md` §5。
 `opt_stderr.log` 是子进程 stdout/stderr 的原样重定向（多行、非结构化、**GBK 编码**，
 不是 UTF-8），**不是**记录项，单独放。
-验证：静态核对（`tools/hook_log.py` + `compile_hook.c`）+ 游戏内 10 次编译实测：
+验证：静态核对（`libs/hook_log.py` + `compile_hook.c`）+ 游戏内 10 次编译实测：
 `hook.log` 32 行全可解析（无坏行）、每次 `cfg`/`opt`/`writeback` 齐全、无 `error` 行、
 `opt` 行的 sha256 与 `NNN.opt.bin` 逐条相符、`entry` 与 `NNN.entry.txt` 相符
 最后验证：2026-10-15

@@ -4,7 +4,7 @@
 
 ## 环境
 
-- 游戏：`python tools/tc_common.py` 打印本机目录
+- 游戏：`python libs/tc_common.py` 打印本机目录
 - 架构：Nim 编译的 exe + `game_engine.dll` 宿主 + 自研编译器 `compile.dll`（exe 里取不到版本串，别凭记忆写）
 - ⚠️ **Steam 更新可能让全部函数地址偏移**—— 动手前先比对 `tc_common.game_build_id()` 与 `game_fingerprint()` 有没有变
 - 工具链：`g++` / `objdump` / `nm` 从 **PATH** 找（MinGW-w64 GCC 14+）、Python 3.13

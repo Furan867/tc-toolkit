@@ -9,7 +9,6 @@
 | `decompile/` | 逆向脚本（零产品依赖，不参与依赖规则） |
 | `watch_freq.py` | 产品入口：被动监听主频 |
 | `read_freq.py` | 服务壳：读一次当前主频（hotspot 也从命令行调它） |
-| `deploy_compile_hook.py` | 薄壳：转发到 `perf_opt/cli.py`，命令与以前完全一样 |
 | `bench_rewrite.py` / `check_shift_equiv.py` | 实验脚本，不是产品 |
 | `try_compile_dll.py` | 离线加载 `compile.dll` 调 `compile()`（`simplexc/tools/` 与 `perf_opt` 用它） |
 

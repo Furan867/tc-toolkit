@@ -15,6 +15,5 @@
 
 包内模块一律 `from libs import winmem` 这样的包名导入，因此**两个入口都能用**：
 
-    py tools/watch_freq.py           # 人用的薄壳
-    python -m tools.freq.cli_watch   # 等价（在 tc-toolkit/ 下跑）
+    py tools/watch_freq.py           # 唯一入口（脚本式；不用 -m）
 """

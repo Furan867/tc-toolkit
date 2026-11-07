@@ -54,8 +54,8 @@
 work/hook/     捕获的源码(.si) 与产物(.bin)   ← 同号即一对；manifest.tsv 为每次调用的结构化记录
 work/opt/      转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log（唯一记录型日志）+ opt_stderr.log
 work/freq/     主频采样：freq_log.tsv（事件）与 freq_summary.txt（给人读）
-work/symbols/  符号表        work/maps/  组件映射表与建映射中间产物
-work/reports/  分析报告      work/tmp/   一次性中间产物
+work/symbols/  旧产物（工具已删，不再生成）   work/maps/  旧热点管道产物（不再生成）
+work/reports/  历史报告                      work/tmp/   一次性中间产物
 simplexc/build/   编译产物：compile_hook.dll / simplexc_cli.exe / objs/ / shell/ / cmake/
 ```
 

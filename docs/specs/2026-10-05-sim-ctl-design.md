@@ -11,7 +11,7 @@
 
 ## 接口
 
-核心模块 `tools/simctl.py`，暴露三个函数：
+核心模块 `services/simctl.py`，暴露三个函数：
 
 ```python
 simctl.run()         # 启动电路运行

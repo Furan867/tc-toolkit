@@ -6,9 +6,9 @@
 
 用法
 ----
-    python -m tools.perf_opt.optimizer.analyze <dump.bin>
-    python -m tools.perf_opt.optimizer.analyze <dump.bin> --start 0x17690 --stop 0x1e5d0
-    python -m tools.perf_opt.optimizer.analyze <dump.bin> --base 0x022FEADE0000
+    python tools/perf_opt/optimizer/analyze.py <dump.bin>
+    python tools/perf_opt/optimizer/analyze.py <dump.bin> --start 0x17690 --stop 0x1e5d0
+    python tools/perf_opt/optimizer/analyze.py <dump.bin> --base 0x022FEADE0000
 
 `--start` / `--stop` 都是**文件偏移**。若文件前 8 字节是长度头（小端整数，
 值等于文件总长 —— `compile()` 产物的形态），默认自动跳过。

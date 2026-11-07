@@ -12,7 +12,7 @@
 
 **目标**
 
-- 四个在用的产品各有入口与产物，彼此不 import：转发层（`tools/deploy_compile_hook.py` + `tools/compile_hook.c`）、热点分析（`hotspot/run.py`）、主频被动监听（`tools/watch_freq.py`）、判据（`simplexc/tools/check.py`）。
+- 四个在用的产品各有入口与产物，彼此不 import：转发层（`tools/perf_opt/cli.py` + `native/compile/compile_hook.c`）、热点分析（`hotspot/run.py`）、主频被动监听（`tools/watch_freq.py`）、判据（`simplexc/tools/check.py`）。
 - 共用能力有归属：Python 库进 `libs/`，跨产品能力进 `services/`，C 机制与服务进 `native/`。
 - 同一份格式只有一个读取点：配置由读它的那一侧读一次，其余靠传参（§5.3）。
 - 编译前优化（选实现：`ref` / `ours`）与编译后优化（改写产物）都能自由组合，且各自可整体移除（§8）。
@@ -28,7 +28,7 @@
 | 事实 | 证据 |
 |---|---|
 | 顶层 33 个 .py 平铺，没有 `tools/__init__.py`；互相靠 `sys.path.insert` + 裸 import | 全仓 `sys.path.insert` 共 19 处：`tools/` 15、`simplexc/tools/` 3、`work/tmp/` 1（临时脚本） |
-| 同一个 `tc_common` 有三种加载方式：`sys.path` 裸 import、`importlib` 按文件路径、包内相对导入 | `tools/deploy_compile_hook.py`、`hotspot/run.py`、`tools/freq/cli_watch.py` |
+| 同一个 `tc_common` 有三种加载方式：`sys.path` 裸 import、`importlib` 按文件路径、包内相对导入 | `tools/perf_opt/cli.py`、`hotspot/run.py`、`tools/freq/cli_watch.py` |
 | `simctl` 被两种形态使用：`hotspot` 以子进程调脚本，`freq` 以 import 调函数 | `hotspot/run.py`、`tools/freq/driver.py` |
 | 一个 C 文件同时承载三件事：转发机制、compile 服务、改写器调用 | `tools/compile_hook.c`（机制）、`:895`（`compile` 导出）、`:709`（改写器） |
 | C 依赖 simplexc 的 C 边界，路径靠相对目录数层级 | `tools/compile_hook.c` |
@@ -72,7 +72,7 @@ tc-toolkit/
 ```text
 tools/perf_opt/
 ├── cli.py         # 用户命令：status / build / deploy / build-deploy / restore（五个）
-├── build.py       # 转调 simplexc/tools/build.py（原 tools/deploy_compile_hook.py 的 build()）
+├── build.py       # 转调 simplexc/tools/build.py（原 `deploy_compile_hook.py` 的 build()，那个文件已删）
 ├── deploy.py      # 拷贝 dll、备份还原、opt.ini 模板
 ├── config.py      # opt.ini 的唯一读取点
 └── rewrite.py     # 编译后优化入口（可删单元，§8 演练 2）
@@ -141,7 +141,7 @@ typedef struct {
 
 ### 5.4 迁移期的 import 方式
 
-`libs/` 在根目录后，`python tools/x.py` 的搜索路径是 `tools/`，找不到 `libs`。迁移期统一用"每个入口补一行 `sys.path.insert(0, ROOT)`"（现有 19 处这种做法），先把目录摆对；统一成 `python -m` 或安装形态属于简化期，不在本 spec 范围。
+`libs/` 在根目录后，`python tools/x.py` 的搜索路径是 `tools/`，找不到 `libs`。入口一律自己补一行 `sys.path.insert(0, ROOT)`（现有 19 处这种做法）。**不用 `python -m`**：入口形态就是脚本式 `python tools/xxx.py`，这样 C 壳/配置文件/文档里的命令字符串都一致。
 
 ### 5.5 为什么 `simctl` 不改成 in-process import
 
@@ -186,7 +186,7 @@ typedef struct {
 | 3 | `cfg` 的写点从 `optimize_inplace()` 移到编译出口（`compile()` 内写 `impl` 行处附近），**不改消费者**。对应演练 1a | `python simplexc/tools/check.py --only hook_offline`（离线壳也走这条路径，能覆盖） |
 | 3b | `rewrite=` 并入 `impl` 行，删 `cfg` 事件；改 `tools/freq/products.py`、`report.py`、`cli_watch.py`、`test_freq.py`、`tools/freq/__init__.py` 的文档行。对应演练 1b | 同一批 unittest + `check.py --only hook_offline` |
 | 4 | 建 `tools/decompile/`，搬逆向 8 个：`nim_demangle`、`demangle_dll`、`coff_symbols`、`organize_strings`、`pe_overlay`、`find_sym`、`extract_nim_strings`、`pdata_bounds`（此前认为 `verify_game_contract` 依赖 `pdata_bounds`，实测不成立：它自己解析 `.pdata`，两边只经 `work/function_bounds.tsv` 这个产物文件耦合） | `python -m py_compile tools/decompile/*.py`；有 argparse 的 2 个（`find_sym`、`extract_nim_strings`）跑 `--help`；其余 5 个无 argparse，`--help` 会真跑并落盘，**不跑**，改为人工确认各自的仓库根层级未变 |
-| 5 | 建 `native/{forward,compile,backend}`；`compile_hook.c` 原样搬进 `compile`；`#include` 改 include 目录；CMake 改两处源路径（`simplexc/CMakeLists.txt`、`:483`）；同步 `simplexc/tools/hook_offline.py`（`HOOK_SRC`）与 `:127`（`BASELINE_SRC` 的 `native/compile/compile_hook.c` 路径） | 游戏**未运行**时：`python tools/deploy_compile_hook.py build-deploy`、`python simplexc/tools/check.py --only hook_offline`、`python simplexc/tools/check.py`（全量，确认步 4 的判据没被步 5 破坏） |
+| 5 | 建 `native/{forward,compile,backend}`；`compile_hook.c` 原样搬进 `compile`；`#include` 改 include 目录；CMake 改两处源路径（`simplexc/CMakeLists.txt`、`:483`）；同步 `simplexc/tools/hook_offline.py`（`HOOK_SRC`）与 `:127`（`BASELINE_SRC` 的 `native/compile/compile_hook.c` 路径） | 游戏**未运行**时：`python tools/perf_opt/cli.py build-deploy`、`python simplexc/tools/check.py --only hook_offline`、`python simplexc/tools/check.py`（全量，确认步 4 的判据没被步 5 破坏） |
 | 6 | 建 `tools/perf_opt/`，把部署/配置/改写入口并进去 | 四个子命令 `build` / `deploy` / `restore` / `status` 的 `--help` 与 `status` 的输出与现状一致；跑对：重跑 `check.py` 全量 |
 | 7 | 简化：抽 `forward.h` / `backend.h` / `processor.h`，拆 `compile_hook.c` 三部分 | 编译通过；§8 的 1b 与 2 成立（1a 已在步 3 完成） |
 
@@ -256,7 +256,7 @@ typedef struct {
 | 3b | `163d5f6` | `rewrite=` 并入 `impl` 行、删 `cfg` 事件；`impl` 行下移到编译返回之后 |
 | 4 | `4bc21f3` | 逆向 8 个移入 `decompile/`（`2026-11-06` 按目录规则改到 `tools/decompile/`） |
 | 5 | `2bbcb65` | C 壳移入 `native/compile/`；include 改 include 目录；根级 `compile_commands.json` 供编辑器 |
-| 6 | `375c825` | `tools/perf_opt/` 五模块 + 薄壳；help/status 与 HEAD 一致 |
+| 6 | `375c825` | `tools/perf_opt/` 五模块（入口 `cli.py`）；`deploy_compile_hook.py` 已删（`2026-11-06`），命令改为 `python tools/perf_opt/cli.py …` |
 | 7a | `c00d95b` | 编译后优化抽成 `processor_rewrite.c` + 注册表；删除演练通过 |
 | 8 | `7e1d4f3` | 删 10 个被取代的旧热点/调试工具，文档指针改指 `hotspot/` |
 | 9 | `cbd8eab` | `libs/paths.py` 收敛 `work/` 路径（mtime 选边留在 `hook_log`） |

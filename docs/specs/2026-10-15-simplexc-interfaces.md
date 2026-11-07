@@ -315,7 +315,7 @@ AsmResult assemble(const std::vector<ObjectFile>& objs,
 ## 7. 构建与链接
 
 - C/C++：`g++` / `gcc` 从 **PATH** 找（需要 MinGW-w64 GCC 14+），`-std=c++17 -O2`，**直调 gcc，不引入 CMake**
-  （照抄 `tools/deploy_compile_hook.py` 的构建风格）；构建脚本 `simplexc/tools/build.py`。
+  （照抄 `simplexc/tools/build.py` 的构建风格）；构建脚本 `simplexc/tools/build.py`。
 - LLVM：**`LLVM-C.dll` + C API**，版本锁定；三元组 `x86_64-pc-windows-gnu`，**`RelocMode=PIC`**，`CodeModel=Small`，
   禁 `uwtable`/异常。管线：`LLVMRunPasses`（`-O2`）+ `LLVMTargetMachineEmitToMemoryBuffer(..., LLVMObjectFile)`。
 - 取导入库：**已定走 ②**（① 未采用）—— ① MSYS2 `mingw-w64-*` LLVM 包（MinGW 构建，与目标三元组同源）；

@@ -9,7 +9,7 @@
 
 | 工具 | 作用 | 状态 |
 |---|---|---|
-| `deploy_compile_hook.py` | 构建 / 部署 / 查询转发层（子命令 `build-deploy`、`status`…） | ✅ |
+| `perf_opt/cli.py` | 构建 / 部署 / 查询转发层（子命令 `build-deploy`、`status`…） | ✅ |
 
 ## 源码与产物
 

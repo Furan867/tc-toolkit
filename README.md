@@ -33,7 +33,7 @@ python simplexc/tools/fetch_llvm.py --tag llvmorg-23.1.3
 ### 编译并部署到游戏
 
 ```sh
-python tools/deploy_compile_hook.py build-deploy
+python tools/perf_opt/cli.py build-deploy
 ```
 
 这一条命令会编译转发层并装进游戏目录：官方 `compile.dll` 被改名为 `compile_real.dll`，
@@ -42,7 +42,7 @@ python tools/deploy_compile_hook.py build-deploy
 还原：
 
 ```sh
-python tools/deploy_compile_hook.py restore
+python tools/perf_opt/cli.py restore
 ```
 
 ### 跑判据（可选）

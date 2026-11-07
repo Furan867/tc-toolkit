@@ -43,8 +43,8 @@ sha256 `7e69dc07a4536b79ff24a651a2611990bf8eaab17ea560f1092707c4f31ba01d`
 ### 链接产物随 `-L` 写法与 `-o` 路径变化
 `-L` 写绝对路径与写相对路径时 link map 逐行相同、产物字节**不同**（import thunk 表布局变了）；
 DLL 的 `-o` 换成别的路径字符串会换掉 ld 挑的默认 image base（产物差 ~150 字节）。
-`simplexc/tools/build.py` 因此固定「相对 `-L` + 与 `deploy_compile_hook.py` 同一种绝对 `-o` 拼法」。
-验证：`work/tmp/flagcheck/` 里两份 link map 与 md5 清单；`build.py hook` 与 `deploy_compile_hook.py build` 产物逐字节相同
+`simplexc/tools/build.py` 因此固定「相对 `-L` + 与 `perf_opt/cli.py` 同一种绝对 `-o` 拼法」。
+验证：`work/tmp/flagcheck/` 里两份 link map 与 md5 清单；`build.py hook` 与 `perf_opt/cli.py build` 产物逐字节相同
 最后验证：2026-10-17
 
 ### 产物必须是能驱动仿真的程序：空/桩程序会让游戏在**下一次**编译请求时 abort

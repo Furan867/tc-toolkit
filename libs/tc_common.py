@@ -185,7 +185,7 @@ def game_fingerprint() -> str:
     """`compile.dll` 的内容指纹：sha256 前 12 位 + ":" + 字节数。
 
     写死的地址表绑定在某份二进制上；Steam 更新后这个串必变，就是「地址表该重取」的判据。
-    ⚠ 这里的 `compile.dll` 也可能是转发层（deploy_compile_hook.py 换过），
+    ⚠ 这里的 `compile.dll` 也可能是转发层（perf_opt/cli.py 换过），
     所以它变了不等于 Steam 更新过 —— 那是 game_build_id() 的活。
 
     文件不存在抛 RuntimeError（那时比「变了没变」更该先解决「没有文件」）。

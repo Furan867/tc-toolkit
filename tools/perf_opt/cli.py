@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
 import sys
+
+# 直接跑本文件时 sys.path[0] 是 tools/perf_opt/；仓库根得自己补
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 # Windows 下 stdout 走管道时默认 GBK，输出里的 ✅/❌ 会抛 UnicodeEncodeError
 for _stream in (sys.stdout, sys.stderr):
@@ -33,3 +39,7 @@ def main():
         rc = build()
         return rc if rc else deploy()
     return deploy() if cmd == "deploy" else restore()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -5,7 +5,7 @@
 - 状态：**设计定稿；实现进行中**（M4.5 已完成，M5 卡点见 `docs/status.md`）。产物契约由 T1–T5 实测闭合（见 §2、§4）。
   2026-10-15 负责人确认：§7.5 判据入口 / §8 agent 工作流 / §10 版本锁定与重验脚本；代码落库位置 = `simplexc/`；
   **LLVM 链接方式 = `LLVM-C.dll` + C API + 现有 w64devkit g++**（不引入 CMake；构建方式照抄
-  `tools/deploy_compile_hook.py` 的直调 gcc）；语料实测见 §2.7；MVP 验收下界 = 沙盒模式能跑起来。
+  `tools/perf_opt/cli.py` 的直调 gcc）；语料实测见 §2.7；MVP 验收下界 = 沙盒模式能跑起来。
 - **2026-10-18 重构**：确定四层分层（`frontend`→无类型 AST → `sema`→HIR → `codegen`→LLVM IR → `assemble`→blob），
   据此改 §3.1、新增 §3.2–§3.4 / §5.1–§5.2 / §7.6 / §8 回退段；`lower/` 改名 `codegen/`、新增 `sema/`。
   动因：`docs/notes/2026-10-18-frontend-audit.md`。
@@ -570,7 +570,7 @@ simplexc/
 5. **DLL 壳**：三模式 + 失败转交 + 记录格式（沿用 `manifest.tsv`）。
 6. **差分宿主驱动协议**：假内存布局、命令写入格式、快照格式。
 7. **构建与链接方式**：`LLVM-C.dll` + C API、三元组 `x86_64-pc-windows-gnu`、构建脚本直调 w64devkit g++
-   （照抄 `tools/deploy_compile_hook.py`），**不引入 CMake**（只在改为从源码构建 LLVM 或走 MSVC 时才需要）。
+   （照抄 `tools/perf_opt/cli.py`），**不引入 CMake**（只在改为从源码构建 LLVM 或走 MSVC 时才需要）。
 
 **工作纪律**：一个写者一个目录（静态分区）；每次提交跑判据入口；未支持构造一律"显式报错 + 回退"，禁止静默降级。
 

@@ -5,7 +5,7 @@ import subprocess
 import sys
 from collections import defaultdict
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from libs import tc_common  # noqa: E402
 from nim_demangle import decode_proc_name, demangle_module  # noqa: E402
@@ -33,7 +33,7 @@ def demangle_symbol_loose(sym: str):
     return proc, module
 
 DLL = tc_common.game_dll()
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（decompile/ 的父）
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # 仓库根（tools/decompile/ 的上两级）
 OUTROOT = os.path.join(_ROOT, "recovered", "compiler-src")
 WORK = os.path.join(_ROOT, "work")
 

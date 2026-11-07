@@ -17,9 +17,9 @@
 
 两条子命令
 ----------
-    py decompile/extract_nim_strings.py <dll> lits  [--out FILE]
+    py tools/decompile/extract_nim_strings.py <dll> lits  [--out FILE]
         按偏移顺序 dump 全部字面量（`偏移<TAB>内容`）。找名字表用这个。
-    py decompile/extract_nim_strings.py <dll> ptrs  [--min N]
+    py tools/decompile/extract_nim_strings.py <dll> ptrs  [--min N]
         找「连续字符串指针」构成的名字表。
 
 输出量可能到千行级 —— 重定向到文件再看，别直接灌进上下文。

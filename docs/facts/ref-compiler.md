@@ -102,7 +102,7 @@
 `recovered/compiler-src/OO/types.nim.stub:714-717,769-772`），名字本身作为 Nim 字符串字面量按**声明顺序**
 紧邻排列在 `.rdata`；`mac_*` 组共 17 个（`mac_load`/`mac_store`/`mac_raw_cast`/`mac_size`/…）。
 → 内建清单（主设计 §11 U5）的权威来源是这里，不是从前缀反推。
-验证：`python decompile/extract_nim_strings.py <dll> lits --out FILE`，看文件偏移 `0x1104A0`–`0x1106A0` 段
+验证：`python tools/decompile/extract_nim_strings.py <dll> lits --out FILE`，看文件偏移 `0x1104A0`–`0x1106A0` 段
 最后验证：2026-10-16
 
 ### stdlib 里 `kernel32.'Name'` 的真实绑定：三类，只有两类要名字映射

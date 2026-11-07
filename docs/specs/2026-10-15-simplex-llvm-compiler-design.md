@@ -335,7 +335,7 @@ agent 日常、差分宿主、回归测试全走离线 CLI，不碰游戏；壳�
 - **目标三元组 `x86_64-pc-windows-gnu`**（与游戏的 MinGW/Nim 构建一致），extern 调用必须满足 Win64 ABI
   （rcx/rdx/r8/r9 + 影子空间 + 栈 16 字节对齐）；原版编译器调用 kernel32 的序列可反汇编核对（U10）。
 - **装配器的输入契约（spike 必卡项，先写死）**：`LLVMTargetMachineEmitToMemoryBuffer` 给的是 **COFF 目标文件**，
-  装配器必须解析节/符号/重定位（仓库已有 `decompile/coff_symbols.py` 可复用，别从零写）。三个已知坑：
+  装配器必须解析节/符号/重定位（仓库已有 `tools/decompile/coff_symbols.py` 可复用，别从零写）。三个已知坑：
   (a) LLVM 默认给函数发 **`.pdata`/`.xdata`**（unwind，含 `ADDR32NB` 类重定位）→ 要么在 IR 层禁掉
   `uwtable`/异常，要么整节丢弃；(b) 栈帧 > 4 KiB 时会自动 `call __chkstk`（**CRT 符号，不是 kernel32**）
   → 必须给 stub 或限制帧大小；(c) 未定义符号一律按“stub pool + 运行期解析”处理，不许重定位失败。

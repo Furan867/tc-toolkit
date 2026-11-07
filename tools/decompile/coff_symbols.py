@@ -4,7 +4,7 @@ import os
 import sys
 from collections import defaultdict
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（decompile/ 的父）
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # 仓库根（tools/decompile/ 的上两级）
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 

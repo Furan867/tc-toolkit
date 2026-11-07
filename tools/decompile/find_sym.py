@@ -7,11 +7,11 @@
 
 用法
 ----
-    python decompile/find_sym.py --module model/simulation          # 列出该模块的函数
-    python decompile/find_sym.py --module sim --sub                 # 模块名子串匹配
-    python decompile/find_sym.py --name evaluate                    # 函数名子串匹配
-    python decompile/find_sym.py --module model/simulation --big 500 # 只看 ≥500 字节的
-    python decompile/find_sym.py --addr 0x1403d3380                 # 反查地址属于哪个函数
+    python tools/decompile/find_sym.py --module model/simulation          # 列出该模块的函数
+    python tools/decompile/find_sym.py --module sim --sub                 # 模块名子串匹配
+    python tools/decompile/find_sym.py --name evaluate                    # 函数名子串匹配
+    python tools/decompile/find_sym.py --module model/simulation --big 500 # 只看 ≥500 字节的
+    python tools/decompile/find_sym.py --addr 0x1403d3380                 # 反查地址属于哪个函数
 
 默认按函数体大小降序输出（大函数通常承载核心逻辑），`--limit` 控制条数。
 """
@@ -23,7 +23,7 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+ROOT = os.path.dirname(os.path.dirname(HERE))
 WORK = os.path.join(ROOT, "work")
 
 # 复用 nim_demangle.py 的 demangle 实现（不执行其写文件部分）

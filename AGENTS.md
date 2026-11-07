@@ -9,7 +9,7 @@ Turing Complete 的逆向工程工具集：把游戏编译出的电路机器码�
 | `libs/` | 标准库 | 所有层都会用的东西：游戏环境发现、Win32 内存原语、终端着色、`hook.log`、`work/` 路径 |
 | `services/` | `libs` | 两个以上产品都要的能力，例如 `simctl` |
 | `native/` | Windows API；`backend/` 另需 simplexc 的 C 边界 | C 侧：`forward/` 机制、`compile/` compile 服务、`backend/` 编译器实现 |
-| `tools/` | 上面三层 | 用户敲的命令，一个文件一个入口（`perf_opt/` 转发层入口与编译后优化、`freq/` 主频测量包、`decompile/` PE 与符号工具） |
+| `tools/` | 上面三层 | 用户敲的命令，一个文件一个入口；细分见 `tools/README.md` |
 | `hotspot/`、`simplexc/` | 同上 | 两个独立产品 |
 
 ## 依赖方向

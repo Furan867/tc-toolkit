@@ -51,14 +51,14 @@ tc-toolkit/
 ├── services/                  # Python 服务：被 ≥2 个产品共用
 │   └── simctl.py              # 仿真控制（热点与主频都要）
 ├── native/                    # C 侧：一个 dll 一个 DllMain，内部按依赖分三层
-│   ├── forward/               # 机制：取原实现、落盘、日志、哈希、清理、配置读取（尚未建，见 §10）
+│   ├── forward/               # 机制：取原实现、落盘、日志、哈希、清理、配置读取
 │   ├── compile/               # compile 服务：ABI、锚点、manifest、后端分流、处理器链
-│   └── backend/               # 后端实现：simplexc.c（含 simplexc_core.h）、ref.c（转发真实 dll）（尚未建，见 §10）
+│   └── backend/               # 后端实现：simplexc.c（含 simplexc_core.h）、ref.c（转发真实 dll）
 ├── tools/                     # 用户命令（薄壳）
 │   ├── perf_opt/              # 面向用户：构建 / 部署 / 配置 / 编译后优化（§4）
 │   ├── freq/                  # 主频测量包（现状保留，§5 只加入口定性）
+│   ├── decompile/             # 逆向脚本：零产品依赖，不参与依赖规则
 │   └── watch_freq.py          # 产品入口；read_freq.py 为服务壳；bench_rewrite.py 为实验脚本
-├── decompile/                 # 逆向脚本：零产品依赖，不参与依赖规则
 ├── hotspot/                   # 产品（现有独立 CMake）
 └── simplexc/                  # 产品（现有）
 ```
@@ -185,7 +185,7 @@ typedef struct {
 | 2 | `hotspot/run.py` 的 `services/simctl.py` 文件路径调用改为模块调用 `python -m services.simctl`（保留子进程的超时与隔离；不改成 in-process import，理由见 §5.5）；同步 `hotspot/tests/test_run.py` 的 mock 过滤条件 | `python -m unittest hotspot/tests/test_run.py` |
 | 3 | `cfg` 的写点从 `optimize_inplace()` 移到编译出口（`compile()` 内写 `impl` 行处附近），**不改消费者**。对应演练 1a | `python simplexc/tools/check.py --only hook_offline`（离线壳也走这条路径，能覆盖） |
 | 3b | `rewrite=` 并入 `impl` 行，删 `cfg` 事件；改 `tools/freq/products.py`、`report.py`、`cli_watch.py`、`test_freq.py`、`tools/freq/__init__.py` 的文档行。对应演练 1b | 同一批 unittest + `check.py --only hook_offline` |
-| 4 | 建 `decompile/`，搬逆向 8 个：`nim_demangle`、`demangle_dll`、`coff_symbols`、`organize_strings`、`pe_overlay`、`find_sym`、`extract_nim_strings`、`pdata_bounds`（此前认为 `verify_game_contract` 依赖 `pdata_bounds`，实测不成立：它自己解析 `.pdata`，两边只经 `work/function_bounds.tsv` 这个产物文件耦合） | `python -m py_compile decompile/*.py`；有 argparse 的 2 个（`find_sym`、`extract_nim_strings`）跑 `--help`；其余 5 个无 argparse，`--help` 会真跑并落盘，**不跑**，改为人工确认各自的仓库根层级未变 |
+| 4 | 建 `tools/decompile/`，搬逆向 8 个：`nim_demangle`、`demangle_dll`、`coff_symbols`、`organize_strings`、`pe_overlay`、`find_sym`、`extract_nim_strings`、`pdata_bounds`（此前认为 `verify_game_contract` 依赖 `pdata_bounds`，实测不成立：它自己解析 `.pdata`，两边只经 `work/function_bounds.tsv` 这个产物文件耦合） | `python -m py_compile tools/decompile/*.py`；有 argparse 的 2 个（`find_sym`、`extract_nim_strings`）跑 `--help`；其余 5 个无 argparse，`--help` 会真跑并落盘，**不跑**，改为人工确认各自的仓库根层级未变 |
 | 5 | 建 `native/{forward,compile,backend}`；`compile_hook.c` 原样搬进 `compile`；`#include` 改 include 目录；CMake 改两处源路径（`simplexc/CMakeLists.txt`、`:483`）；同步 `simplexc/tools/hook_offline.py`（`HOOK_SRC`）与 `:127`（`BASELINE_SRC` 的 `native/compile/compile_hook.c` 路径） | 游戏**未运行**时：`python tools/deploy_compile_hook.py build-deploy`、`python simplexc/tools/check.py --only hook_offline`、`python simplexc/tools/check.py`（全量，确认步 4 的判据没被步 5 破坏） |
 | 6 | 建 `tools/perf_opt/`，把部署/配置/改写入口并进去 | 四个子命令 `build` / `deploy` / `restore` / `status` 的 `--help` 与 `status` 的输出与现状一致；跑对：重跑 `check.py` 全量 |
 | 7 | 简化：抽 `forward.h` / `backend.h` / `processor.h`，拆 `compile_hook.c` 三部分 | 编译通过；§8 的 1b 与 2 成立（1a 已在步 3 完成） |
@@ -211,7 +211,7 @@ typedef struct {
 | 决策 | 结论 |
 |---|---|
 | `libs/`、`services/` 位置 | 仓库根，与 `tools/` 平级 |
-| 逆向脚本目录 | `decompile/` |
+| 逆向脚本目录 | `tools/decompile/`（工具属于 `tools/`，见 `tc/AGENTS.md`） |
 | `work/` 与 `hotspot/workspace/` | 不动；`runs/` 留在热点产品内 |
 | `tools/freq/` 是否拆包 | 不拆。产品只有 `watch_freq`；`read_freq` 是服务壳；`bench_rewrite` 是实验脚本 |
 | `perf_opt` 定位 | 面向用户的程序：构建 simplexc、部署转发层、读写配置、编译后优化 |
@@ -244,7 +244,7 @@ typedef struct {
 - `tools/freq/variants.py`：`REWRITES`、`FALLBACK_REWRITE`、`OPT_SECTION`；`tools/optimize_image.py`：`VALID_MODES`、`resolve_mode`、`rewrite_mode`
 - `tools/freq/products.py`：`ownership()`（从 `impl` 行取 `rewrite=`）与 `done_rounds()`；`report.py`：`_rewrite_cell()`；`cli_watch.py`：`rewrite=` 显示
 - `libs/hook_log.py`：事件表与 `find()`；`libs/tc_common.py`：`latest_hook_product()` 的默认目录
-- `simplexc/tools/verify_game_contract.py`：实测**不**依赖 `decompile/pdata_bounds.py`（自己解析 `.pdata`，两边只经 `work/function_bounds.tsv` 耦合）
+- `simplexc/tools/verify_game_contract.py`：实测**不**依赖 `tools/decompile/pdata_bounds.py`（自己解析 `.pdata`，两边只经 `work/function_bounds.tsv` 耦合）
 
 ## 12. 实施记录（2026-11-06）
 
@@ -254,7 +254,7 @@ typedef struct {
 | 2 | `bcab668`（spec `86d6793`） | hotspot 的 simctl 由文件路径改为 `python -m services.simctl`（保留子进程与超时） |
 | 3 | `39189f6` | `cfg` 写点移到 `compile()` 的 `if (!ours_ok)` 分支，`rewrite` 只读一次并传参 |
 | 3b | `163d5f6` | `rewrite=` 并入 `impl` 行、删 `cfg` 事件；`impl` 行下移到编译返回之后 |
-| 4 | `4bc21f3` | 逆向 8 个移入 `decompile/` |
+| 4 | `4bc21f3` | 逆向 8 个移入 `decompile/`（`2026-11-06` 按目录规则改到 `tools/decompile/`） |
 | 5 | `2bbcb65` | C 壳移入 `native/compile/`；include 改 include 目录；根级 `compile_commands.json` 供编辑器 |
 | 6 | `375c825` | `tools/perf_opt/` 五模块 + 薄壳；help/status 与 HEAD 一致 |
 | 7a | `c00d95b` | 编译后优化抽成 `processor_rewrite.c` + 注册表；删除演练通过 |

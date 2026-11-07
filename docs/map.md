@@ -13,9 +13,17 @@
 
 ## 目录
 
-```
+**分层与依赖规则见各目录的 `README.md`**：`libs/`、`services/`、`native/`、`tools/`、`tools/perf_opt/`、`tools/decompile/`。根 `docs/map.md` 只回答“东西在哪”。
+
+```text
+libs/         被所有层依赖的 Python 库（环境发现 / 内存原语 / 终端 / hook.log / work 路径）
+services/     被 ≥2 个产品共用的 Python 能力（simctl）
+native/       C 侧：forward/（机制）+ compile/（服务）+ backend/（编译器实现）
+tools/        用户敲的命令；实现去 libs/ 与 services/
+  perf_opt/     转发层用户入口（构建 / 部署 / 配置 / 编译后优化）
+  freq/         主频测量包（watch_freq / read_freq / bench_rewrite 的实现）
+  decompile/    反编译与 PE 解析脚本（零产品依赖）
 cmake/        共享构建模块（Find 模块 + toolchain），各工具共用，不要复制
-tools/        分析脚本与工具（已固化的）
 docs/         本套文档（specs/ 设计文档 · facts/ 分类事实账本，分流入口 facts.md · bugs/ 语料差异与判据事故 · notes/ 过程记录）
 simplexc/     自研编译器（**接口权威 = docs/specs/2026-10-15-simplexc-interfaces.md**，冻结版 1.4）
   frontend/ sema/ codegen/ runtime/ assemble/ shell/ cli/   代码（四层已分开：frontend → sema → codegen → assemble）
@@ -27,9 +35,9 @@ simplexc/     自研编译器（**接口权威 = docs/specs/2026-10-15-simplexc-
 work/hook/    转发层捕获：hook_src_NNN.si ↔ hook_out_NNN.bin（同号即一对）
 work/opt/     转发层工作区：NNN.raw.bin / NNN.opt.bin / hook.log / opt_stderr.log
 work/freq/    主频采样输出：freq_log.tsv（事件）与 freq_summary.txt（给人读）
-work/symbols/ 符号表        work/maps/   组件映射表与建映射中间产物
-work/reports/ 分析报告      work/tmp/    一次性中间产物
-recovered/    反编译产物（不进 git，可由 tools/ 重新生成）
+work/symbols/ 符号表（旧工具产物，不再生成）        work/maps/   组件映射表（旧热点管道产物，不再生成）
+work/reports/ 分析报告（历史）      work/tmp/    一次性中间产物
+recovered/    反编译产物（不进 git，可由 tools/decompile/ 重新生成）
 ```
 
 `work/hook/` 与 `work/opt/` 在**转发层加载时**清空（`native/compile/compile_hook.c` 的 `purge_captures` / `purge_workdir`）；
@@ -58,7 +66,7 @@ sim_ctl ──→ 机器码改写 ──→ 主频监听 ──→ 热点分析 
 
 | 判据 | 命令 |
 |---|---|
-| 一条命令跑现有全部（6 步，`--list` 有清单） | `python simplexc/tools/check.py` |
+| 一条命令跑现有全部（7 步，`--list` 有清单） | `python simplexc/tools/check.py` |
 | Steam 更新后契约重验（主设计 §10 的 A–E） | `python simplexc/tools/verify_game_contract.py` |
 | M1.5 单跑（逐 tick 等价 + 吞吐） | `python simplexc/tools/probe_006.py --ticks 10 [--variant hot]` |
 | 壳的离线失败路径（11 个 case） | `python simplexc/tools/hook_offline.py` |

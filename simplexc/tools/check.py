@@ -256,7 +256,7 @@ def step_lower_equiv(ctx):
     mod = _load_by_path(SELFTEST, "selftest")
     try:
         diff = mod.compare(logs["ref"], logs["ours"])
-    except Exception as e:                                     # noqa: BLE001 —— 比对器自己炸也要算 FAIL
+    except Exception as e:                                     # 比对器自己炸也要算 FAIL
         summary["verdict"] = f"比对器抛异常：{e}"
         return {**r, "rc": 1, "status": "FAIL", "summary": summary}
     summary["ticks"] = f"{len(logs['ref'])}/{len(logs['ours'])}"

@@ -915,7 +915,8 @@ class Host:
                 return "exited_clean"
             k32.TerminateThread(ctypes.c_void_p(self.thread), 0)
             return "terminated"
-        except Exception:                                   # noqa: BLE001 - 收尾不该再抛
+        except Exception as exc:                            # 收尾路径：不往外抛，但异常本身要看见
+            print(f"[host] close 异常：{exc}", file=sys.stderr)
             return "unknown"
 
 
